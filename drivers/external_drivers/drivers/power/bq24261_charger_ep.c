@@ -173,6 +173,12 @@
 /* No of times retry on -EAGAIN or -ETIMEDOUT error */
 #define NR_RETRY_CNT    3
 
+/* fcipaq move me to header file */
+int is_second_ic(struct i2c_client *client);
+struct bq24261_charger *chip_ic2;
+/* fcipaq end */
+
+
 u16 bq24261_sfty_tmr[][2] = {
 	{0, BQ24261_SAFETY_TIMER_DISABLED}
 	,
@@ -326,7 +332,6 @@ enum kbd_dock_state {
 #define  WATCH_DOG_TIMEOUT  6
 #define SPECIAL_KEY  222
 
-
 struct i2c_client *bq24261_client;
 static inline int get_battery_voltage(int *volt);
 static inline int get_battery_current(int *cur);
@@ -370,8 +375,6 @@ static void lookup_regval(u16 tbl[][2], size_t size, u16 in_val, u8 *out_val)
 
 	*out_val = (u8) tbl[i - 1][1];
 }
-
-
 
 int bq24261_set_kbd_key(__u16 key)
 {
@@ -1134,8 +1137,9 @@ static inline bool bq24261_is_online(struct bq24261_charger *chip)
 	 */
 	else if ((chip->chrgr_stat == BQ24261_CHRGR_STAT_FAULT) ||
 		 (!chip->is_charging_enabled))
+	{
 		return bq24261_is_vsys_on(chip);
-	else
+	} else
 		return chip->is_vsys_on;
 }
 
@@ -1452,6 +1456,48 @@ static void bq24261_wdt_reset_worker(struct work_struct *work)
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
 
+static void bq24261_wdt_boost_ic2(struct bq24261_charger *chip, int val)
+{
+	int ret;
+	
+	if (val == 1)
+	{
+		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, BQ24261_ENABLE_BOOST);
+
+		if (ret)
+			dev_err(&chip->client->dev, "Error (%d) in boostmode on\n", ret);
+		else
+			dev_info(&chip->client->dev, "boostmode on\n");
+	} else
+	{
+		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, ~BQ24261_ENABLE_BOOST);
+
+		if (ret)
+			dev_err(&chip->client->dev, "Error (%d) in boostmode off\n", ret);
+		else
+			dev_info(&chip->client->dev, "boostmode off\n");
+	}
+}
+
+static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
+{
+	int ret;
+
+	struct bq24261_charger *chip = container_of(work,
+			    struct bq24261_charger, wdt_work.work);
+
+	ret = bq24261_reset_timer(chip);
+
+	if (ret)
+		dev_err(&chip->client->dev, "Error (%d) in WDT reset of IC #2\n", ret);
+	else
+		dev_info(&chip->client->dev, "WDT reset of IC #2\n");
+
+	bq24261_wdt_boost_ic2(chip, 1);
+
+	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
+}
+
 static void bq24261_sw_charge_term_worker(struct work_struct *work)
 {
 
@@ -1667,7 +1713,6 @@ static int bq24261_handle_irq(struct bq24261_charger *chip, u8 stat_reg)
 
 		case BQ24261_LOW_SUPPLY:
 			notify = false;
-
 			if (chip->pdata->handle_low_supply)
 				chip->pdata->handle_low_supply();
 
@@ -1679,6 +1724,7 @@ static int bq24261_handle_irq(struct bq24261_charger *chip, u8 stat_reg)
 				dev_dbg(&client->dev,
 					"Schedule Low Supply Fault work!!\n");
 			}
+			return 0;
 			break;
 
 		case BQ24261_THERMAL_SHUTDOWN:
@@ -1937,6 +1983,18 @@ static ssize_t dock_print_state(struct switch_dev *sdev, char *buf)
 		return -EINVAL;
 }
 
+/* Dell Venue 7040 (aka Eaglespeak) has two BQ24261 ICs, as it features two batteries  */
+/* The attachable's keyboard power supply is connected to the second IC's VBUS booster */
+/* This function checks, if the current IC is the second one.          		       */
+/* This function is platform specific.						       */
+int is_second_ic(struct i2c_client *client)
+{
+	if (strcmp("2-006b", dev_name(&client->dev)) == 0)
+		return 1;
+	else
+		return 0;
+}
+
 static int bq24261_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
@@ -1945,196 +2003,233 @@ static int bq24261_probe(struct i2c_client *client,
 	int ret;
 	int bq2426x_rev;
 	enum bq2426x_model_num bq24261_rev_index;
-
+	
 	adapter = to_i2c_adapter(client->dev.parent);
 
-	if (!client->dev.platform_data) {
-		dev_err(&client->dev, "platform data is null");
-		return -EFAULT;
-	}
+	/* fcipaq */
+	if (is_second_ic(client))
+	{
+		chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
+		if (!chip) {
+			dev_err(&client->dev, "mem alloc failed\n");
+			return -ENOMEM;
+		}
 
-	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
-		dev_err(&client->dev,
-			"I2C adapter %s doesn'tsupport BYTE DATA transfer\n",
-			adapter->name);
-		return -EIO;
-	}
+		i2c_set_clientdata(client, chip);
+		chip->client = client;
+		chip->dev = &client->dev;
+		chip->pdata = client->dev.platform_data;
 
-	bq2426x_rev = bq24261_read_reg(client, BQ24261_VENDOR_REV_ADDR);
-	if (bq2426x_rev < 0) {
-		dev_err(&client->dev,
-			"Error (%d) in reading BQ24261_VENDOR_REV_ADDR\n", bq2426x_rev);
-		return bq2426x_rev;
-	}
-	dev_info(&client->dev, "bq2426x revision: 0x%x found!!\n", bq2426x_rev);
+		chip_ic2 = chip;
 
-	bq24261_rev_index = bq24261_get_model(bq2426x_rev);
-	if ((bq2426x_rev & BQ24261_VENDOR_MASK) != BQ24261_VENDOR) {
-		dev_err(&client->dev,
-			"Invalid Vendor/Revision number in BQ24261_VENDOR_REV_ADDR: %d",
-			bq2426x_rev);
-		return -ENODEV;
-	}
+		bq24261_read_modify_reg(chip->client,
+					BQ24261_STAT_CTRL0_ADDR,
+					BQ24261_BOOST_MASK,
+					BQ24261_ENABLE_BOOST);
 
-	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
-	if (!chip) {
-		dev_err(&client->dev, "mem alloc failed\n");
-		return -ENOMEM;
-	}
+		INIT_DELAYED_WORK(&chip->wdt_work,
+					bq24261_wdt_reset_worker_ic2);
 
-	init_waitqueue_head(&chip->wait_ready);
-	i2c_set_clientdata(client, chip);
-	chip->client = client;
-	chip->dev = &client->dev;
-	chip->pdata = client->dev.platform_data;
-
-	dev_err(&client->dev, "%s: num_supplicants:%d, name:%s\n", __func__,
-			chip->pdata->num_supplicants,
-			chip->pdata->supplied_to[0]);
-
-	/* Remap IRQ map address to read the IRQ status */
-	if ((chip->pdata->irq_map) && (chip->pdata->irq_mask)) {
-		chip->irq_iomap = ioremap_nocache(chip->pdata->irq_map, 8);
-		if (!chip->irq_iomap) {
-			dev_err(&client->dev, "Failed: ioremap_nocache\n");
+		schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
+	} else
+	/* fcipaq end */
+	{
+		if (!client->dev.platform_data) {
+			dev_err(&client->dev, "platform data is null");
 			return -EFAULT;
 		}
-	}
 
-	/* sysfs for driving key */
-	ret = device_create_file(&chip->client->dev,
-			&dev_attr_kbd_key);
-	if (ret) {
-		dev_err(&chip->client->dev,
-			"Failed to create sysfs: kbd_key\n");
-	}
-	/* Create the dock state for supporting keyboard on EP */
-	sdock = kzalloc(sizeof(struct dock_switch_data),
-						GFP_KERNEL);
-	if (!sdock) {
-		pr_info("%s mem alloc failed\n", __func__);
-		return -ENOMEM;
-	}
+		if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA)) {
+			dev_err(&client->dev,
+				"I2C adapter %s doesn'tsupport BYTE DATA transfer\n",
+				adapter->name);
+			return -EIO;
+		}
 
+		bq2426x_rev = bq24261_read_reg(client, BQ24261_VENDOR_REV_ADDR);
+		if (bq2426x_rev < 0) {
+			dev_err(&client->dev,
+				"Error (%d) in reading BQ24261_VENDOR_REV_ADDR\n", bq2426x_rev);
+			return bq2426x_rev;
+		}
+		dev_info(&client->dev, "bq2426x revision: 0x%x found!!\n", bq2426x_rev);
 
-    sdock->sdev.name = "dock";
-	sdock->sdev.print_name = dock_print_name;
-	sdock->sdev.print_state = dock_print_state;
-	ret = switch_dev_register(&sdock->sdev);
-	if (ret) {
-		pr_info("%s switch registration failed!!\n",
-		__func__);
-	}
-	chip->kbd_dock_state =
-		EXTRA_DOCK_STATE_KEYBOARD_KEYRELEASE;
+		bq24261_rev_index = bq24261_get_model(bq2426x_rev);
+		if ((bq2426x_rev & BQ24261_VENDOR_MASK) != BQ24261_VENDOR) {
+			dev_err(&client->dev,
+				"Invalid Vendor/Revision number in BQ24261_VENDOR_REV_ADDR: %d",
+				bq2426x_rev);
+			return -ENODEV;
+		}
 
-	/* Send the initial notification about the keyboard state */
-	switch_set_state(&sdock->sdev, chip->kbd_dock_state);
-	chip->psy_usb.name = DEV_NAME;
-	chip->psy_usb.type = POWER_SUPPLY_TYPE_USB;
-	chip->psy_usb.properties = bq24261_usb_props;
-	chip->psy_usb.num_properties = ARRAY_SIZE(bq24261_usb_props);
-	chip->psy_usb.get_property = bq24261_usb_get_property;
-	chip->psy_usb.set_property = bq24261_usb_set_property;
-	chip->psy_usb.supplied_to = chip->pdata->supplied_to;
-	chip->psy_usb.num_supplicants = chip->pdata->num_supplicants;
-	chip->psy_usb.throttle_states = chip->pdata->throttle_states;
-	chip->psy_usb.num_throttle_states = chip->pdata->num_throttle_states;
-	chip->psy_usb.supported_cables = POWER_SUPPLY_CHARGER_TYPE_USB;
-	chip->max_cc = chip->pdata->max_cc;
-	chip->max_cv = 4350;
-	chip->chrgr_stat = BQ24261_CHRGR_STAT_UNKNOWN;
-	chip->chrgr_health = POWER_SUPPLY_HEALTH_UNKNOWN;
-	chip->revision = bq2426x_rev;
+		chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
+		if (!chip) {
+			dev_err(&client->dev, "mem alloc failed\n");
+			return -ENOMEM;
+		}
 
-	strncpy(chip->model_name,
-		bq24261_model_name[bq24261_rev_index].model_name,
-		MODEL_NAME_SIZE);
-	strncpy(chip->manufacturer, DEV_MANUFACTURER,
-		DEV_MANUFACTURER_NAME_SIZE);
+		init_waitqueue_head(&chip->wait_ready);
+		i2c_set_clientdata(client, chip);
+		chip->client = client;
+		chip->dev = &client->dev;
+		chip->pdata = client->dev.platform_data;
 
-	mutex_init(&chip->stat_lock);
-	wake_lock_init(&chip->chrgr_en_wakelock,
-			WAKE_LOCK_SUSPEND, "chrgr_en_wakelock");
-	ret = power_supply_register(&client->dev, &chip->psy_usb);
-	if (ret) {
-		dev_err(&client->dev, "Failed: power supply register (%d)\n",
-			ret);
-		iounmap(chip->irq_iomap);
-		return ret;
-	}
+		dev_err(&client->dev, "%s: num_supplicants:%d, name:%s\n", __func__,
+				chip->pdata->num_supplicants,
+				chip->pdata->supplied_to[0]);
 
-	INIT_DELAYED_WORK(&chip->sw_term_work, bq24261_sw_charge_term_worker);
-	INIT_DELAYED_WORK(&chip->low_supply_fault_work,
-				bq24261_low_supply_fault_work);
-	INIT_DELAYED_WORK(&chip->exception_mon_work,
-				bq24261_exception_mon_work);
-	if (((chip->revision & BQ24261_REV_MASK) == BQ24261_REV) ||
-			chip->pdata->is_wdt_kick_needed) {
-		INIT_DELAYED_WORK(&chip->wdt_work,
-					bq24261_wdt_reset_worker);
-	}
+		/* Remap IRQ map address to read the IRQ status */
+		if ((chip->pdata->irq_map) && (chip->pdata->irq_mask)) {
+			chip->irq_iomap = ioremap_nocache(chip->pdata->irq_map, 8);
+			if (!chip->irq_iomap) {
+				dev_err(&client->dev, "Failed: ioremap_nocache\n");
+				return -EFAULT;
+			}
+		}
 
-	INIT_WORK(&chip->irq_work, bq24261_irq_worker);
-	if (chip->client->irq) {
-		ret = request_threaded_irq(chip->client->irq,
-					   bq24261_irq_handler,
-					   bq24261_thread_handler,
-					   IRQF_SHARED|IRQF_NO_SUSPEND,
-					   DEV_NAME, chip);
+		/* sysfs for driving key */
+		ret = device_create_file(&chip->client->dev,
+				&dev_attr_kbd_key);
 		if (ret) {
-			dev_err(&client->dev, "Failed: request_irq (%d)\n",
+			dev_err(&chip->client->dev,
+				"Failed to create sysfs: kbd_key\n");
+		}
+		/* Create the dock state for supporting keyboard on EP */
+		sdock = kzalloc(sizeof(struct dock_switch_data),
+							GFP_KERNEL);
+		if (!sdock) {
+			pr_info("%s mem alloc failed\n", __func__);
+			return -ENOMEM;
+		}
+
+
+	    sdock->sdev.name = "dock";
+		sdock->sdev.print_name = dock_print_name;
+		sdock->sdev.print_state = dock_print_state;
+		ret = switch_dev_register(&sdock->sdev);
+		if (ret) {
+			pr_info("%s switch registration failed!!\n",
+			__func__);
+		}
+		chip->kbd_dock_state =
+			EXTRA_DOCK_STATE_KEYBOARD_KEYRELEASE;
+
+		/* Send the initial notification about the keyboard state */
+		switch_set_state(&sdock->sdev, chip->kbd_dock_state);
+		chip->psy_usb.name = DEV_NAME;
+		chip->psy_usb.type = POWER_SUPPLY_TYPE_USB;
+		chip->psy_usb.properties = bq24261_usb_props;
+		chip->psy_usb.num_properties = ARRAY_SIZE(bq24261_usb_props);
+		chip->psy_usb.get_property = bq24261_usb_get_property;
+		chip->psy_usb.set_property = bq24261_usb_set_property;
+		chip->psy_usb.supplied_to = chip->pdata->supplied_to;
+		chip->psy_usb.num_supplicants = chip->pdata->num_supplicants;
+		chip->psy_usb.throttle_states = chip->pdata->throttle_states;
+		chip->psy_usb.num_throttle_states = chip->pdata->num_throttle_states;
+		chip->psy_usb.supported_cables = POWER_SUPPLY_CHARGER_TYPE_USB;
+		chip->max_cc = chip->pdata->max_cc;
+		chip->max_cv = 4350;
+		chip->chrgr_stat = BQ24261_CHRGR_STAT_UNKNOWN;
+		chip->chrgr_health = POWER_SUPPLY_HEALTH_UNKNOWN;
+		chip->revision = bq2426x_rev;
+
+		strncpy(chip->model_name,
+			bq24261_model_name[bq24261_rev_index].model_name,
+			MODEL_NAME_SIZE);
+		strncpy(chip->manufacturer, DEV_MANUFACTURER,
+			DEV_MANUFACTURER_NAME_SIZE);
+
+		mutex_init(&chip->stat_lock);
+		wake_lock_init(&chip->chrgr_en_wakelock,
+				WAKE_LOCK_SUSPEND, "chrgr_en_wakelock");
+		ret = power_supply_register(&client->dev, &chip->psy_usb);
+		if (ret) {
+			dev_err(&client->dev, "Failed: power supply register (%d)\n",
 				ret);
 			iounmap(chip->irq_iomap);
-			power_supply_unregister(&chip->psy_usb);
 			return ret;
 		}
+
+		INIT_DELAYED_WORK(&chip->sw_term_work, bq24261_sw_charge_term_worker);
+		INIT_DELAYED_WORK(&chip->low_supply_fault_work,
+					bq24261_low_supply_fault_work);
+		INIT_DELAYED_WORK(&chip->exception_mon_work,
+					bq24261_exception_mon_work);
+		if (((chip->revision & BQ24261_REV_MASK) == BQ24261_REV) ||
+				chip->pdata->is_wdt_kick_needed) {
+			INIT_DELAYED_WORK(&chip->wdt_work,
+						bq24261_wdt_reset_worker);
+		}
+
+		INIT_WORK(&chip->irq_work, bq24261_irq_worker);
+		if (chip->client->irq) {
+			ret = request_threaded_irq(chip->client->irq,
+						   bq24261_irq_handler,
+						   bq24261_thread_handler,
+						   IRQF_SHARED|IRQF_NO_SUSPEND,
+						   DEV_NAME, chip);
+			if (ret) {
+				dev_err(&client->dev, "Failed: request_irq (%d)\n",
+					ret);
+				iounmap(chip->irq_iomap);
+				power_supply_unregister(&chip->psy_usb);
+				return ret;
+			}
+		}
+
+		if (IS_BATTERY_OVER_VOLTAGE(chip))
+			handle_battery_over_voltage(chip);
+		else
+			chip->bat_health = POWER_SUPPLY_HEALTH_GOOD;
+
+		if (register_otg_notifications(chip))
+			dev_err(&client->dev, "Error in registering OTG notifications. Unable to supply power to Host\n");
+
+		bq24261_client = client;
+		power_supply_changed(&chip->psy_usb);
+		bq24261_debugfs_init();
+
+		chip->ext_booster_gpio = get_gpio_by_name(OTG_DCDC_EN_GPIO);
+		if (chip->ext_booster_gpio < 0) {
+			dev_info(&client->dev, "No external OTG voltage booster found,"
+					"gpio(name: %s)\n", OTG_DCDC_EN_GPIO);
+		} else {
+			ret = gpio_request(chip->ext_booster_gpio, "OTG_DCDC_EN_GPIO");
+			if (ret) {
+				dev_err(&client->dev,
+					"%s: Failed to request otg_gpio: error %d\n",
+						__func__, ret);
+				return ret;
+			}
+			ret = gpio_direction_output(chip->ext_booster_gpio, 0);
+			if (ret) {
+				dev_err(&client->dev,
+					"%s: OTG GPIO_DCDC_EN write is failed\n",
+					__func__, chip->ext_booster_gpio);
+				return ret;
+			}
+		}
+
+		/* This worker would monitor the battery voltage*/
+		INIT_DELAYED_WORK(&chip->bat_mon_work,
+						bq24261_bat_mon_work);
+		bq24261_debugfs_init( );
 	}
-
-	if (IS_BATTERY_OVER_VOLTAGE(chip))
-		handle_battery_over_voltage(chip);
-	else
-		chip->bat_health = POWER_SUPPLY_HEALTH_GOOD;
-
-	if (register_otg_notifications(chip))
-		dev_err(&client->dev, "Error in registering OTG notifications. Unable to supply power to Host\n");
-
-	bq24261_client = client;
-	power_supply_changed(&chip->psy_usb);
-	bq24261_debugfs_init();
-
-	chip->ext_booster_gpio = get_gpio_by_name(OTG_DCDC_EN_GPIO);
-	if (chip->ext_booster_gpio < 0) {
-		dev_info(&client->dev, "No external OTG voltage booster found,"
-				"gpio(name: %s)\n", OTG_DCDC_EN_GPIO);
-	} else {
-		ret = gpio_request(chip->ext_booster_gpio, "OTG_DCDC_EN_GPIO");
-		if (ret) {
-			dev_err(&client->dev,
-				"%s: Failed to request otg_gpio: error %d\n",
-					__func__, ret);
-			return ret;
-		}
-		ret = gpio_direction_output(chip->ext_booster_gpio, 0);
-		if (ret) {
-			dev_err(&client->dev,
-				"%s: OTG GPIO_DCDC_EN write is failed\n",
-				__func__, chip->ext_booster_gpio);
-			return ret;
-		}
-	}
-
-	/* This worker would monitor the battery voltage*/
-	INIT_DELAYED_WORK(&chip->bat_mon_work,
-					bq24261_bat_mon_work);
-	bq24261_debugfs_init( );
 
 	return 0;
 }
 
 static int bq24261_remove(struct i2c_client *client)
 {
+	/* fcipaq: TODO This routine should probably also be run for the
+	 * 2nd IC, but as this only occurs on shutdown, I don't care...
+	 */
 	struct bq24261_charger *chip = i2c_get_clientdata(client);
+
+	/* fcipaq: power down keyboard supply */
+	cancel_delayed_work_sync(&chip_ic2->wdt_work);
+	bq24261_wdt_boost_ic2(chip_ic2, 0);
+	/* fcipaq end */
 
 	if (client->irq)
 		free_irq(client->irq, chip);
@@ -2166,6 +2261,9 @@ static int bq24261_suspend(struct device *dev)
 			chip->pdata->is_wdt_kick_needed) {
 		if (chip->boost_mode)
 			cancel_delayed_work_sync(&chip->wdt_work);
+			/* fcipaq */
+			cancel_delayed_work_sync(&chip_ic2->wdt_work);
+			/* fcipaq end */
 	}
 	dev_dbg(&chip->client->dev, "bq24261 suspend\n");
 	return 0;
@@ -2179,6 +2277,10 @@ static int bq24261_resume(struct device *dev)
 			chip->pdata->is_wdt_kick_needed) {
 		if (chip->boost_mode)
 			bq24261_enable_boost_mode(chip, 1);
+		/* fcipaq */
+		bq24261_wdt_boost_ic2(chip_ic2, 1);
+		schedule_delayed_work(&chip_ic2->wdt_work, WDT_RESET_DELAY);
+		/* fcipaq end */
 	}
 
 	dev_dbg(&chip->client->dev, "bq24261 resume\n");
@@ -2214,6 +2316,7 @@ static const struct dev_pm_ops bq24261_pm_ops = {
 
 static const struct i2c_device_id bq24261_id[] = {
 	{DEV_NAME, 0},
+	{"bq24261_ep", 0},
 	{},
 };
 
@@ -2223,12 +2326,18 @@ static void bq24261_shutdown(struct i2c_client *client)
 
 	dev_info(&client->dev,"%s called\n", __func__);
 
+	/* fcipaq: power down keyboard supply */
+	cancel_delayed_work_sync(&chip_ic2->wdt_work);
+	bq24261_wdt_boost_ic2(chip_ic2, 0);
+	/* fcipaq end */
+
 	ret =  bq24261_read_modify_reg(client, BQ24261_STAT_CTRL0_ADDR,
                                    BQ24261_TMR_RST_MASK, BQ24261_TMR_RST);
 	if (ret)
 		dev_err(&client->dev, "Error (%d) in WDT reset\n", ret);
 	else
 		dev_info(&client->dev, "WDT reset\n");
+
 }
 
 MODULE_DEVICE_TABLE(i2c, bq24261_id);

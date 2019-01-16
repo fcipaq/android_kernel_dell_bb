@@ -127,6 +127,22 @@
 #define SCHRGRIRQ1_SVBUSDET_MASK	D0
 #define SHRT_GND_DET			(0x01 << 3)
 #define SHRT_FLT_DET			(0x01 << 4)
+#define SHRT_MID_DET			0
+
+#define GPIO3CTLO_ADDR			0x81
+#define GPIO3CTLO_DIR3_OUTPUT		D5
+#define GPIO3CTLO_DRV3_PSHPLL		D4
+#define GPIO3CTLO_REN3_PULL_EN		D3
+#define GPIO3CTLO_DOUT3_HIGH		D0
+
+#define GPIO6CTLO_ADDR			0x84
+#define GPIO6CTLO_DIR6_OUTPUT		D5
+#define GPIO6CTLO_DRV6_PSHPLL		D4
+#define GPIO6CTLO_REN6_PULL_EN		D3
+#define GPIO6CTLO_DOUT6_HIGH		D0
+
+#define GPIO3CTLI_ADDR			0x91
+#define GPIO3CTLI_DIN3_HIGH_MASK	D0
 
 #define PMIC_CHRGR_INT0_MASK		0xB1
 #define PMIC_CHRGR_CCSM_INT0_MASK	0xB0
@@ -166,42 +182,6 @@
 #define CHGRSTATUS_CHGDISLVL_MASK	D2
 #define CHGRSTATUS_CHGDETB_LATCH_MASK	D1
 #define CHGDETB_MASK			D0
-
-#define CHRLEDCTRL_ADDR			0x53
-#define CHRLEDCTRL_CHRLEDF_MASK		(D5|D4)
-#define CHRLEDCTRL_CHRLEDI_MASK		(D3|D2)
-#define CHRLEDCTRL_SWLEDON_MASK		D1
-#define CHRLEDCTRL_CHRLEDFN_MASK	D0
-
-#define CHRLEDF_QUARTER_HZ		(0 << 4)
-#define CHRLEDF_HALF_HZ			(1 << 4)
-#define CHRLEDF_ONE_HZ			(2 << 4)
-#define CHRLEDF_TWO_HZ			(3 << 4)
-
-#define CHRLEDI_10P0_MA			(0 << 2)
-#define CHRLEDI_1P0_MA			(1 << 2)
-#define CHRLEDI_2P5_MA			(2 << 2)
-#define CHRLEDI_5P0_MA			(3 << 2)
-
-#define SWLEDON_ENABLE			(1 << 1)
-#define CHRLEDFN_SW_CONTROL		(1 << 0)
-
-#define CHRLEDFSM_ADDR			0x54
-#define CHRLEDFSM_LEDFSMDIS_MASK	D3
-#define CHRLEDFSM_LEDEFF_MASK		(D2|D1)
-#define CHRLEDFSM_CHRLEDCIP_MASK	D0
-
-#define LEDFSMDIS_DISABLED		(1 << 3)
-
-#define LEDEFF_OFF				(0 << 1)
-#define LEDEFF_ON				(1 << 1)
-#define LEDEFF_BLINK			(2 << 1)
-#define LEDEFF_BREATHE			(3 << 1)
-
-#define CHRLEDCIP_ENABLE		(1 << 0)
-
-#define CHRLEDPWM_ADDR			0x55
-#define CHRLEDPWM_CHRLEDDUTY_MASK	(D7|D6|D5|D4|D3|D2|D1|D0)
 
 #define THRMBATZONE_ADDR_BC		0xB5
 #define THRMBATZONE_ADDR_SC		0xB6
@@ -404,7 +384,9 @@ struct pmic_chrgr_drv_context {
 	enum pmic_charger_cable_type charger_type;
 	/* ShadyCove-WA for VBUS removal detect issue */
 	bool vbus_connect_status;
+	bool vdcin_connect_status;
 	bool otg_mode_enabled;
+	bool aca_det_done;
 	struct ps_batt_chg_prof *sfi_bcprof;
 	struct ps_pse_mod_prof *actual_bcprof;
 	struct ps_pse_mod_prof *runtime_bcprof;

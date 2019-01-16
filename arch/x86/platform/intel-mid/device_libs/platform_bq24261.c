@@ -32,7 +32,7 @@ static struct power_supply_throttle bq24261_throttle_states[] = {
 	},
 	{
 		.throttle_action = PSY_THROTTLE_CC_LIMIT,
-		.throttle_val = BQ24261_CHRG_CUR_MEDIUM,
+		.throttle_val = BQ24261_CHRG_CUR_HIGH,
 
 	},
 	{
@@ -73,16 +73,13 @@ void __init *bq24261_platform_data(void *info)
 	if (INTEL_MID_BOARD(1, PHONE, MOFD) ||
 		INTEL_MID_BOARD(1, TABLET, MOFD)) {
 		bq24261_pdata.max_cc = 2500;
-		bq24261_pdata.max_cv = 4100;
 		bq24261_pdata.handle_low_supply = pmic_handle_low_supply;
 		bq24261_pdata.handle_otgmode = pmic_handle_otgmode;
-
 		/* WA for ShadyCove host-mode WDT issue */
 		bq24261_pdata.is_wdt_kick_needed = true;
 	} else if (INTEL_MID_BOARD(1, PHONE, MRFL) ||
 		INTEL_MID_BOARD(1, TABLET, MRFL)) {
 		bq24261_pdata.max_cc = 1500;
-		bq24261_pdata.max_cv = 4350;
 	}
 #endif
 	bq24261_pdata.set_iterm = NULL;

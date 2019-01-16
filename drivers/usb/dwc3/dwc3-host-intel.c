@@ -58,17 +58,6 @@ static struct dwc3_xhci_hcd {
 
 static void dwc3_host_quirks(struct device *dev, struct xhci_hcd *xhci)
 {
-	struct dwc_otg2 *otg = dwc3_get_otg();
-	struct intel_dwc_otg_pdata *data = NULL;
-
-	data = (struct intel_dwc_otg_pdata *)otg->otg_data;
-
-	if (otg && otg->otg_data)
-		data = (struct intel_dwc_otg_pdata *)otg->otg_data;
-
-	if (data && data->utmi_fs_det_wa)
-		xhci->quirks |= XHCI_PORT_RESET;
-
 	/*
 	 * As of now platform drivers don't provide MSI support so we ensure
 	 * here that the generic code does not try to make a pci_dev from our
@@ -81,12 +70,6 @@ static void dwc3_host_quirks(struct device *dev, struct xhci_hcd *xhci)
 	 * for make driver continue work.
 	 */
 	xhci->quirks |= XHCI_RESET;
-
-	/*
-	 * Change SS port host reset to warm reset, due to individual USB3.0
-	 * UMS address fail caused by link state unstable afer hot reset.
-	 */
-	xhci->quirks |= XHCI_FORCE_WR;
 }
 
 static int dwc3_host_setup(struct usb_hcd *hcd)
@@ -371,6 +354,28 @@ static void dwc_set_ssphy_p3_clockrate(struct usb_hcd *hcd)
 	writel(gctl, hcd->regs + GCTL);
 }
 
+static ssize_t
+show_pm_get(struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	struct platform_device		*pdev = to_platform_device(_dev);
+	struct usb_hcd		*hcd = platform_get_drvdata(pdev);
+
+	pm_runtime_put(hcd->self.controller);
+	return 0;
+
+}
+static ssize_t store_pm_get(struct device *_dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct platform_device		*pdev = to_platform_device(_dev);
+	struct usb_hcd		*hcd = platform_get_drvdata(pdev);
+
+	pm_runtime_get(hcd->self.controller);
+	return count;
+
+}
+static DEVICE_ATTR(pm_get, S_IRUGO|S_IWUSR|S_IWGRP,
+			show_pm_get, store_pm_get);
 /*
  * This is for host compliance test
  * *
@@ -556,6 +561,11 @@ static int __dwc3_start_host(struct usb_hcd *hcd)
 	dwc3_link_issue_wa(xhci);
 	pm_runtime_put(hcd->self.controller);
 
+	ret = device_create_file(hcd->self.controller, &dev_attr_pm_get);
+	if (ret < 0)
+		dev_err(hcd->self.controller,
+			"Can't register sysfs attribute: %d\n", ret);
+
 	dwc3_xhci_driver.shutdown = usb_hcd_platform_shutdown;
 
 	return ret;
@@ -634,6 +644,7 @@ static int __dwc3_stop_host(struct usb_hcd *hcd)
 	dwc_xhci_enable_phy_suspend(hcd, false);
 
 	pm_runtime_put(hcd->self.controller);
+	device_remove_file(hcd->self.controller, &dev_attr_pm_get);
 	return 0;
 }
 

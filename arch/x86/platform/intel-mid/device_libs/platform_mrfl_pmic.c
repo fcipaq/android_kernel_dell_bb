@@ -29,6 +29,7 @@
 #define PMIC_ID_ADDR    0x00
 #define SHADYCOVE_A0	0x00
 #define SHADYCOVE_A1	0x01
+#define BATTID_LEN	0x08
 
 static struct temp_lookup basincove_adc_tbl[] = {
 	{0x24, 125, 0}, {0x28, 120, 0},
@@ -70,12 +71,72 @@ static struct temp_lookup shadycove_adc_tbl[] = {
 	{0x39E4, -35, 0}, {0x4C6D, -40, 0},
 };
 
+/* New ADC table for Simplo battery */
+static struct temp_lookup shadycove_adc_simplo[] = {
+	{0x56, 105, 0}, {0x61, 100, 0},
+	{0x6F, 95, 0}, {0x7F, 90, 0},
+	{0x91, 85, 0}, {0xA7, 80, 0},
+	{0xC0, 75, 0}, {0xDE, 70, 0},
+	{0x102, 65, 0}, {0x12C, 60, 0},
+	{0x160, 55, 0}, {0x19D, 50, 0},
+	{0x1E8, 45, 0}, {0x243, 40, 0},
+	{0x2B3, 35, 0}, {0x33D, 30, 0},
+	{0x3E8, 25, 0}, {0x4BC, 20, 0},
+	{0x5C5, 15, 0}, {0x712, 10, 0},
+	{0x8B8, 5, 0}, {0xAD0, 0, 0},
+	{0xD81, -5, 0}, {0x10FE, -10, 0},
+	{0x158E, -15, 0}, {0x1B94, -20, 0},
+};
+
+static struct temp_lookup shadycove_adc_lg[] = {
+	{0x6F, 95, 0}, {0x7F, 90, 0},
+	{0x91, 85, 0}, {0xA7, 80, 0},
+	{0xC1, 75, 0}, {0xE0, 70, 0},
+	{0x104, 65, 0}, {0x12F, 60, 0},
+	{0x164, 55, 0}, {0x1A2, 50, 0},
+	{0x1EE, 45, 0}, {0x249, 40, 0},
+	{0x2B9, 35, 0}, {0x341, 30, 0},
+	{0x3E8, 25, 0}, {0x4B5, 20, 0},
+	{0x5B3, 15, 0}, {0x6ED, 10, 0},
+	{0x874, 5, 0}, {0xA5D, 0, 0},
+	{0xCC2, -5, 0}, {0xFC4, -10, 0},
+	{0x1391, -15, 0}, {0x1862, -20, 0},
+	{0x1E81, -25, 0}, {0x264F, -30, 0},
+	{0x304C, -35, 0}, {0x3D1F, -40, 0},
+};
+
+static bool mrfl_pmic_get_usbspecoverride(u32 addr)
+{
+	void __iomem *usb_comp_smip_sram;
+	bool usb_spec_override;
+
+	/* Read MISCFLAGS byte */
+	usb_comp_smip_sram = ioremap_nocache(addr, 4);
+	/* MISCFLAGS.BIT[6] indicates USB spec override */
+	usb_spec_override = ioread8(usb_comp_smip_sram) & SMIP_VIOLATE_BC_MASK;
+	iounmap(usb_comp_smip_sram);
+
+	return usb_spec_override;
+}
+
 void __init *mrfl_pmic_ccsm_platform_data(void *info)
 {
 	struct sfi_device_table_entry *entry = info;
 	static struct pmic_platform_data pmic_pdata;
 	struct platform_device *pdev = NULL;
+	struct sfi_table_simple *sb;
+	char battid[BATTID_LEN + 1] = {};
 	int ret;
+
+#ifdef CONFIG_SFI
+	sb = (struct sfi_table_simple *)get_oem0_table();
+#else
+	sb = NULL;
+#endif
+	if (sb != NULL) {
+		snprintf(battid, BATTID_LEN + 1,
+			"%s", (char *)sb->pentry);
+	}
 
 	pdev = platform_device_alloc(entry->name, -1);
 	if (!pdev) {
@@ -95,10 +156,28 @@ void __init *mrfl_pmic_ccsm_platform_data(void *info)
 			INTEL_MID_BOARD(1, TABLET, MRFL)) {
 		pmic_pdata.max_tbl_row_cnt = ARRAY_SIZE(basincove_adc_tbl);
 		pmic_pdata.adc_tbl = basincove_adc_tbl;
+		pmic_pdata.usbspec_override =
+			mrfl_pmic_get_usbspecoverride(MRFL_SMIP_VIOLATE_BC);
 	} else if (INTEL_MID_BOARD(1, PHONE, MOFD) ||
 			INTEL_MID_BOARD(1, TABLET, MOFD)) {
-		pmic_pdata.max_tbl_row_cnt = ARRAY_SIZE(shadycove_adc_tbl);
-		pmic_pdata.adc_tbl = shadycove_adc_tbl;
+		pmic_pdata.usbspec_override =
+			mrfl_pmic_get_usbspecoverride(MOFD_SMIP_VIOLATE_BC);
+		pr_info("usbspec-override:%d\n",
+				pmic_pdata.usbspec_override);
+
+		if (battid[0] == 'F' && battid[1] == '1') {
+			pmic_pdata.max_tbl_row_cnt =
+				ARRAY_SIZE(shadycove_adc_simplo);
+			pmic_pdata.adc_tbl = shadycove_adc_simplo;
+		} else if (battid[0] == 'F' && battid[1] == '2') {
+			pmic_pdata.max_tbl_row_cnt =
+				ARRAY_SIZE(shadycove_adc_lg);
+			pmic_pdata.adc_tbl = shadycove_adc_lg;
+		} else {
+			pmic_pdata.max_tbl_row_cnt =
+				ARRAY_SIZE(shadycove_adc_tbl);
+			pmic_pdata.adc_tbl = shadycove_adc_tbl;
+		}
 	}
 
 #ifdef CONFIG_BQ24261_CHARGER

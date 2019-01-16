@@ -286,7 +286,6 @@ struct bq24192_chip {
 	bool online;
 	bool present;
 	bool sfttmr_expired;
-	bool is_otg_present;
 };
 
 #ifdef CONFIG_DEBUG_FS
@@ -874,8 +873,11 @@ static int program_timers(struct bq24192_chip *chip, int wdt_duration,
 	/* Program the time with duration passed */
 	ret |=  wdt_duration;
 
-	/* Disable the safety timer for MTBF test. */
-	ret &= ~CHRG_TIMER_EXP_CNTL_EN_TIMER;
+	/* Enable/Disable the safety timer */
+	if (sfttmr_enable)
+		ret |= CHRG_TIMER_EXP_CNTL_EN_TIMER;
+	else
+		ret &= ~CHRG_TIMER_EXP_CNTL_EN_TIMER;
 
 	/* Program the TIMER CTRL register */
 	ret = bq24192_write_reg(chip->client,
@@ -961,12 +963,6 @@ static int bq24192_turn_otg_vbus(struct bq24192_chip *chip, bool votg_on)
 					"TIMER enable failed %s\n", __func__);
 				goto i2c_write_fail;
 			}
-
-			/* Clear HIZ mode before OTG mode is enabled */
-			ret = bq24192_clear_hiz(chip);
-			if (ret < 0)
-				dev_warn(&chip->client->dev, "HiZ clear failed:\n");
-
 			/* Configure the charger in OTG mode */
 			if ((chip->chip_type == BQ24296) ||
 				(chip->chip_type == BQ24297))
@@ -1264,6 +1260,12 @@ static inline int bq24192_enable_charging(
 	ret = bq24192_write_reg(chip->client, BQ24192_POWER_ON_CFG_REG, regval);
 	if (ret < 0)
 		dev_warn(&chip->client->dev, "charger enable/disable failed\n");
+	else {
+		if (val)
+			chip->online = true;
+		else
+			chip->online = false;
+	}
 
 	return ret;
 }
@@ -1273,15 +1275,18 @@ static inline int bq24192_enable_charger(
 {
 	int ret = 0;
 
-	ret = bq24192_reg_read_modify(chip->client,
+	/*stop charger for throttle state 3, by putting it in HiZ mode*/
+	if (chip->cntl_state == 0x3) {
+		ret = bq24192_reg_read_modify(chip->client,
 			BQ24192_INPUT_SRC_CNTL_REG,
-				INPUT_SRC_CNTL_EN_HIZ, !val);
+				INPUT_SRC_CNTL_EN_HIZ, true);
 
-	if (ret < 0)
-		dev_warn(&chip->client->dev,
+		if (ret < 0)
+			dev_warn(&chip->client->dev,
 				"Input src cntl write failed\n");
-	else
-		ret = bq24192_enable_charging(chip, val);
+		else
+			ret = bq24192_enable_charging(chip, val);
+	}
 
 	dev_warn(&chip->client->dev, "%s:%d %d\n", __func__, __LINE__, val);
 
@@ -1700,28 +1705,22 @@ static void bq24192_task_worker(struct work_struct *work)
 	if (vbatt <= INPUT_SRC_LOW_VBAT_LIMIT)
 		goto sched_task_work;
 
-	/* The charger vindpm voltage changes are causing charge current throttle
-	 * resulting in a prolonged changing time.
-	 * Hence disabling dynamic vindpm update  for bq24296 chip.
-	*/
-	if (chip->chip_type != BQ24296) {
-		if (vbatt > INPUT_SRC_LOW_VBAT_LIMIT &&
-			vbatt < INPUT_SRC_MIDL_VBAT_LIMIT)
-			vindpm = INPUT_SRC_VOLT_LMT_444;
-		else if (vbatt > INPUT_SRC_MIDL_VBAT_LIMIT &&
-			vbatt < INPUT_SRC_MIDH_VBAT_LIMIT)
-			vindpm = INPUT_SRC_VOLT_LMT_468;
-		else if (vbatt > INPUT_SRC_MIDH_VBAT_LIMIT &&
-			vbatt < INPUT_SRC_HIGH_VBAT_LIMIT)
-			vindpm = INPUT_SRC_VOLT_LMT_476;
+	if (vbatt > INPUT_SRC_LOW_VBAT_LIMIT &&
+		vbatt < INPUT_SRC_MIDL_VBAT_LIMIT)
+		vindpm = INPUT_SRC_VOLT_LMT_444;
+	else if (vbatt > INPUT_SRC_MIDL_VBAT_LIMIT &&
+		vbatt < INPUT_SRC_MIDH_VBAT_LIMIT)
+		vindpm = INPUT_SRC_VOLT_LMT_468;
+	else if (vbatt > INPUT_SRC_MIDH_VBAT_LIMIT &&
+		vbatt < INPUT_SRC_HIGH_VBAT_LIMIT)
+		vindpm = INPUT_SRC_VOLT_LMT_476;
 
-		if (!mutex_trylock(&chip->event_lock))
-			goto sched_task_work;
-		ret = bq24192_modify_vindpm(vindpm);
-		if (ret < 0)
-			dev_err(&chip->client->dev, "%s failed\n", __func__);
-		mutex_unlock(&chip->event_lock);
-	}
+	if (!mutex_trylock(&chip->event_lock))
+		goto sched_task_work;
+	ret = bq24192_modify_vindpm(vindpm);
+	if (ret < 0)
+		dev_err(&chip->client->dev, "%s failed\n", __func__);
+	mutex_unlock(&chip->event_lock);
 
 	/*
 	 * BQ driver depends upon the charger interrupt to send notification
@@ -1772,8 +1771,9 @@ static void bq24192_otg_evt_worker(struct work_struct *work)
 			"%s:%d state=%d\n", __FILE__, __LINE__,
 				evt->is_enable);
 
-		chip->is_otg_present = evt->is_enable;
+		mutex_lock(&chip->event_lock);
 		ret = bq24192_turn_otg_vbus(chip, evt->is_enable);
+		mutex_unlock(&chip->event_lock);
 
 		if (ret < 0)
 			dev_err(&chip->client->dev, "VBUS ON FAILED:\n");
@@ -2273,6 +2273,7 @@ static int bq24192_resume(struct device *dev)
 {
 	struct bq24192_chip *chip = dev_get_drvdata(dev);
 	int ret;
+
 	if (chip->irq > 0) {
 		ret = request_threaded_irq(chip->irq,
 				bq24192_irq_isr, bq24192_irq_thread,
@@ -2287,17 +2288,6 @@ static int bq24192_resume(struct device *dev)
 				chip->irq);
 		}
 	}
-	/*
-	* Make sure we enable 5 volt boost mode
-	* in case of otg device connect
-	*/
-	mutex_lock(&chip->event_lock);
-	if (chip->is_otg_present) {
-		ret = bq24192_turn_otg_vbus(chip, true);
-		if (ret < 0)
-			dev_err(&chip->client->dev, "VBUS ON FAILED:\n");
-	}
-	mutex_unlock(&chip->event_lock);
 	dev_dbg(&chip->client->dev, "bq24192 resume\n");
 	return 0;
 }

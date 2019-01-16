@@ -270,7 +270,7 @@ static void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
 
 	/* stall is always issued on EP0 */
 	dep = dwc->eps[0];
-	__dwc3_gadget_ep_set_halt(dep, 1, false);
+	__dwc3_gadget_ep_set_halt(dep, 1);
 	dep->flags = DWC3_EP_ENABLED;
 	dwc->delayed_status = false;
 
@@ -495,9 +495,7 @@ static int dwc3_ep0_handle_feature(struct dwc3 *dwc,
 			dep = dwc3_wIndex_to_dep(dwc, wIndex);
 			if (!dep)
 				return -EINVAL;
-			if (set == 0 && (dep->flags & DWC3_EP_WEDGE))
-				break;
-			ret = __dwc3_gadget_ep_set_halt(dep, set, true);
+			ret = __dwc3_gadget_ep_set_halt(dep, set);
 			if (ret)
 				return -EINVAL;
 			break;
@@ -1073,10 +1071,7 @@ static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 		if (dwc->delayed_status) {
 			WARN_ON_ONCE(event->endpoint_number != 1);
 			dev_vdbg(dwc->dev, "Mass Storage delayed status\n");
-			if (list_empty(&dwc->eps[0]->request_list))
-				return;
-			else
-				dwc->delayed_status = false;
+			return;
 		}
 
 		dwc3_ep0_do_control_status(dwc, event);

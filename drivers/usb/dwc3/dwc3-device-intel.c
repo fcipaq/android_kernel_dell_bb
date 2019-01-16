@@ -121,10 +121,7 @@ static void dwc3_enable_host_auto_retry(struct dwc3 *dwc, bool enable)
 
 static void dwc3_do_extra_change(struct dwc3 *dwc)
 {
-	struct intel_dwc_otg_pdata	*pdata;
-	struct dwc_otg2			*otg;
-	struct usb_phy			*usb_phy;
-	u32				reg;
+	u32		reg;
 
 	if (!dwc3_is_cht())
 		dwc3_set_flis_reg();
@@ -149,23 +146,6 @@ static void dwc3_do_extra_change(struct dwc3 *dwc)
 	reg &= ~DWC3_GCTL_PWRDNSCALE_MASK;
 	reg |= DWC3_GCTL_PWRDNSCALE(0x4E2);
 	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
-
-	/* Program ULPI PHY VS1(0x80) register to improve eye diagram quality.*/
-	if (!dwc->utmi_phy) {
-		/* Get the optimized value for VS1 from pdata */
-		otg = dwc3_get_otg();
-		if (otg && otg->otg_data) {
-			pdata = otg->otg_data;
-			if (pdata->ulpi_eye_calibration) {
-				usb_phy = usb_get_phy(USB_PHY_TYPE_USB2);
-				if (usb_phy)
-					usb_phy_io_write(usb_phy,
-						pdata->ulpi_eye_calibration,
-						TUSB1211_VENDOR_SPECIFIC1_SET);
-				usb_put_phy(usb_phy);
-			}
-		}
-	}
 }
 
 static void dwc3_enable_hibernation(struct dwc3 *dwc, bool on)
@@ -628,8 +608,7 @@ static int dwc3_device_intel_probe(struct platform_device *pdev)
 	else
 		dwc->maximum_speed = DWC3_DCFG_SUPERSPEED;
 
-	if (otg_data)
-		dwc->needs_fifo_resize = !!otg_data->tx_fifo_resize;
+	dwc->needs_fifo_resize = of_property_read_bool(node, "tx-fifo-resize");
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(dev);

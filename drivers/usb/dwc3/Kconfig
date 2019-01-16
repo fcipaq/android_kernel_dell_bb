@@ -90,7 +90,7 @@ config USB_DWC3_HOST_WITHOUT_RID
         via IOCTL. This comes in handy when using a magnetic coupling for
         the micro USB port which does not feature a fifth ID line, so host
         mode would be unavailible.
-        If unsure say n 
+        If unsure say n    
 
 config USB_DWC3_INTEL_MRFL
 	tristate "DWC OTG 3.0 for Intel Merrifield platforms"

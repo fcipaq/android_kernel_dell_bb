@@ -28,3 +28,16 @@ config BQ24261_CHARGER
 	  makes use of power supply charging framework. So the driver gives
 	  the charger hardware abstraction only. Charging logic is abstracted
 	  in the charging framework.
+
+config BQ24261_CHARGER_EP
+	bool "Keyboard support for Dell Venue 7040 (EXPERIMENTAL)"
+	select POWER_SUPPLY_CHARGER
+	depends on I2C && BQ24261_CHARGER
+ 	default n
+	help
+	  This enables support for the magnetically attachable keyboard
+	  for the Dell Venue 7040 (aka. Intel Eaglespeak). This driver
+	  is in an experimental state and may cause battery or charger
+	  failure and unexpected behaviour. 
+	  Also unplugging of the charge will not be recognized corretly.
+	  DO THIS AT YOUR OWN RISK.

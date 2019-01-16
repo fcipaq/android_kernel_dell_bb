@@ -28,8 +28,8 @@ struct {
 	u8 name[16];
 	u32 val;
 } usb2_el_cal[] = {
-	{"ULPICAL_7D", 0x7D},
-	{"ULPICAL_7F", 0x7F},
+	{"ULPICAL_7D", 0x7F},
+	{"ULPICAL_7F", 0x7D},
 	{"UTMICAL_PEDE3TX0", 0x51801},
 	{"UTMICAL_PEDE6TX7", 0x53f01},
 };
@@ -119,7 +119,6 @@ static struct intel_dwc_otg_pdata *get_otg_platform_data(struct pci_dev *pdev)
 			INTEL_MID_BOARD(1, TABLET, MOFD)) {
 			dwc_otg_pdata.pmic_type = SHADY_COVE;
 			dwc_otg_pdata.charger_detect_enable = 0;
-			dwc_otg_pdata.tx_fifo_resize = 1;
 			dwc_otg_pdata.usb2_phy_type = get_usb2_phy_type();
 			 dwc_otg_pdata.charging_compliance =
 				dwc_otg_get_usbspecoverride(MOFD_SMIP_VIOLATE_BC_ADDR);
@@ -127,25 +126,8 @@ static struct intel_dwc_otg_pdata *get_otg_platform_data(struct pci_dev *pdev)
 			if (dwc_otg_pdata.usb2_phy_type == USB2_PHY_ULPI) {
 				dwc_otg_pdata.charger_detect_enable = 1;
 				dwc_otg_pdata.using_vusbphy = 0;
-			} else {
+			} else
 				dwc_otg_pdata.using_vusbphy = 1;
-				dwc_otg_pdata.utmi_fs_det_wa = 1;
-			}
-		/* Brighton Shores CDB */
-		} else if (INTEL_MID_BOARD(2, PHONE, MRFL, BTNS, PRO) ||
-				INTEL_MID_BOARD(2, PHONE, MRFL, BTNS, ENG)) {
-			pr_info("%s: Brighton Shores CDB detected\n", __func__);
-			dwc_otg_pdata.pmic_type = DOLLAR_COVE;
-			dwc_otg_pdata.charger_detect_enable = 1;
-
-			dwc_otg_pdata.charging_compliance =
-				dwc_otg_get_usbspecoverride(MERR_SMIP_VIOLATE_BC_ADDR);
-			dwc_otg_pdata.usb2_phy_type = USB2_PHY_ULPI;
-			dwc_otg_pdata.ulpi_eye_calibration = 0x7D;
-			/* Brighton Shores CDB: USB_ULPI_RST_N = GP<16> = gpio_ctrl[180] */
-			dwc_otg_pdata.gpio_cs = get_gpio_by_name("usb_ulpi_reset");
-			/* Brighton Shores CDB: CC_MODE_N = GP<10> = gpio_ctrl[174] */
-			dwc_otg_pdata.gpio_typec_highicc = get_gpio_by_name("cc_mode");
 		} else if (INTEL_MID_BOARD(1, PHONE, MRFL)) {
 			dwc_otg_pdata.pmic_type = BASIN_COVE;
 			dwc_otg_pdata.using_vusbphy = 1;
@@ -155,6 +137,7 @@ static struct intel_dwc_otg_pdata *get_otg_platform_data(struct pci_dev *pdev)
 			dwc_otg_pdata.charging_compliance =
 				dwc_otg_get_usbspecoverride(MERR_SMIP_VIOLATE_BC_ADDR);
 			dwc_otg_pdata.usb2_phy_type = USB2_PHY_ULPI;
+			dwc_otg_pdata.ulpi_eye_calibration = 0x7D;
 
 		} else if (intel_mid_identify_sim() ==
 				INTEL_MID_CPU_SIMULATION_HVP) {
@@ -171,17 +154,17 @@ static struct intel_dwc_otg_pdata *get_otg_platform_data(struct pci_dev *pdev)
 			INTEL_MID_BOARD(3, TABLET, BYT, BLK, ENG, RVP3)) {
 			dwc_otg_pdata.gpio_cs = 156;
 			dwc_otg_pdata.gpio_reset = 144;
-			dwc_otg_pdata.ulpi_eye_calibration = 0x4f;
+			dwc_otg_pdata.ti_phy_vs1 = 0x4f;
 		} else if (INTEL_MID_BOARD(3, TABLET, BYT, BLK, PRO, 8PR0) ||
 			INTEL_MID_BOARD(3, TABLET, BYT, BLK, ENG, 8PR0)) {
 			dwc_otg_pdata.gpio_cs = 54;
 			dwc_otg_pdata.gpio_reset = 144;
-			dwc_otg_pdata.ulpi_eye_calibration = 0x4f;
+			dwc_otg_pdata.ti_phy_vs1 = 0x4f;
 		} else if (INTEL_MID_BOARD(3, TABLET, BYT, BLK, PRO, 8PR1) ||
 			INTEL_MID_BOARD(3, TABLET, BYT, BLK, ENG, 8PR1)) {
 			dwc_otg_pdata.gpio_cs = 54;
 			dwc_otg_pdata.gpio_reset = 144;
-			dwc_otg_pdata.ulpi_eye_calibration = 0x7f;
+			dwc_otg_pdata.ti_phy_vs1 = 0x7f;
 			dwc_otg_pdata.sdp_charging = 1;
 			dwc_otg_pdata.charging_compliance =
 				!dwc_otg_byt_get_usbspecoverride();
@@ -189,19 +172,12 @@ static struct intel_dwc_otg_pdata *get_otg_platform_data(struct pci_dev *pdev)
 			INTEL_MID_BOARD(3, TABLET, BYT, BLK, ENG, CRV2)) {
 			dwc_otg_pdata.gpio_cs = 54;
 			dwc_otg_pdata.gpio_reset = 144;
-			dwc_otg_pdata.ulpi_eye_calibration = 0x7f;
-#if defined(CONFIG_MRD7) || defined(CONFIG_MRD8)
-			dwc_otg_pdata.gpio_id = 148;
-#else
+			dwc_otg_pdata.ti_phy_vs1 = 0x7f;
 			dwc_otg_pdata.gpio_id = 156;
-#endif
 			dwc_otg_pdata.sdp_charging = 1;
 			dwc_otg_pdata.charging_compliance =
 				!dwc_otg_byt_get_usbspecoverride();
 		}
-		return &dwc_otg_pdata;
-	case PCI_DEVICE_ID_INTEL_CHT_OTG:
-		dwc_otg_pdata.tx_fifo_resize = 1;
 		return &dwc_otg_pdata;
 	default:
 		break;
@@ -270,8 +246,6 @@ DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_CLV_OTG,
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_MRFL_DWC3_OTG,
 			otg_pci_early_quirks);
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_BYT_OTG,
-			otg_pci_early_quirks);
-DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_CHT_OTG,
 			otg_pci_early_quirks);
 
 static void quirk_byt_otg_d3_delay(struct pci_dev *dev)

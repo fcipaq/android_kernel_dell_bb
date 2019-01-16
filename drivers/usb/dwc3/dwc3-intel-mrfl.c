@@ -1,7 +1,6 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/pci.h>
-#include <linux/gpio.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/usb/otg.h>
@@ -19,14 +18,10 @@
 #include <linux/iio/consumer.h>
 #include <asm/intel_scu_pmic.h>
 #include "otg.h"
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
-#include <asm/spid.h>
 
 #define VERSION "2.10a"
 
 static int otg_id = -1;
-static struct dentry *dwc3_debugfs_root;
 static int enable_usb_phy(struct dwc_otg2 *otg, bool on_off);
 static int dwc3_intel_notify_charger_type(struct dwc_otg2 *otg,
 		enum power_supply_charger_event event);
@@ -54,12 +49,6 @@ static int is_basin_cove(struct dwc_otg2 *otg)
 	data = (struct intel_dwc_otg_pdata *)otg->otg_data;
 
 	return data->pmic_type == BASIN_COVE;
-}
-
-static int is_btns(struct dwc_otg2 *otg)
-{
-	return INTEL_MID_BOARD(2, PHONE, MRFL, BTNS, PRO) ||
-				INTEL_MID_BOARD(2, PHONE, MRFL, BTNS, ENG);
 }
 
 static int is_utmi_phy(struct dwc_otg2 *otg)
@@ -231,30 +220,14 @@ static enum power_supply_charger_cable_type
 		return shady_cove_aca_check(otg);
 }
 
-static int otg_id_show(struct seq_file *s, void *unused)
+static ssize_t store_otg_id(struct device *_dev,
+		struct device_attribute *attr, const char *buf, size_t count)
 {
-	seq_printf(s, "USB OTG ID: %s\n",
-		(otg_id ? "B" : "A"));
-	return 0;
-}
-
-static int otg_id_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, otg_id_show, inode->i_private);
-}
-
-static ssize_t otg_id_write(struct file *file,
-	const char __user *ubuf, size_t count, loff_t *ppos)
-{
-	char			buf[32];
-	unsigned long	flags;
+	unsigned long flags;
 	struct dwc_otg2 *otg = dwc3_get_otg();
+
 	if (!otg)
 		return 0;
-
-	if (copy_from_user(&buf, ubuf, min_t(size_t, sizeof(buf) - 1, count)))
-			return -EFAULT;
-
 	if (count != 2) {
 		otg_err(otg, "return EINVAL\n");
 		return -EINVAL;
@@ -290,73 +263,39 @@ static ssize_t otg_id_write(struct file *file,
 	return count;
 }
 
-static const struct file_operations otg_debugfs_id_fops = {
-	.open                   = otg_id_open,
-	.write                  = otg_id_write,
-	.read                   = seq_read,
-	.llseek                 = seq_lseek,
-	.release                = single_release,
-};
-
-static int dwc3_debugfs_init(struct dwc_otg2 *otg)
+static ssize_t
+show_otg_id(struct device *_dev, struct device_attribute *attr, char *buf)
 {
-	int retval = 0;
-	struct dentry *file;
+	char				*next;
+	unsigned			size, t;
 
-	if (!dwc3_debugfs_root) {
-		dwc3_debugfs_root = debugfs_create_dir("dwc3_debugfs_root", usb_debug_root);
-		if (!dwc3_debugfs_root) {
-			retval = -ENOMEM;
-			otg_dbg(otg, "	Error create debugfs root failed !");
-			return retval;
-		}
+	next = buf;
+	size = PAGE_SIZE;
 
-		file = debugfs_create_file("otg_id", S_IRUGO, dwc3_debugfs_root,
-							NULL, &otg_debugfs_id_fops);
-		if (!file) {
-			retval = -ENOMEM;
-			otg_dbg(otg, "	Error create debugfs file otg_id failed !");
-			goto remove_debugfs;
-		}
-	}
+	t = scnprintf(next, size,
+		"USB OTG ID: %s\n",
+		(otg_id ? "B" : "A")
+		);
+	size -= t;
+	next += t;
 
-	if (retval != 0)
-		goto remove_debugfs;
-
-	return retval;
-remove_debugfs:
-	debugfs_remove_recursive(dwc3_debugfs_root);
-	dwc3_debugfs_root = NULL;
-	return retval;
+	return PAGE_SIZE - size;
 }
 
-static void dwc3_debugfs_exit(struct dwc_otg2 *otg)
-{
-	debugfs_remove_recursive(dwc3_debugfs_root);
-	dwc3_debugfs_root = NULL;
-	otg_dbg(otg, "	Remove debugfs root !");
-}
+static DEVICE_ATTR(otg_id, S_IRUGO|S_IWUSR|S_IWGRP,
+			show_otg_id, store_otg_id);
 
 static void dwc_a_bus_drop(struct usb_phy *x)
 {
 	struct dwc_otg2 *otg = dwc3_get_otg();
 	unsigned long flags;
 
-	spin_lock_irqsave(&otg->lock, flags);
-
-	/* When user force exit from battery saver mode,
-	 * Trigger fake ID change event to otg state machine
-	 * to make it transfer to a_host state if current ID is GND.
-	 */
-	if (otg->usb2_phy.vbus_state == VBUS_ENABLED)
-		otg->otg_events |= OEVT_CONN_ID_STS_CHNG_EVNT;
-
-	if (otg->usb2_phy.vbus_state == VBUS_DISABLED)
+	if (otg->usb2_phy.vbus_state == VBUS_DISABLED) {
+		spin_lock_irqsave(&otg->lock, flags);
 		otg->user_events |= USER_A_BUS_DROP;
-
-	spin_unlock_irqrestore(&otg->lock, flags);
-
-	dwc3_wakeup_otg_thread(otg);
+		dwc3_wakeup_otg_thread(otg);
+		spin_unlock_irqrestore(&otg->lock, flags);
+	}
 }
 
 static void set_sus_phy(struct dwc_otg2 *otg, int bit)
@@ -422,12 +361,7 @@ static int enable_usb_phy(struct dwc_otg2 *otg, bool on_off)
 		return -EINVAL;
 
 	data = (struct intel_dwc_otg_pdata *)otg->otg_data;
-	if (is_btns(otg)) {
-		if (on_off)
-			ret = intel_scu_ipc_update_register(0x13, 0xFF, BIT(5));
-		else
-			ret = intel_scu_ipc_update_register(0x13, 0x00, BIT(5));
-	} else if (data->using_vusbphy)
+	if (data->using_vusbphy)
 		ret = control_usb_phy_power(PMIC_VLDOCNT, on_off);
 	else
 		ret = control_usb_phy_power(PMIC_USBPHYCTRL, on_off);
@@ -439,36 +373,10 @@ static int enable_usb_phy(struct dwc_otg2 *otg, bool on_off)
 	return ret;
 }
 
-static int ulpi_phy_gpio_init(unsigned pin, char *label)
-{
-	int		retval = 0;
-	struct dwc_otg2 *otg = dwc3_get_otg();
-
-	otg_dbg(otg, "%s----> %d\n", __func__, pin);
-	if (gpio_is_valid(pin)) {
-		retval = gpio_request(pin, label);
-		if (retval < 0) {
-			otg_err(otg,
-				"Request GPIO %d with error %d\n",
-				pin, retval);
-			retval = -ENODEV;
-			goto err;
-		}
-	} else {
-		retval = -ENODEV;
-		goto err;
-	}
-
-	gpio_direction_input(pin);
-	otg_dbg(otg, "%s<----\n", __func__);
-err:
-	return retval;
-}
 
 int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 {
 	int retval;
-	int i;
 	struct intel_dwc_otg_pdata *data;
 
 	data = (struct intel_dwc_otg_pdata *)otg->otg_data;
@@ -479,14 +387,10 @@ int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 	/* Get usb2 phy type */
 	otg->usb2_phy.intf = data->usb2_phy_type;
 
-	if (is_btns(otg)) {
-		otg_info(otg, "De-assert USBRST# to enable PHY\n");
-
-		gpio_set_value(data->gpio_cs, 1);
-	} else if (!data->using_vusbphy) {
-		/* Turn off VUSBPHY if it haven't used by USB2 PHY.
-		 * Otherwise, it will consume ~2.6mA(on VSYS) on MOFD.
-		 */
+	/* Turn off VUSBPHY if it haven't used by USB2 PHY.
+	 * Otherwise, it will consume ~2.6mA(on VSYS) on MOFD.
+	 */
+	if (!data->using_vusbphy) {
 		retval = control_usb_phy_power(PMIC_VLDOCNT, false);
 		if (retval)
 			otg_err(otg, "Fail to turn off VUSBPHY\n");
@@ -499,22 +403,6 @@ int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 		if (retval)
 			otg_err(otg, "Fail to de-assert USBRST#\n");
 	} else {
-		struct usb_phy_gp ulpi_phy_gp[ULPI_PHY_GP_NUM] = {
-			{101, "gp_ulpi_0_clk"},
-			{136, "gp_ulpi_0_data_0"},
-			{143, "gp_ulpi_0_data_1"},
-			{144, "gp_ulpi_0_data_2"},
-			{145, "gp_ulpi_0_data_3"},
-			{146, "gp_ulpi_0_data_4"},
-			{147, "gp_ulpi_0_data_5"},
-			{148, "gp_ulpi_0_data_6"},
-			{149, "gp_ulpi_0_data_7"},
-			{150, "gp_ulpi_0_dir"},
-			{151, "gp_ulpi_0_nxt"},
-			{152, "gp_ulpi_0_refclk"},
-			{153, "gp_ulpi_0_stp"},
-		};
-
 		/* If we are using utmi phy, and through VUSBPHY to do power
 		 * control. Then we need to assert USBRST# for external ULPI phy
 		 * to ask it under inactive state saving power.
@@ -522,16 +410,6 @@ int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 		retval = control_usb_phy_power(PMIC_USBPHYCTRL, false);
 		if (retval)
 			otg_err(otg, "Fail to de-assert USBRST#\n");
-
-		/* Optimize unused GPIO power consumption */
-		/*for (i = 0; i < ULPI_PHY_GP_NUM; i++) {
-			retval = ulpi_phy_gpio_init(ulpi_phy_gp[i].num, ulpi_phy_gp[i].label);
-			if (retval < 0) {
-				otg_err(otg, "ULPI PHY GPIO init fail\n");
-				retval = -ENODEV;
-				break;
-			}
-		}*/
 	}
 
 	/* Don't let phy go to suspend mode, which
@@ -539,9 +417,12 @@ int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 	 */
 	set_sus_phy(otg, 0);
 
-	retval = dwc3_debugfs_init(otg);
-	if (retval)
-		otg_err(otg, "Fail to init the debugfs\n");
+	retval = device_create_file(otg->dev, &dev_attr_otg_id);
+	if (retval < 0) {
+		otg_dbg(otg,
+			"Can't register sysfs attribute: %d\n", retval);
+		return -ENOMEM;
+	}
 
 	otg_dbg(otg, "\n");
 	otg_write(otg, OEVTEN, 0);
@@ -549,11 +430,6 @@ int dwc3_intel_platform_init(struct dwc_otg2 *otg)
 
 	dwc3_switch_mode(otg, GCTL_PRT_CAP_DIR_OTG);
 
-	return 0;
-}
-int dwc3_intel_platform_exit(struct dwc_otg2 *otg)
-{
-	dwc3_debugfs_exit(otg);
 	return 0;
 }
 
@@ -666,10 +542,7 @@ done:
 
 int dwc3_intel_get_id(struct dwc_otg2 *otg)
 {
-	/* No host mode support on btns */
-	if (is_btns(otg))
-		return RID_FLOAT;
-	else if (is_basin_cove(otg))
+	if (is_basin_cove(otg))
 		return basin_cove_get_id(otg);
 	else
 		return shady_cove_get_id(otg);
@@ -868,7 +741,6 @@ static enum power_supply_charger_cable_type
 	unsigned long timeout, interval;
 	enum power_supply_charger_cable_type type =
 		POWER_SUPPLY_CHARGER_TYPE_NONE;
-	struct intel_dwc_otg_pdata *data = (struct intel_dwc_otg_pdata *)otg->otg_data;
 
 	if (!charger_detect_enable(otg))
 		return cap_record.chrg_type;
@@ -887,13 +759,7 @@ static enum power_supply_charger_cable_type
 	 */
 	enable_usb_phy(otg, true);
 
-	if (is_btns(otg)) {
-		if (!gpio_get_value(data->gpio_typec_highicc)) {
-			otg_err(otg, "Reading gpio_get_value of gpio_typeC_highIcc is 0\n");
-			type = POWER_SUPPLY_CHARGER_TYPE_USB_CDP;
-			goto cleanup;
-		}
-	} else if (is_basin_cove(otg)) {
+	if (is_basin_cove(otg)) {
 		/* Enable ACA:
 		 * Enable ACA & ID detection logic.
 		 */
@@ -1169,7 +1035,7 @@ static int dwc3_intel_handle_notification(struct notifier_block *nb,
 		state = NOTIFY_OK;
 		break;
 	default:
-		otg_dbg(otg, "DWC OTG Notify unknown notify message\n");
+		otg_dbg(otg, "DWC OTG Notify unknow notify message\n");
 		state = NOTIFY_DONE;
 	}
 
@@ -1196,24 +1062,6 @@ int dwc3_intel_prepare_start_host(struct dwc_otg2 *otg)
 
 int dwc3_intel_prepare_start_peripheral(struct dwc_otg2 *otg)
 {
-	unsigned long flags;
-	struct intel_dwc_otg_pdata *data;
-
-	data = (struct intel_dwc_otg_pdata *)otg->otg_data;
-	/* Notify 500ma for SDP case whatever HS or SS.
-	 * set_power flow will update 900ma after SS enumeration done. */
-	if (data && data->charging_compliance &&
-		(otg->charging_cap.chrg_type ==
-		 POWER_SUPPLY_CHARGER_TYPE_USB_SDP)) {
-
-		spin_lock_irqsave(&otg->lock, flags);
-		otg->charging_cap.ma = 500;
-		spin_unlock_irqrestore(&otg->lock, flags);
-
-		dwc3_intel_notify_charger_type(otg,
-			POWER_SUPPLY_CHARGER_EVENT_CONNECT);
-	}
-
 	if (!is_hybridvp(otg)) {
 		enable_usb_phy(otg, true);
 		usb2phy_eye_optimization(otg);
@@ -1259,7 +1107,7 @@ int dwc3_intel_suspend(struct dwc_otg2 *otg)
 
 		ret = otg->suspend_host(hcd);
 		if (ret) {
-			otg_err(otg, "dwc3-host enter suspend failed: %d\n", ret);
+			otg_err(otg, "dwc3-host enter suspend faield: %d\n", ret);
 			return ret;
 		}
 	}
@@ -1338,11 +1186,10 @@ int dwc3_intel_resume(struct dwc_otg2 *otg)
 
 	/* From synopsys spec 12.2.11.
 	 * Software cannot access memory-mapped I/O space
-	 * for 10ms. Delay 1 ms here should be enough. Too
-	 * long a delay causes hibernation exit failure
-	 * or high-speed detection handshake failure.
+	 * for 10ms. Delay 5 ms here should be enough. Too
+	 * long a delay causes hibernation exit failure.
 	 */
-	mdelay(1);
+	mdelay(5);
 
 	pci_restore_state(pci_dev);
 	if (pci_enable_device(pci_dev) < 0) {
@@ -1373,7 +1220,6 @@ struct dwc3_otg_hw_ops dwc3_intel_otg_pdata = {
 	.set_power = dwc3_intel_set_power,
 	.enable_vbus = dwc3_intel_enable_vbus,
 	.platform_init = dwc3_intel_platform_init,
-	.platform_exit = dwc3_intel_platform_exit,
 	.get_charger_type = dwc3_intel_get_charger_type,
 	.otg_notifier_handler = dwc3_intel_handle_notification,
 	.prepare_start_peripheral = dwc3_intel_prepare_start_peripheral,

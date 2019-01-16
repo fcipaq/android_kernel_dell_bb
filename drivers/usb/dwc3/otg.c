@@ -77,8 +77,7 @@
 //debug only
 #include <linux/printk.h>
 
-int host_mode_without_rid_get_state = 0; // 0 means standard mode, 1 forced host
-int host_mode_init = 0;
+int host_mode_without_rid_get_state = 0;
 
 int is_forced_host_mode()
 {
@@ -646,6 +645,7 @@ static enum dwc_otg_state do_a_host(struct dwc_otg2 *otg)
 	u32 otg_events, user_events, otg_mask, user_mask;
 	int id = RID_UNKNOWN;
 	unsigned long flags;
+    int host_mode_init = 0;
 
 	/* If Battery low and connected charger is not ACA-DOCK.
 	 * Then stop trying to start host mode. */
@@ -684,8 +684,7 @@ stay_host:
     if (is_forced_host_mode()) {
         otg_dbg(otg, "Entering forced host mode.");
         host_mode_init = 1;
-    } else
-        host_mode_init = 0;
+    }
 
 	while (!rc) {
 	    rc = sleep_until_event(otg,
@@ -715,6 +714,16 @@ stay_host:
 #endif
 		return DWC_STATE_EXIT;
 	}
+
+#if 0
+	if (host_mode_init && (otg->state == DWC_STATE_EXIT)) {
+		otg_dbg(otg, "Disabling forced host mode as per user request.");
+
+		stop_host(otg);
+		dwc_otg_enable_vbus(otg, 0);
+		return DWC_STATE_EXIT;
+    }
+#endif     
 
 	/* Higher priority first */
 	if (otg_events & OEVT_A_DEV_SESS_END_DET_EVNT) {
@@ -829,7 +838,8 @@ static int do_b_peripheral(struct dwc_otg2 *otg)
 
 	if (user_events & USER_ID_A_CHANGE_EVENT) {
 		otg_dbg(otg, "USER_ID_A_CHANGE_EVENT\n");
-		otg->user_events |= USER_ID_A_CHANGE_EVENT;
+		if (!dwc3_is_cht())
+			otg->user_events |= USER_ID_A_CHANGE_EVENT;
 		return DWC_STATE_B_IDLE;
 	}
 
@@ -932,12 +942,18 @@ static void start_main_thread(struct dwc_otg2 *otg)
 {
 	enum dwc3_otg_mode mode = dwc3_otg_pdata->mode;
 	bool children_ready = false;
+	struct pci_dev	*pdev = container_of(otg->dev, struct pci_dev, dev);
 
 	mutex_lock(&lock);
 
 	if ((mode == DWC3_DEVICE_ONLY) &&
-			otg->otg.gadget)
+			otg->otg.gadget) {
+		/* CHT: wait host driver to map MUX register space  */
+		if (pdev->device == PCI_DEVICE_ID_DWC_CHT && !otg->otg.host)
+			children_ready = false;
+		else
 			children_ready = true;
+	}
 
 	if ((mode == DWC3_HOST_ONLY) &&
 			otg->otg.host)
@@ -1526,6 +1542,11 @@ static DEFINE_PCI_DEVICE_TABLE(pci_ids) = {
 		.vendor = PCI_VENDOR_ID_INTEL,
 		.device = PCI_DEVICE_ID_DWC,
 	},
+	{ PCI_DEVICE_CLASS(((PCI_CLASS_SERIAL_USB << 8) | 0x80), ~0),
+		.vendor = PCI_VENDOR_ID_INTEL,
+		.device = PCI_DEVICE_ID_DWC_VLV,
+	},
+	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_DWC_CHT)},
 	{ /* end: all zeroes */ }
 };
 

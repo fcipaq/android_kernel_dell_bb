@@ -1,6 +1,11 @@
 #ifndef __PMIC_PDATA_H__
 #define __PMIC_PDATA_H__
 
+/* SMIP address to check if violate BC1.2-spec */
+#define MOFD_SMIP_VIOLATE_BC	0xFFFC631B
+#define MRFL_SMIP_VIOLATE_BC    0xFFFCE717
+#define SMIP_VIOLATE_BC_MASK    0x40
+
 struct temp_lookup {
 	int adc_val;
 	int temp;
@@ -16,6 +21,7 @@ struct pmic_platform_data {
 	void (*inlmt_to_reg)(int, u8*);
 	int max_tbl_row_cnt;
 	struct temp_lookup *adc_tbl;
+	bool usbspec_override;
 };
 
 extern int pmic_get_status(void);

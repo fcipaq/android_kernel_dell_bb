@@ -28,7 +28,6 @@
 #include <linux/usb/hcd.h>
 #include <linux/usb/ulpi.h>
 
-
 struct dwc_device_par {
 	void __iomem *io_addr;
 	int len;
@@ -405,7 +404,6 @@ struct dwc3_otg_hw_ops {
 
 	int (*set_power)(struct usb_phy *_otg, unsigned ma);
 	int (*platform_init)(struct dwc_otg2 *otg);
-	int (*platform_exit)(struct dwc_otg2 *otg);
 	int (*otg_notifier_handler)(struct notifier_block *nb,
 			unsigned long event, void *data);
 	int (*prepare_start_peripheral)(struct dwc_otg2 *otg);

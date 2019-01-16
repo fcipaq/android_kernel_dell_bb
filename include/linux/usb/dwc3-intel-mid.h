@@ -22,33 +22,24 @@
 
 #include "otg.h"
 
-#define ULPI_PHY_GP_NUM 13
-
 enum intel_mid_pmic_type {
 	NO_PMIC,
 	SHADY_COVE,
-	BASIN_COVE,
-	DOLLAR_COVE
-};
-
-struct usb_phy_gp {
-	unsigned num;
-	char *label;
+	BASIN_COVE
 };
 
 struct intel_dwc_otg_pdata {
 	unsigned device_hibernation:1;
-	unsigned tx_fifo_resize:1;
 	int is_hvp;
 	enum intel_mid_pmic_type pmic_type;
 	int charger_detect_enable;
 	int gpio_cs;
 	int gpio_reset;
-	int gpio_typec_highicc;
 	int gpio_id;
 	int id;
 	int charging_compliance;
 	struct delayed_work suspend_discon_work;
+	u8 ti_phy_vs1;
 	int sdp_charging;
 	enum usb_phy_intf usb2_phy_type;
 
@@ -70,9 +61,6 @@ struct intel_dwc_otg_pdata {
 	/* If the VUSBPHY power rail using for providing
 	 * power for USB PHY. */
 	int using_vusbphy;
-
-	/* Enable UTMI PHY WA for FS device detection issue */
-	int utmi_fs_det_wa;
 };
 
 /* timeout for disconnect from a suspended host */

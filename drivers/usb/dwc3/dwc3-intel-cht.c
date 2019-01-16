@@ -24,7 +24,7 @@
 static int otg_id = -1;
 static int dwc3_intel_cht_notify_charger_type(struct dwc_otg2 *otg,
 		enum power_supply_charger_event event);
-static int dwc3_set_id_mux_pm_sync(struct dwc_otg2 *otg, int is_device_on);
+static int dwc3_set_id_mux(void __iomem *reg_base, int is_device_on);
 
 static int charger_detect_enable(struct dwc_otg2 *otg)
 {
@@ -206,13 +206,20 @@ int dwc3_intel_cht_get_id(struct dwc_otg2 *otg)
 
 int dwc3_intel_cht_b_idle(struct dwc_otg2 *otg)
 {
-	u32 ret;
+	struct usb_hcd *hcd = NULL;
+	u32 ret, val;
 	u32 gctl, tmp;
 
 	/* set mux to host mode in b_idle state */
-	ret = dwc3_set_id_mux_pm_sync(otg, 0);
+	hcd = container_of(otg->otg.host, struct usb_hcd, self);
+	if (!hcd) {
+		mdelay(100);
+		return -ENODEV;
+	}
+
+	ret = dwc3_set_id_mux(hcd->regs, 0);
 	if (ret)
-		otg_err(otg, "Can't set mux to host, %d\n", ret);
+		return ret;
 
 	/* Disable hibernation mode by default */
 	gctl = otg_read(otg, GCTL);
@@ -433,7 +440,7 @@ static int dwc3_intel_cht_handle_notification(struct notifier_block *nb,
 static int dwc3_set_id_mux(void __iomem *reg_base, int is_device_on)
 {
 	u32		reg;
-	u32		timeout = 1000;
+	u32		timeout = 500;
 
 	/* Set ID Mux to host. The power of the registers are always on. */
 	reg = readl(reg_base + DUAL_ROLE_CFG0);
@@ -459,34 +466,13 @@ static int dwc3_set_id_mux(void __iomem *reg_base, int is_device_on)
 				break;
 		}
 		timeout--;
-		if (!timeout) {
-			pr_err("cfg1 polling timeout, reg = 0x%08x\n", reg);
+		if (!timeout)
 			return -ETIMEDOUT;
-		}
 
 		mdelay(1);
 	} while (1);
 
 	return 0;
-}
-
-static int dwc3_set_id_mux_pm_sync(struct dwc_otg2 *otg, int is_device_on)
-{
-	struct usb_bus *host = otg->otg.host;
-	int ret;
-
-	if (!host) {
-		otg_err(otg,
-			"Can't switch mux, USB host is not registered\n");
-		return -ENODEV;
-	}
-
-	/* cfg0, cfg1 can't be accessed if xHCI is fabric gated */
-	pm_runtime_get_sync(host->controller);
-	ret = dwc3_set_id_mux(bus_to_hcd(host)->regs, is_device_on);
-	pm_runtime_put(host->controller);
-
-	return ret;
 }
 
 int dwc3_intel_cht_after_stop_peripheral(struct dwc_otg2 *otg)
@@ -496,7 +482,20 @@ int dwc3_intel_cht_after_stop_peripheral(struct dwc_otg2 *otg)
 
 int dwc3_intel_cht_prepare_start_peripheral(struct dwc_otg2 *otg)
 {
-	return dwc3_set_id_mux_pm_sync(otg, 1);
+	struct usb_hcd *hcd = NULL;
+	u32 ret, val;
+
+	hcd = container_of(otg->otg.host, struct usb_hcd, self);
+	if (!hcd) {
+		mdelay(100);
+		return -ENODEV;
+	}
+
+	ret = dwc3_set_id_mux(hcd->regs, 1);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 int dwc3_intel_cht_suspend(struct dwc_otg2 *otg)

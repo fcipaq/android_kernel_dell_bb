@@ -128,21 +128,14 @@ static bool msic_battery_check(struct max17042_platform_data *pdata)
 				pdata->battid[1] >= '0'
 					&& pdata->battid[1] <= '9') {
 				unsigned char tmp[SERIAL_NUM_LEN + 2];
-				int i, ret = 0;
+				int i;
 				snprintf(pdata->model_name,
 					(MODEL_NAME_LEN) + 1,
 						"%s", pdata->battid);
-				ret = memcpy_safe(tmp, BATTID_LEN, sb->pentry,
-							BATTID_LEN);
-				if (ret) {
-					pr_err("%s, err:%d copying BATTID\n",
-						__func__, ret);
-					return false;
-				}
+				memcpy(tmp, sb->pentry, BATTID_LEN);
 				for (i = 0; i < SERIAL_NUM_LEN; i++) {
-					snprintf(pdata->serial_num + i*2,
-						sizeof(pdata->serial_num) - i*2,
-						"%02x", tmp[i + MODEL_NAME_LEN]);
+					sprintf(pdata->serial_num + i*2,
+					"%02x", tmp[i + MODEL_NAME_LEN]);
 				}
 				if ((2 * SERIAL_NUM_LEN) <
 					ARRAY_SIZE(pdata->serial_num))
@@ -222,20 +215,12 @@ static void ctp_fg_restore_config_data(const char *name, void *data, int len)
 {
 	struct max17042_config_data *fg_cfg_data =
 				(struct max17042_config_data *)data;
-	int ret = 0;
 	fg_cfg_data->cfg = 0x2210;
 	fg_cfg_data->learn_cfg = 0x0076;
 	fg_cfg_data->filter_cfg = 0x87a4;
 	fg_cfg_data->relax_cfg = 0x506b;
-	ret = memcpy_safe(&fg_cfg_data->cell_char_tbl,
-			sizeof(fg_cfg_data->cell_char_tbl),
-			ctp_cell_char_tbl,
-			sizeof(ctp_cell_char_tbl));
-	if (ret) {
-		pr_err("%s, err:%d in copying cell char tbl\n",
-			__func__, ret);
-		return ret;
-	}
+	memcpy(&fg_cfg_data->cell_char_tbl, ctp_cell_char_tbl,
+					sizeof(ctp_cell_char_tbl));
 	fg_cfg_data->rcomp0 = 0x0047;
 	fg_cfg_data->tempCo = 0x1920;
 	fg_cfg_data->etc = 0x00e0;
@@ -442,7 +427,6 @@ static void init_callbacks(struct max17042_platform_data *pdata)
 		/* MRFL Phones and tablets*/
 		pdata->battery_health = mrfl_get_bat_health;
 		pdata->battery_pack_temp = pmic_get_battery_pack_temp;
-		pdata->reset_chip = true;
 		pdata->get_vmin_threshold = mrfl_get_vsys_min;
 		pdata->get_vmax_threshold = mrfl_get_volt_max;
 	} else if (INTEL_MID_BOARD(1, TABLET, BYT) ||
