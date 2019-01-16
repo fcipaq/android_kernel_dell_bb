@@ -29,5 +29,3 @@ config TOUCHSCREEN_ATMEL_MXT_FORK
 
 source "drivers/external_drivers/drivers/input/touchscreen/rmi4/Kconfig"
 source "drivers/external_drivers/drivers/input/touchscreen/synaptics_dsx/Kconfig"
-source "drivers/external_drivers/drivers/input/touchscreen/gt9xx/Kconfig"
-source "drivers/external_drivers/drivers/input/touchscreen/cypress5/Kconfig"

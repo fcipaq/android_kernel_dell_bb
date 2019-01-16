@@ -80,9 +80,7 @@ obj-$(subst m,y,$(CONFIG_SENSOR_AP3045)) += platform_ap3045.o
 #obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_FTXXXX)) += platform_ftxxxx.o
 #endif
 
-ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_I2C_DELUXE
-obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_I2C_DELUXE))                += platform_synaptics_dsx.o
-endif
+obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX)) += platform_synaptics_dsx.o
 
 #ifdef CONFIG_SENSORS_CM36686
 obj-$(subst m,y,$(CONFIG_SENSORS_CM36686)) += platform_cm36686.o

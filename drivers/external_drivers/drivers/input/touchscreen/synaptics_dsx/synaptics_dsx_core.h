@@ -22,7 +22,7 @@
 #define SYNAPTICS_DS4 (1 << 0)
 #define SYNAPTICS_DS5 (1 << 1)
 #define SYNAPTICS_DSX_DRIVER_PRODUCT (SYNAPTICS_DS4 | SYNAPTICS_DS5)
-#define SYNAPTICS_DSX_DRIVER_VERSION 0x2003
+#define SYNAPTICS_DSX_DRIVER_VERSION 0x2004
 
 #include <linux/version.h>
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -57,9 +57,9 @@
 #define SYNAPTICS_RMI4_F55 (0x55)
 #define SYNAPTICS_RMI4_FDB (0xdb)
 
-#define SYNAPTICS_RMI4_PRODUCT_INFO_SIZE 2
-#define SYNAPTICS_RMI4_PRODUCT_ID_SIZE 10
-#define SYNAPTICS_RMI4_BUILD_ID_SIZE 3
+#define PRODUCT_INFO_SIZE 2
+#define PRODUCT_ID_SIZE 10
+#define BUILD_ID_SIZE 3
 
 #define F12_FINGERS_TO_SUPPORT 10
 #define F12_NO_OBJECT_STATUS 0x00
@@ -99,6 +99,7 @@ enum exp_fn {
  * @ctrl_base_addr: base address for control registers
  * @data_base_addr: base address for data registers
  * @intr_src_count: number of interrupt sources
+ * @fn_version: version of function
  * @fn_number: function number
  */
 struct synaptics_rmi4_fn_desc {
@@ -106,9 +107,12 @@ struct synaptics_rmi4_fn_desc {
 	unsigned char cmd_base_addr;
 	unsigned char ctrl_base_addr;
 	unsigned char data_base_addr;
-	unsigned char intr_src_count;
+	unsigned char intr_src_count:3;
+	unsigned char reserved_1:2;
+	unsigned char fn_version:2;
+	unsigned char reserved_2:1;
 	unsigned char fn_number;
-};
+} __packed;
 
 /*
  * synaptics_rmi4_fn_full_addr - full 16-bit base addresses
@@ -192,9 +196,9 @@ struct synaptics_rmi4_device_info {
 	unsigned int version_minor;
 	unsigned char manufacturer_id;
 	unsigned char product_props;
-	unsigned char product_info[SYNAPTICS_RMI4_PRODUCT_INFO_SIZE];
-	unsigned char product_id_string[SYNAPTICS_RMI4_PRODUCT_ID_SIZE + 1];
-	unsigned char build_id[SYNAPTICS_RMI4_BUILD_ID_SIZE];
+	unsigned char product_info[PRODUCT_INFO_SIZE];
+	unsigned char product_id_string[PRODUCT_ID_SIZE + 1];
+	unsigned char build_id[BUILD_ID_SIZE];
 	struct list_head support_fn_list;
 };
 
@@ -213,7 +217,6 @@ struct synaptics_rmi4_device_info {
  * @early_suspend: early suspend power management
  * @current_page: current RMI page for register access
  * @button_0d_enabled: switch for enabling 0d button support
- * @full_pm_cycle: switch for enabling full power management cycle
  * @num_of_tx: number of Tx channels for 2D touch
  * @num_of_rx: number of Rx channels for 2D touch
  * @num_of_fingers: maximum number of fingers for 2D touch
@@ -240,6 +243,7 @@ struct synaptics_rmi4_device_info {
  * @f11_wakeup_gesture: flag to indicate support for wakeup gestures in F$11
  * @f12_wakeup_gesture: flag to indicate support for wakeup gestures in F$12
  * @enable_wakeup_gesture: flag to indicate usage of wakeup gestures
+ * @wedge_sensor: flag to indicate use of wedge sensor
  * @reset_device: pointer to device reset function
  * @irq_enable: pointer to interrupt enable function
  */
@@ -259,7 +263,6 @@ struct synaptics_rmi4_data {
 #endif
 	unsigned char current_page;
 	unsigned char button_0d_enabled;
-	unsigned char full_pm_cycle;
 	unsigned char num_of_tx;
 	unsigned char num_of_rx;
 	unsigned char num_of_fingers;
@@ -286,6 +289,7 @@ struct synaptics_rmi4_data {
 	bool f11_wakeup_gesture;
 	bool f12_wakeup_gesture;
 	bool enable_wakeup_gesture;
+	bool wedge_sensor;
 	int (*reset_device)(struct synaptics_rmi4_data *rmi4_data);
 	int (*irq_enable)(struct synaptics_rmi4_data *rmi4_data, bool enable,
 			bool attn_only);
@@ -361,6 +365,28 @@ static inline ssize_t synaptics_rmi4_store_error(struct device *dev,
 	dev_warn(dev, "%s Attempted to write to read-only attribute %s\n",
 			__func__, attr->attr.name);
 	return -EPERM;
+}
+
+static inline int secure_memcpy(void *dest, size_t dest_size,
+		const void *src, size_t src_size,
+		size_t count)
+{
+	char *dp = dest;
+	const char *sp = src;
+
+	if (dest == NULL || src == NULL)
+		return -EFAULT;
+
+	if ((dest_size == 0) || (src_size == 0))
+		return -EINVAL;
+
+	if (count > dest_size || count > src_size)
+		return -EINVAL;
+
+	while (count--)
+		*dp++ = *sp++;
+
+	return 0;
 }
 
 static inline void batohs(unsigned short *dest, unsigned char *src)

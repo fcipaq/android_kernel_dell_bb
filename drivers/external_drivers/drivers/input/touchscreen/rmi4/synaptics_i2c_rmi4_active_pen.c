@@ -17,16 +17,26 @@
  * GNU General Public License for more details.
  */
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/input.h>
-#include <linux/platform_device.h>
-#include <linux/input/synaptics_dsx.h>
-#include "synaptics_dsx_core.h"
+#include <linux/i2c.h>
+#ifdef CONFIG_HAS_EARLYSUSPEND
+#include <linux/earlysuspend.h>
+#endif
+#include <linux/synaptics_i2c_rmi4.h>
+#include "synaptics_i2c_rmi4.h"
 
-#define APEN_PHYS_NAME "synaptics_dsx/active_pen"
+#define DRIVER_NAME "rmi4_apen"
+
+#define MASK_16BIT		0xFFFF
+#define MASK_8BIT		0xFF
+#define MASK_7BIT		0x7F
+#define MASK_5BIT		0x1F
+#define MASK_4BIT		0x0F
+#define MASK_3BIT		0x07
+#define MASK_2BIT		0x03
 
 #define ACTIVE_PEN_MAX_PRESSURE_16BIT 65535
 #define ACTIVE_PEN_MAX_PRESSURE_8BIT 255
@@ -50,28 +60,6 @@ struct synaptics_rmi4_f12_query_8 {
 	};
 };
 
-struct apen_data_8b_pressure {
-	union {
-		struct {
-			unsigned char status_pen:1;
-			unsigned char status_invert:1;
-			unsigned char status_barrel:1;
-			unsigned char status_reserved:5;
-			unsigned char x_lsb;
-			unsigned char x_msb;
-			unsigned char y_lsb;
-			unsigned char y_msb;
-			unsigned char pressure_msb;
-			unsigned char battery_state;
-			unsigned char pen_id_0_7;
-			unsigned char pen_id_8_15;
-			unsigned char pen_id_16_23;
-			unsigned char pen_id_24_31;
-		} __packed;
-		unsigned char data[11];
-	};
-};
-
 struct apen_data {
 	union {
 		struct {
@@ -85,30 +73,23 @@ struct apen_data {
 			unsigned char y_msb;
 			unsigned char pressure_lsb;
 			unsigned char pressure_msb;
-			unsigned char battery_state;
-			unsigned char pen_id_0_7;
-			unsigned char pen_id_8_15;
-			unsigned char pen_id_16_23;
-			unsigned char pen_id_24_31;
 		} __packed;
-		unsigned char data[12];
+		unsigned char data[7];
 	};
 };
 
 struct synaptics_rmi4_apen_handle {
 	bool apen_present;
 	unsigned char intr_mask;
-	unsigned char battery_state;
 	unsigned short query_base_addr;
 	unsigned short control_base_addr;
 	unsigned short data_base_addr;
 	unsigned short command_base_addr;
 	unsigned short apen_data_addr;
 	unsigned short max_pressure;
-	unsigned int pen_id;
 	struct input_dev *apen_dev;
 	struct apen_data *apen_data;
-	struct synaptics_rmi4_data *rmi4_data;
+	struct rmi4_data *rmi4_data;
 };
 
 static struct synaptics_rmi4_apen_handle *apen;
@@ -133,25 +114,29 @@ static void apen_report(void)
 	int y;
 	int pressure;
 	static int invert = -1;
-	struct apen_data_8b_pressure *apen_data_8b;
-	struct synaptics_rmi4_data *rmi4_data = apen->rmi4_data;
+	struct rmi4_data *rmi4_data = apen->rmi4_data;
+	struct i2c_client *client = rmi4_data->i2c_client;
+	const struct rmi4_touch_calib *calib =
+				&apen->rmi4_data->board->calib[apen->rmi4_data->touch_type];
 
-	retval = synaptics_rmi4_reg_read(rmi4_data,
+	retval = rmi4_i2c_block_read(rmi4_data,
 			apen->apen_data_addr,
 			apen->apen_data->data,
 			sizeof(apen->apen_data->data));
 	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to read active pen data\n",
-				__func__);
+		dev_err(&client->dev,
+				"%s: Failed to read active pen data, retval=%d\n",
+				__func__, retval);
 		return;
 	}
 
 	if (apen->apen_data->status_pen == 0) {
-		if (apen->apen_present)
+		if (apen->apen_present) {
 			apen_lift();
+			invert = -1;
+		}
 
-		dev_dbg(rmi4_data->pdev->dev.parent,
+		dev_dbg(&client->dev,
 				"%s: No active pen data\n",
 				__func__);
 
@@ -162,27 +147,18 @@ static void apen_report(void)
 	y = (apen->apen_data->y_msb << 8) | (apen->apen_data->y_lsb);
 
 	if ((x == -1) && (y == -1)) {
-		if (apen->apen_present)
-			apen_lift();
-
-		dev_dbg(rmi4_data->pdev->dev.parent,
+		dev_dbg(&client->dev,
 				"%s: Active pen in range but no valid x & y\n",
 				__func__);
-
 		return;
 	}
 
-        if (rmi4_data->hw_if->board_data->swap_axes)
-                swap(x, y);
-
-        if (rmi4_data->hw_if->board_data->x_flip)
-               x = apen->rmi4_data->sensor_max_x - x;
-
-        if (rmi4_data->hw_if->board_data->y_flip)
-               y = apen->rmi4_data->sensor_max_y - y;
-
-	if (!apen->apen_present)
-		invert = -1;
+	if (calib->swap_axes)
+		swap(x, y);
+	if (calib->x_flip)
+		x = apen->rmi4_data->sensor_max_x - x;
+	if (calib->y_flip)
+		y = apen->rmi4_data->sensor_max_y - y;
 
 	if (invert != -1 && invert != apen->apen_data->status_invert)
 		apen_lift();
@@ -192,19 +168,8 @@ static void apen_report(void)
 	if (apen->max_pressure == ACTIVE_PEN_MAX_PRESSURE_16BIT) {
 		pressure = (apen->apen_data->pressure_msb << 8) |
 				apen->apen_data->pressure_lsb;
-		apen->battery_state = apen->apen_data->battery_state;
-		apen->pen_id = (apen->apen_data->pen_id_24_31 << 24) |
-				(apen->apen_data->pen_id_16_23 << 16) |
-				(apen->apen_data->pen_id_8_15 << 8) |
-				apen->apen_data->pen_id_0_7;
 	} else {
-		apen_data_8b = (struct apen_data_8b_pressure *)apen->apen_data;
-		pressure = apen_data_8b->pressure_msb;
-		apen->battery_state = apen_data_8b->battery_state;
-		apen->pen_id = (apen_data_8b->pen_id_24_31 << 24) |
-				(apen_data_8b->pen_id_16_23 << 16) |
-				(apen_data_8b->pen_id_8_15 << 8) |
-				apen_data_8b->pen_id_0_7;
+		pressure = apen->apen_data->pressure_lsb;
 	}
 
 	input_report_key(apen->apen_dev, BTN_TOUCH, pressure > 0 ? 1 : 0);
@@ -220,13 +185,13 @@ static void apen_report(void)
 
 	input_sync(apen->apen_dev);
 
-	dev_dbg(rmi4_data->pdev->dev.parent,
-			"%s: Active pen: "
-			"status = %d, "
-			"invert = %d, "
-			"barrel = %d, "
-			"x = %d, "
-			"y = %d, "
+	dev_dbg(&client->dev,
+			"%s: Active pen:\n"
+			"status = %d\n"
+			"invert = %d\n"
+			"barrel = %d\n"
+			"x = %d\n"
+			"y = %d\n"
 			"pressure = %d\n",
 			__func__,
 			apen->apen_data->status_pen,
@@ -259,14 +224,14 @@ static int apen_pressure(struct synaptics_rmi4_f12_query_8 *query_8)
 	unsigned char size_of_query_9;
 	unsigned char *query_9;
 	unsigned char *data_desc;
-	struct synaptics_rmi4_data *rmi4_data = apen->rmi4_data;
+	struct rmi4_data *rmi4_data = apen->rmi4_data;
 
 	data_reg_presence = query_8->data[1];
 
 	size_of_query_9 = query_8->size_of_query9;
 	query_9 = kmalloc(size_of_query_9, GFP_KERNEL);
 
-	retval = synaptics_rmi4_reg_read(rmi4_data,
+	retval = rmi4_i2c_block_read(rmi4_data,
 			apen->query_base_addr + 9,
 			query_9,
 			size_of_query_9);
@@ -303,21 +268,28 @@ static int apen_reg_init(void)
 	unsigned char data_offset;
 	unsigned char size_of_query8;
 	struct synaptics_rmi4_f12_query_8 query_8;
-	struct synaptics_rmi4_data *rmi4_data = apen->rmi4_data;
+	struct rmi4_data *rmi4_data = apen->rmi4_data;
+	struct i2c_client *client = rmi4_data->i2c_client;
 
-	retval = synaptics_rmi4_reg_read(rmi4_data,
+	retval = rmi4_i2c_block_read(rmi4_data,
 			apen->query_base_addr + 7,
 			&size_of_query8,
 			sizeof(size_of_query8));
-	if (retval < 0)
+	if (retval < 0) {
+        dev_err(&client->dev, "%s: rmi4_i2c_block_read1 failure, retval=%d\n",
+                __func__, retval);
 		return retval;
+	}
 
-	retval = synaptics_rmi4_reg_read(rmi4_data,
+	retval = rmi4_i2c_block_read(rmi4_data,
 			apen->query_base_addr + 8,
 			query_8.data,
 			size_of_query8);
-	if (retval < 0)
+	if (retval < 0) {
+        dev_err(&client->dev, "%s: rmi4_i2c_block_read2 failure, retval=%d\n",
+                __func__, retval);
 		return retval;
+	}
 
 	if ((size_of_query8 >= 2) && (query_8.data6_is_present)) {
 		data_offset = query_8.data0_is_present +
@@ -331,7 +303,7 @@ static int apen_reg_init(void)
 		if (retval < 0)
 			return retval;
 	} else {
-		dev_err(rmi4_data->pdev->dev.parent,
+		dev_err(&client->dev,
 				"%s: Active pen support unavailable\n",
 				__func__);
 		retval = -ENODEV;
@@ -349,14 +321,15 @@ static int apen_scan_pdt(void)
 	unsigned char intr_off;
 	unsigned char intr_src;
 	unsigned short addr;
-	struct synaptics_rmi4_fn_desc fd;
-	struct synaptics_rmi4_data *rmi4_data = apen->rmi4_data;
+	struct rmi4_fn_desc fd;
+	struct rmi4_data *rmi4_data = apen->rmi4_data;
+	struct i2c_client *client = rmi4_data->i2c_client;
 
-	for (page = 0; page < PAGES_TO_SERVICE; page++) {
-		for (addr = PDT_START; addr > PDT_END; addr -= PDT_ENTRY_SIZE) {
+	for (page = 0; page < RMI4_MAX_PAGE; page++) {
+		for (addr = PDT_START_SCAN_LOCATION; addr > PDT_END_SCAN_LOCATION; addr -= PDT_ENTRY_SIZE) {
 			addr |= (page << 8);
 
-			retval = synaptics_rmi4_reg_read(rmi4_data,
+			retval = rmi4_i2c_block_read(rmi4_data,
 					addr,
 					(unsigned char *)&fd,
 					sizeof(fd));
@@ -366,11 +339,11 @@ static int apen_scan_pdt(void)
 			addr &= ~(MASK_8BIT << 8);
 
 			if (fd.fn_number) {
-				dev_dbg(rmi4_data->pdev->dev.parent,
+				dev_dbg(&client->dev,
 						"%s: Found F%02x\n",
 						__func__, fd.fn_number);
 				switch (fd.fn_number) {
-				case SYNAPTICS_RMI4_F12:
+				case RMI4_TOUCHPAD_F12_FUNC_NUM:
 					goto f12_found;
 					break;
 				}
@@ -378,11 +351,11 @@ static int apen_scan_pdt(void)
 				break;
 			}
 
-			intr_count += fd.intr_src_count;
+			intr_count += (fd.intr_src_count & MASK_3BIT);
 		}
 	}
 
-	dev_err(rmi4_data->pdev->dev.parent,
+	dev_err(&client->dev,
 			"%s: Failed to find F12\n",
 			__func__);
 	return -EINVAL;
@@ -395,9 +368,9 @@ f12_found:
 
 	retval = apen_reg_init();
 	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to initialize active pen registers\n",
-				__func__);
+		dev_err(&client->dev,
+				"%s: Failed to initialize active pen registers, retval=%d\n",
+				__func__, retval);
 		return retval;
 	}
 
@@ -405,48 +378,53 @@ f12_found:
 	intr_src = fd.intr_src_count;
 	intr_off = intr_count % 8;
 	for (ii = intr_off;
-			ii < (intr_src + intr_off);
+			ii < ((intr_src & MASK_3BIT) +
+			intr_off);
 			ii++) {
 		apen->intr_mask |= 1 << ii;
 	}
 
-	rmi4_data->intr_mask[0] |= apen->intr_mask;
+	addr = rmi4_data->fn01_ctrl_base_addr + 1;
 
-	addr = rmi4_data->f01_ctrl_base_addr + 1;
-
-	retval = synaptics_rmi4_reg_write(rmi4_data,
+	retval = rmi4_i2c_block_write(rmi4_data,
 			addr,
-			&(rmi4_data->intr_mask[0]),
-			sizeof(rmi4_data->intr_mask[0]));
+			&(apen->intr_mask),
+			sizeof(apen->intr_mask));
 	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to set interrupt enable bit\n",
-				__func__);
+		dev_err(&client->dev,
+				"%s: Failed to set interrupt enable bit, retval=%d\n",
+				__func__, retval);
 		return retval;
 	}
 
 	return 0;
 }
 
-static void synaptics_rmi4_apen_attn(struct synaptics_rmi4_data *rmi4_data,
+void synaptics_rmi4_apen_attn_check(struct rmi4_data *rmi4_data,
 		unsigned char intr_mask)
 {
-	if (!apen)
+	struct i2c_client *client = rmi4_data->i2c_client;
+	if (!apen) {
+		dev_info(&client->dev, "%s: apen uninitialized\n", __func__);
 		return;
+	}
 
 	if (apen->intr_mask & intr_mask)
 		apen_report();
+	else
+		dev_info(&client->dev, "no apen_report(): apen->intr_mask=%X, intr_mask=%X\n", apen->intr_mask, intr_mask);
 
 	return;
 }
 
-static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
+int synaptics_rmi4_apen_init(struct rmi4_data *rmi4_data)
 {
 	int retval;
+	struct i2c_client *client = rmi4_data->i2c_client;
 
 	apen = kzalloc(sizeof(*apen), GFP_KERNEL);
 	if (!apen) {
-		dev_err(rmi4_data->pdev->dev.parent,
+		dev_err(&client->dev,
 				"%s: Failed to alloc mem for apen\n",
 				__func__);
 		retval = -ENOMEM;
@@ -455,7 +433,7 @@ static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
 
 	apen->apen_data = kzalloc(sizeof(*(apen->apen_data)), GFP_KERNEL);
 	if (!apen->apen_data) {
-		dev_err(rmi4_data->pdev->dev.parent,
+		dev_err(&client->dev,
 				"%s: Failed to alloc mem for apen_data\n",
 				__func__);
 		retval = -ENOMEM;
@@ -470,18 +448,17 @@ static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
 
 	apen->apen_dev = input_allocate_device();
 	if (apen->apen_dev == NULL) {
-		dev_err(rmi4_data->pdev->dev.parent,
+		dev_err(&client->dev,
 				"%s: Failed to allocate active pen device\n",
 				__func__);
 		retval = -ENOMEM;
 		goto exit_free_apen_data;
 	}
 
-	apen->apen_dev->name = ACTIVE_PEN_DRIVER_NAME;
-	apen->apen_dev->phys = APEN_PHYS_NAME;
-	apen->apen_dev->id.product = SYNAPTICS_DSX_DRIVER_PRODUCT;
-	apen->apen_dev->id.version = SYNAPTICS_DSX_DRIVER_VERSION;
-	apen->apen_dev->dev.parent = rmi4_data->pdev->dev.parent;
+	apen->apen_dev->name = DRIVER_NAME;
+	apen->apen_dev->phys = "Synaptics Active Pen";
+	apen->apen_dev->id.bustype = BUS_I2C;
+	apen->apen_dev->dev.parent = &client->dev;
 	input_set_drvdata(apen->apen_dev, rmi4_data);
 
 	set_bit(EV_KEY, apen->apen_dev->evbit);
@@ -498,7 +475,7 @@ static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
 
 	retval = input_register_device(apen->apen_dev);
 	if (retval) {
-		dev_err(rmi4_data->pdev->dev.parent,
+		dev_err(&client->dev,
 				"%s: Failed to register active pen device\n",
 				__func__);
 		goto exit_free_input_device;
@@ -520,7 +497,7 @@ exit:
 	return retval;
 }
 
-static void synaptics_rmi4_apen_remove(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_rmi4_apen_remove(struct rmi4_data *rmi4_data)
 {
 	if (!apen)
 		goto exit;
@@ -536,13 +513,8 @@ exit:
 	return;
 }
 
-static void synaptics_rmi4_apen_reset(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_rmi4_apen_reset(struct rmi4_data *rmi4_data)
 {
-	if (!apen) {
-		synaptics_rmi4_apen_init(rmi4_data);
-		return;
-	}
-
 	apen_lift();
 
 	apen_scan_pdt();
@@ -552,7 +524,7 @@ static void synaptics_rmi4_apen_reset(struct synaptics_rmi4_data *rmi4_data)
 	return;
 }
 
-static void synaptics_rmi4_apen_reinit(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_rmi4_apen_reinit(struct rmi4_data *rmi4_data)
 {
 	if (!apen)
 		return;
@@ -561,59 +533,3 @@ static void synaptics_rmi4_apen_reinit(struct synaptics_rmi4_data *rmi4_data)
 
 	return;
 }
-
-static void synaptics_rmi4_apen_e_suspend(struct synaptics_rmi4_data *rmi4_data)
-{
-	if (!apen)
-		return;
-
-	apen_lift();
-
-	return;
-}
-
-static void synaptics_rmi4_apen_suspend(struct synaptics_rmi4_data *rmi4_data)
-{
-	if (!apen)
-		return;
-
-	apen_lift();
-
-	return;
-}
-
-static struct synaptics_rmi4_exp_fn active_pen_module = {
-	.fn_type = RMI_ACTIVE_PEN,
-	.init = synaptics_rmi4_apen_init,
-	.remove = synaptics_rmi4_apen_remove,
-	.reset = synaptics_rmi4_apen_reset,
-	.reinit = synaptics_rmi4_apen_reinit,
-	.early_suspend = synaptics_rmi4_apen_e_suspend,
-	.suspend = synaptics_rmi4_apen_suspend,
-	.resume = NULL,
-	.late_resume = NULL,
-	.attn = synaptics_rmi4_apen_attn,
-};
-
-static int __init rmi4_active_pen_module_init(void)
-{
-	synaptics_rmi4_new_function(&active_pen_module, true);
-
-	return 0;
-}
-
-static void __exit rmi4_active_pen_module_exit(void)
-{
-	synaptics_rmi4_new_function(&active_pen_module, false);
-
-	wait_for_completion(&apen_remove_complete);
-
-	return;
-}
-
-module_init(rmi4_active_pen_module_init);
-module_exit(rmi4_active_pen_module_exit);
-
-MODULE_AUTHOR("Synaptics, Inc.");
-MODULE_DESCRIPTION("Synaptics DSX Active Pen Module");
-MODULE_LICENSE("GPL v2");

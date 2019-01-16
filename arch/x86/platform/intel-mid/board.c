@@ -238,6 +238,8 @@ struct devs_id __initconst device_ids[] = {
 	{"syn_3400_cgs", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 	{"syn_3400_igzo", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 	{"synaptics_3402", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
+	{"synaptics_7508", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
+	{"synaptics_7501", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 	{"cs47l24", SFI_DEV_TYPE_SPI, 0, &arizona_platform_data, NULL},
 	{"fingerprint", SFI_DEV_TYPE_SPI, 0, &no_platform_data, NULL},
 

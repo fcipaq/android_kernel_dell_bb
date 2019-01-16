@@ -12,19 +12,18 @@ menuconfig TOUCHSCREEN_SYNAPTICS_DSX
 
 if TOUCHSCREEN_SYNAPTICS_DSX
 
-choice
-	default TOUCHSCREEN_SYNAPTICS_DSX_I2C
-	prompt "Synaptics DSX bus interface"
 config TOUCHSCREEN_SYNAPTICS_DSX_I2C
-	bool "RMI over I2C"
-	depends on I2C
-config TOUCHSCREEN_SYNAPTICS_DSX_SPI
-	bool "RMI over SPI"
-	depends on SPI_MASTER
-config TOUCHSCREEN_SYNAPTICS_DSX_RMI_HID_I2C
-	bool "HID over I2C"
-	depends on I2C
-endchoice
+        tristate "Synaptics DSX I2C touchscreen"
+        depends on I2C
+        default y
+        help
+          Say Y here if you have a Synaptics DSX I2C touchscreen
+          connected to your system.
+
+          If unsure, say N.
+
+          To compile this driver as a module, choose M here: the
+          module will be called synaptics_dsx_i2c.
 
 config TOUCHSCREEN_SYNAPTICS_DSX_CORE
 	tristate "Synaptics DSX core driver module"

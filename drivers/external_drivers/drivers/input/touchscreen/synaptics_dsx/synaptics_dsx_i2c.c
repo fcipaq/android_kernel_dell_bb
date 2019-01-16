@@ -30,6 +30,10 @@
 
 #define SYN_I2C_RETRY_TIMES 10
 
+/*
+#define I2C_BURST_LIMIT 255
+*/
+
 #ifdef CONFIG_OF
 static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 {
@@ -54,14 +58,6 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 		return retval;
 	else
 		bdata->irq_flags = value;
-
-	retval = of_property_read_string(np, "synaptics,pwr-reg-name", &name);
-	if (retval == -EINVAL)
-		bdata->pwr_reg_name = NULL;
-	else if (retval < 0)
-		return retval;
-	else
-		bdata->pwr_reg_name = name;
 
 	retval = of_property_read_string(np, "synaptics,bus-reg-name", &name);
 	if (retval == -EINVAL)
@@ -227,21 +223,37 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 	int retval;
 	unsigned char retry;
 	unsigned char buf;
+#ifdef I2C_BURST_LIMIT
+	unsigned char ii;
+	unsigned char xfers = ((length - 1) / I2C_BURST_LIMIT) + 1;
+#else
+	unsigned char xfers = 1;
+#endif
+	unsigned short data_offset = 0;
+	unsigned short remaining_length = length;
 	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
-	struct i2c_msg msg[] = {
-		{
-			.addr = i2c->addr,
-			.flags = 0,
-			.len = 1,
-			.buf = &buf,
-		},
-		{
-			.addr = i2c->addr,
-			.flags = I2C_M_RD,
-			.len = length,
-			.buf = data,
-		},
-	};
+	struct i2c_msg msg[xfers + 1];
+
+	msg[0].addr = i2c->addr;
+	msg[0].flags = 0;
+	msg[0].len = 1;
+	msg[0].buf = &buf;
+
+#ifdef I2C_BURST_LIMIT
+	for (ii = 0; ii < (xfers - 1); ii++) {
+		msg[ii + 1].addr = i2c->addr;
+		msg[ii + 1].flags = I2C_M_RD;
+		msg[ii + 1].len = I2C_BURST_LIMIT;
+		msg[ii + 1].buf = &data[data_offset];
+		data_offset += I2C_BURST_LIMIT;
+		remaining_length -= I2C_BURST_LIMIT;
+	}
+#endif
+
+	msg[xfers].addr = i2c->addr;
+	msg[xfers].flags = I2C_M_RD;
+	msg[xfers].len = remaining_length;
+	msg[xfers].buf = &data[data_offset];
 
 	buf = addr & MASK_8BIT;
 
@@ -254,7 +266,7 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 	}
 
 	for (retry = 0; retry < SYN_I2C_RETRY_TIMES; retry++) {
-		if (i2c_transfer(i2c->adapter, msg, 2) == 2) {
+		if (i2c_transfer(i2c->adapter, msg, xfers + 1) == xfers + 1) {
 			retval = length;
 			break;
 		}
@@ -293,6 +305,15 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		}
 	};
 
+	buf[0] = addr & MASK_8BIT;
+	retval = secure_memcpy(&buf[1], length, &data[0], length, length);
+	if (retval < 0) {
+		dev_err(rmi4_data->pdev->dev.parent,
+				"%s: Failed to copy data\n",
+				__func__);
+		return retval;
+	}
+
 	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
 
 	retval = synaptics_rmi4_i2c_set_page(rmi4_data, addr);
@@ -300,9 +321,6 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		retval = -EIO;
 		goto exit;
 	}
-
-	buf[0] = addr & MASK_8BIT;
-	memcpy(&buf[1], &data[0], length);
 
 	for (retry = 0; retry < SYN_I2C_RETRY_TIMES; retry++) {
 		if (i2c_transfer(i2c->adapter, msg, 1) == 1) {
@@ -401,8 +419,6 @@ static int synaptics_rmi4_i2c_probe(struct i2c_client *client,
 	}
 #else
 	hw_if.board_data = client->dev.platform_data;
-	if (hw_if.board_data->irq_gpio > -1)
-		hw_if.board_data->irq = gpio_to_irq(hw_if.board_data->irq_gpio);
 #endif
 
 	hw_if.bus_access = &bus_access;
@@ -434,7 +450,6 @@ static int synaptics_rmi4_i2c_remove(struct i2c_client *client)
 
 static const struct i2c_device_id synaptics_rmi4_id_table[] = {
 	{I2C_DRIVER_NAME, 0},
-	{"synaptics_3402", 0},
 	{},
 };
 MODULE_DEVICE_TABLE(i2c, synaptics_rmi4_id_table);

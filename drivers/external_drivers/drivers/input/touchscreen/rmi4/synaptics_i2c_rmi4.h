@@ -106,6 +106,7 @@ struct rmi4_fn {
 	struct list_head    link;
 	struct rmi4_fn_ops  *ops;
 	void                *fn_data;
+	int data_size;
 };
 
 struct synaptics_rmi4_finger_state {
@@ -153,7 +154,6 @@ struct rmi4_device_info {
  * @i2c_client: pointer for i2c client
  * @board: constant pointer for touch platform data
  * @rmi4_page_mutex: mutex for rmi4 page
- * @rmi4_suspend_mutex: mutex for event reporting in suspend and irq
  * @current_page: variable for integer
  * @number_of_interrupt_register: interrupt registers count
  * @fn01_ctrl_base_addr: control base address for fn01
@@ -174,7 +174,6 @@ struct rmi4_data {
 	struct input_dev	*input_key_dev;
 	struct i2c_client	*i2c_client;
 	struct mutex		rmi4_page_mutex;
-	struct mutex 		rmi4_report_mutex;
 	unsigned int		number_of_interrupt_register;
 	u16		        fn01_ctrl_base_addr;
 	u16		        fn01_query_base_addr;
@@ -199,7 +198,6 @@ struct rmi4_data {
 #ifdef CONFIG_DEBUG_FS
 	u8 num_rx;
 	u8 num_tx;
-	struct rmi4_test_coverage *tc;
 #endif
 };
 
@@ -212,7 +210,6 @@ struct rmi4_fn_ops {
 			unsigned int intr_cnt);
 	int (*config)(struct rmi4_data *pdata, struct rmi4_fn *rfi);
 	int (*irq_handler)(struct rmi4_data *pdata, struct rmi4_fn *rfi);
-	int (*reset)(struct rmi4_data *pdata, struct rmi4_fn *rfi);
 	void (*remove)(struct rmi4_fn *rfi);
 };
 
@@ -236,13 +233,6 @@ struct rmi4_button_data {
 struct rmi4_touchpad_data {
 	u8 *buffer;
 	int size;
-};
-
-struct rmi4_f12_data {
-	u8 *buffer;
-	int size;
-	u8 ctrl_28_offset;
-	u8 enable_mask;
 };
 
 #ifdef CONFIG_DEBUG_FS
@@ -272,14 +262,6 @@ struct rmi4_ana_data {
 	u8 *buffer;
 	int status;
 	int size;
-};
-
-struct rmi4_test_coverage {
-/*	char fw_version; */
-	u32 present;
-	u32 correct;
-	u32 reset;
-	u32 irq;
 };
 #endif
 
@@ -510,7 +492,6 @@ int rmi4_touchpad_f12_detect(struct rmi4_data *pdata,
 int rmi4_touchpad_f12_config(struct rmi4_data *pdata, struct rmi4_fn *rfi);
 int rmi4_touchpad_f12_irq_handler(struct rmi4_data *pdata, struct rmi4_fn *rfi);
 void rmi4_touchpad_f12_remove(struct rmi4_fn *rfi);
-int rmi4_touchpad_f12_reset(struct rmi4_data *pdata, struct rmi4_fn *rfi);
 
 int rmi4_button_detect(struct rmi4_data *pdata,
 				struct rmi4_fn *rfi, unsigned int cnt);
@@ -519,6 +500,9 @@ void rmi4_button_remove(struct rmi4_fn *);
 
 int rmi4_fw_update(struct rmi4_data *pdata,
 		struct rmi4_fn_desc *f01_pdt, struct rmi4_fn_desc *f34_pdt);
+int synaptics_rmi4_apen_init(struct rmi4_data *rmi4_data);
+void synaptics_rmi4_apen_attn_check(struct rmi4_data *rmi4_data,
+	unsigned char intr_mask);
 
 #ifdef CONFIG_DEBUG_FS
 int rmi4_ana_data_detect(struct rmi4_data *pdata,

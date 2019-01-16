@@ -70,6 +70,8 @@
 #define PID_S3202_OGS "TM2178"
 #define PID_S3408 "s3408_ver5"
 #define PID_S3402 "s3402"
+#define PID_S7508 "s7508"
+#define PID_S7501 "s7501"
 
 /** Image file V5, Option 0
  */
@@ -785,7 +787,11 @@ int rmi4_fw_update(struct rmi4_data *pdata,
 			touch_type = RMI4_S3400_CGS;
 		else
 			touch_type = RMI4_S3400_IGZO;
-	} else {
+	} else if (strcmp(data.product_id, PID_S7508) == 0)
+		touch_type = RMI4_S7508;
+	else if (strcmp(data.product_id, PID_S7501) == 0)
+		touch_type = RMI4_S7501;
+	else {
 		dev_err(&client->dev, "Unsupported touch screen type, product ID: %s\n",
 				data.product_id);
 		if (!force) {

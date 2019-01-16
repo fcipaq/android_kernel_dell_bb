@@ -39,7 +39,7 @@ static ssize_t synaptics_rmi4_hover_finger_en_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
 static struct device_attribute attrs[] = {
-	__ATTR(hover_finger_en, (S_IRUGO | S_IWUGO),
+	__ATTR(hover_finger_en, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_hover_finger_en_show,
 			synaptics_rmi4_hover_finger_en_store),
 };
@@ -336,7 +336,7 @@ static int prox_scan_pdt(void)
 				break;
 			}
 
-			intr_count += (fd.intr_src_count & MASK_3BIT);
+			intr_count += fd.intr_src_count;
 		}
 	}
 
@@ -363,8 +363,7 @@ f12_found:
 	intr_src = fd.intr_src_count;
 	intr_off = intr_count % 8;
 	for (ii = intr_off;
-			ii < ((intr_src & MASK_3BIT) +
-			intr_off);
+			ii < (intr_src + intr_off);
 			ii++) {
 		prox->intr_mask |= 1 << ii;
 	}
@@ -501,7 +500,7 @@ static int synaptics_rmi4_prox_init(struct synaptics_rmi4_data *rmi4_data)
 		goto exit_free_finger_data;
 	}
 
-	prox->prox_dev->name = PLATFORM_DRIVER_NAME;
+	prox->prox_dev->name = PROXIMITY_DRIVER_NAME;
 	prox->prox_dev->phys = PROX_PHYS_NAME;
 	prox->prox_dev->id.product = SYNAPTICS_DSX_DRIVER_PRODUCT;
 	prox->prox_dev->id.version = SYNAPTICS_DSX_DRIVER_VERSION;
