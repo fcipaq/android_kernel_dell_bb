@@ -73,6 +73,19 @@
 
 #define VERSION "2.10a"
 
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+//debug only
+#include <linux/printk.h>
+
+int host_mode_without_rid_get_state = 0; // 0 means standard mode, 1 forced host
+int host_mode_init = 0;
+
+int is_forced_host_mode()
+{
+    return host_mode_without_rid_get_state;
+}
+#endif
+
 struct dwc3_otg_hw_ops *dwc3_otg_pdata;
 struct dwc_device_par *platform_par;
 
@@ -81,7 +94,6 @@ static struct wake_lock wakelock;
 static const char driver_name[] = "dwc3_otg";
 static struct dwc_otg2 *the_transceiver;
 static void dwc_otg_remove(struct pci_dev *pdev);
-
 
 static inline struct dwc_otg2 *xceiv_to_dwc_otg2(struct usb_otg *x)
 {
@@ -548,7 +560,7 @@ static enum dwc_otg_state do_charger_detection(struct dwc_otg2 *otg)
 
 static enum dwc_otg_state do_connector_id_status(struct dwc_otg2 *otg)
 {
-	int ret, id;
+	int id, ret = 0;
 	unsigned long flags;
 	u32 events = 0, user_events = 0;
 	u32 otg_mask = 0, user_mask = 0;
@@ -570,9 +582,26 @@ stay_b_idle:
 	if (dwc3_otg_pdata->b_idle)
 		dwc3_otg_pdata->b_idle(otg);
 
-	ret = sleep_until_event(otg, otg_mask,
-			user_mask, &events,
-			&user_events, 0);
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+    while (!ret)
+    {
+	    ret = sleep_until_event(otg, otg_mask,
+			    user_mask, &events,
+			    &user_events, 500);
+	    otg_dbg(otg, "Checking for host mode request by user space.");
+
+	    if (is_forced_host_mode()) {
+		    otg_dbg(otg, "DWC_STATE_A_HOST without RID_GND as per user request.");
+		    return DWC_STATE_A_HOST;
+
+	    }
+    }
+#else
+    ret = sleep_until_event(otg, otg_mask,
+		    user_mask, &events,
+		    &user_events, 0);
+#endif
+
 	if (ret < 0)
 		return DWC_STATE_EXIT;
 
@@ -647,15 +676,43 @@ stay_host:
 	otg_events = 0;
 	user_events = 0;
 
-	user_mask = USER_A_BUS_DROP |
-				USER_ID_B_CHANGE_EVENT;
-	otg_mask = OEVT_CONN_ID_STS_CHNG_EVNT;
+    user_mask = USER_A_BUS_DROP |
+			    USER_ID_B_CHANGE_EVENT;
+    otg_mask = OEVT_CONN_ID_STS_CHNG_EVNT;
 
-	rc = sleep_until_event(otg,
-			otg_mask, user_mask,
-			&otg_events, &user_events, 0);
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+    if (is_forced_host_mode()) {
+        otg_dbg(otg, "Entering forced host mode.");
+        host_mode_init = 1;
+    } else
+        host_mode_init = 0;
+
+	while (!rc) {
+	    rc = sleep_until_event(otg,
+			    otg_mask, user_mask,
+			    &otg_events, &user_events, 500);
+
+        if (host_mode_init && (!is_forced_host_mode())) {
+    		otg_dbg(otg, "Exiting forced host mode as per user request.");
+
+			stop_host(otg);
+			dwc_otg_enable_vbus(otg, 0);
+
+	        return DWC_STATE_B_IDLE;
+        }
+    }
+#else
+    rc = sleep_until_event(otg,
+		    otg_mask, user_mask,
+		    &otg_events, &user_events, 0);
+#endif
+
 	if (rc < 0) {
 		stop_host(otg);
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+		otg_dbg(otg, "Shutting down forced host (main thread shutdown).");
+    	dwc_otg_enable_vbus(otg, 0);
+#endif
 		return DWC_STATE_EXIT;
 	}
 
@@ -772,8 +829,7 @@ static int do_b_peripheral(struct dwc_otg2 *otg)
 
 	if (user_events & USER_ID_A_CHANGE_EVENT) {
 		otg_dbg(otg, "USER_ID_A_CHANGE_EVENT\n");
-		if (!dwc3_is_cht())
-			otg->user_events |= USER_ID_A_CHANGE_EVENT;
+		otg->user_events |= USER_ID_A_CHANGE_EVENT;
 		return DWC_STATE_B_IDLE;
 	}
 
@@ -876,18 +932,12 @@ static void start_main_thread(struct dwc_otg2 *otg)
 {
 	enum dwc3_otg_mode mode = dwc3_otg_pdata->mode;
 	bool children_ready = false;
-	struct pci_dev	*pdev = container_of(otg->dev, struct pci_dev, dev);
 
 	mutex_lock(&lock);
 
 	if ((mode == DWC3_DEVICE_ONLY) &&
-			otg->otg.gadget) {
-		/* CHT: wait host driver to map MUX register space  */
-		if (pdev->device == PCI_DEVICE_ID_DWC_CHT && !otg->otg.host)
-			children_ready = false;
-		else
+			otg->otg.gadget)
 			children_ready = true;
-	}
 
 	if ((mode == DWC3_HOST_ONLY) &&
 			otg->otg.host)
@@ -963,7 +1013,7 @@ static int dwc_otg2_set_host(struct usb_otg *x, struct usb_bus *host)
 static int ulpi_read(struct usb_phy *phy, u32 reg)
 {
 	struct dwc_otg2 *otg = container_of(phy, struct dwc_otg2, usb2_phy);
-	u32 val32 = 0, count = 10000;
+	u32 val32 = 0, count = 200;
 	u8 val, tmp;
 
 	if (phy->intf != USB2_PHY_ULPI)
@@ -973,7 +1023,7 @@ static int ulpi_read(struct usb_phy *phy, u32 reg)
 
 	while (count) {
 		if (otg_read(otg, GUSB2PHYACC0) & GUSB2PHYACC0_VSTSBSY)
-			udelay(1);
+			udelay(5);
 		else
 			break;
 
@@ -985,7 +1035,7 @@ static int ulpi_read(struct usb_phy *phy, u32 reg)
 		return -EBUSY;
 	}
 
-	count = 10000;
+	count = 200;
 	/* Determine if use extend registers access */
 	if (reg & EXTEND_ULPI_REGISTER_ACCESS_MASK) {
 		otg_dbg(otg, "Access extend registers 0x%x\n", reg);
@@ -1008,7 +1058,6 @@ static int ulpi_read(struct usb_phy *phy, u32 reg)
 			goto cleanup;
 		}
 
-		udelay(1);
 		count--;
 	}
 
@@ -1029,7 +1078,7 @@ cleanup:
 static int ulpi_write(struct usb_phy *phy, u32 val, u32 reg)
 {
 	struct dwc_otg2 *otg = container_of(phy, struct dwc_otg2, usb2_phy);
-	u32 val32 = 0, count = 10000;
+	u32 val32 = 0, count = 200;
 	u8 tmp;
 
 	if (phy->intf != USB2_PHY_ULPI)
@@ -1040,7 +1089,7 @@ static int ulpi_write(struct usb_phy *phy, u32 val, u32 reg)
 
 	while (count) {
 		if (otg_read(otg, GUSB2PHYACC0) & GUSB2PHYACC0_VSTSBSY)
-			udelay(1);
+			udelay(5);
 		else
 			break;
 
@@ -1051,6 +1100,8 @@ static int ulpi_write(struct usb_phy *phy, u32 val, u32 reg)
 		otg_err(otg, "USB2 PHY always busy!!\n");
 		return -EBUSY;
 	}
+
+	count = 200;
 
 	if (reg & EXTEND_ULPI_REGISTER_ACCESS_MASK) {
 		otg_dbg(otg, "Access extend registers 0x%x\n", reg);
@@ -1067,7 +1118,6 @@ static int ulpi_write(struct usb_phy *phy, u32 val, u32 reg)
 	}
 	otg_write(otg, GUSB2PHYACC0, val32);
 
-	count = 10000;
 	while (count) {
 		if (otg_read(otg, GUSB2PHYACC0) & GUSB2PHYACC0_VSTSDONE) {
 			otg_dbg(otg, "%s - reg 0x%x data 0x%x write done\n",
@@ -1075,11 +1125,10 @@ static int ulpi_write(struct usb_phy *phy, u32 val, u32 reg)
 			goto cleanup;
 		}
 
-		udelay(1);
 		count--;
 	}
 
-	otg_err(otg, "%s write PHY data failed.\n", __func__);
+	otg_err(otg, "%s read PHY data failed.\n", __func__);
 
 	return -ETIMEDOUT;
 
@@ -1322,6 +1371,10 @@ static int dwc_otg_probe(struct pci_dev *pdev,
 		goto err;
 	}
 
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+	otg_err(otg, "WARNING: driver may NOT yet be compatible with suspend/standby/sleep, check CONFIG_USB_DWC3_HOST_WITHOUT_RID\n");
+#endif
+
 	otg_dbg(otg, "dwc otg pci resouce: 0x%lu, len: 0x%lu\n",
 			resource, len);
 	otg_dbg(otg, "vendor: 0x%x, device: 0x%x\n",
@@ -1374,18 +1427,15 @@ static void dwc_otg_remove(struct pci_dev *pdev)
 	struct dwc_otg2 *otg = the_transceiver;
 	int resource, len;
 
-	pm_runtime_forbid(&pdev->dev);
-	pm_runtime_set_suspended(&pdev->dev);
-
-	if (dwc3_otg_pdata->platform_exit)
-		dwc3_otg_pdata->platform_exit(otg);
-
-	wake_lock_destroy(&wakelock);
-
 	if (otg->gadget)
 		platform_device_unregister(otg->gadget);
 	if (otg->host)
 		platform_device_unregister(otg->host);
+
+	wake_lock_destroy(&wakelock);
+
+	pm_runtime_forbid(&pdev->dev);
+	pm_runtime_set_suspended(&pdev->dev);
 
 	kfree(platform_par);
 	iounmap(otg->usb2_phy.io_priv);
@@ -1439,6 +1489,10 @@ static int dwc_otg_runtime_resume(struct device *dev)
 
 static int dwc_otg_suspend(struct device *dev)
 {
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+	printk(KERN_ERR "%s: WARNING: driver may NOT yet be compatible with suspend/standby/sleep, check CONFIG_USB_DWC3_HOST_WITHOUT_RID\n", __func__);
+#endif
+
 	if (dwc3_otg_pdata->suspend)
 		return dwc3_otg_pdata->suspend(the_transceiver);
 	return 0;
@@ -1446,6 +1500,10 @@ static int dwc_otg_suspend(struct device *dev)
 
 static int dwc_otg_resume(struct device *dev)
 {
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+	printk(KERN_ERR "%s: WARNING: driver may NOT yet be compatible with suspend/standby/sleep, check CONFIG_USB_DWC3_HOST_WITHOUT_RID\n", __func__);
+#endif
+
 	if (dwc3_otg_pdata->resume)
 		return dwc3_otg_pdata->resume(the_transceiver);
 	return 0;
@@ -1468,11 +1526,6 @@ static DEFINE_PCI_DEVICE_TABLE(pci_ids) = {
 		.vendor = PCI_VENDOR_ID_INTEL,
 		.device = PCI_DEVICE_ID_DWC,
 	},
-	{ PCI_DEVICE_CLASS(((PCI_CLASS_SERIAL_USB << 8) | 0x80), ~0),
-		.vendor = PCI_VENDOR_ID_INTEL,
-		.device = PCI_DEVICE_ID_DWC_VLV,
-	},
-	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_DWC_CHT)},
 	{ /* end: all zeroes */ }
 };
 

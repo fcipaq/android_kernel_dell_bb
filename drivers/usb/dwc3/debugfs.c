@@ -59,6 +59,10 @@
 	.offset	= DWC3_ ##nm - DWC3_GLOBALS_REGS_START,	\
 }
 
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+extern int host_mode_without_rid_get_state;
+#endif
+
 static const struct debugfs_reg32 dwc3_regs[] = {
 	dump_register(GSBUSCFG0),
 	dump_register(GSBUSCFG1),
@@ -376,6 +380,61 @@ static const struct debugfs_reg32 dwc3_regs[] = {
 	dump_register(OEVTEN),
 	dump_register(OSTS),
 };
+
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+static int dwc3_host_mode_show(struct seq_file *s, void *unused)
+{
+
+	switch (host_mode_without_rid_get_state) {
+	    case 1:
+		    seq_printf(s, "1\n");
+		    break;
+	    case 0:
+		    seq_printf(s, "0\n");
+		    break;
+	    default:
+		    seq_printf(s, "UNKNOWN, this is a BUG %08x\n", host_mode_without_rid_get_state);
+	}
+
+	return 0;
+}
+
+static int dwc3_host_mode_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, dwc3_host_mode_show, inode->i_private);
+}
+
+static ssize_t dwc3_host_mode_write(struct file *file,
+		const char __user *ubuf, size_t count, loff_t *ppos)
+{
+	u32			mode = 2;
+	char			buf[32];
+
+	if (copy_from_user(&buf, ubuf, min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
+
+	if (!strncmp(buf, "1", 1))
+		mode = 1;
+
+	if (!strncmp(buf, "0", 1))
+		mode = 0;
+
+    if (!((mode == 0) || (mode == 1)))
+        return -EFAULT;
+
+    host_mode_without_rid_get_state = mode;     
+
+	return count;
+}
+
+static const struct file_operations dwc3_host_mode_fops = {
+	.open			= dwc3_host_mode_open,
+	.write			= dwc3_host_mode_write,
+	.read			= seq_read,
+	.llseek			= seq_lseek,
+	.release		= single_release,
+};
+#endif
 
 static int dwc3_mode_show(struct seq_file *s, void *unused)
 {
@@ -970,6 +1029,15 @@ int dwc3_debugfs_init(struct dwc3 *dwc)
 			goto err1;
 		}
 	}
+
+#ifdef CONFIG_USB_DWC3_HOST_WITHOUT_RID
+		file = debugfs_create_file("force_host_mode", S_IRUGO | S_IWUSR, root,
+				dwc, &dwc3_host_mode_fops);
+		if (!file) {
+			ret = -ENOMEM;
+			goto err1;
+		}
+#endif
 
 	if (IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE) ||
 			IS_ENABLED(CONFIG_USB_DWC3_GADGET)) {
