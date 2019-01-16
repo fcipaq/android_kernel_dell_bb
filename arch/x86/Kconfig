@@ -170,26 +170,26 @@ config ARCH_MMAP_RND_COMPAT_BITS_MAX
 config SBUS
 	bool
 
-config MRD7
-	bool "Baytrail CR MRD7"
-	---help---
-	This option is needed for MRD7 system.
-
-	If unsure, say N.
-
-config MRD8
-	bool "Baytrail CR MRD8"
-	---help---
-	This option is needed for MRD8 system.
-
-	If unsure, say N.
-
-config MRD7P05
-	bool "Baytrail CR MRD7 P0.5"
-	---help---
-	This option is needed for MRD7 P0.5 and P1 system.
-
-	If unsure, say N.
+#config MRD7
+#	bool "Baytrail CR MRD7"
+#	---help---
+#	This option is needed for MRD7 system.
+#
+#	If unsure, say N.
+#
+#config MRD8
+#	bool "Baytrail CR MRD8"
+#	---help---
+#	This option is needed for MRD8 system.
+#
+#	If unsure, say N.
+#
+#config MRD7P05
+#	bool "Baytrail CR MRD7 P0.5"
+#	---help---
+#	This option is needed for MRD7 P0.5 and P1 system.
+#
+#	If unsure, say N.
 
 config NEED_DMA_MAP_STATE
 	def_bool y
@@ -2467,21 +2467,21 @@ config X86_DMA_REMAP
 	bool
 	depends on STA2X11
 
-config PF450CL
-       bool "ASUS PF450CL Product"
-       depends on X86_MDFLD
+#config PF450CL
+#       bool "ASUS PF450CL Product"
+#       depends on X86_MDFLD
 
-config ZS570ML
-       bool "ASUS ZS570ML Product"
-       default n
+#config ZS570ML
+#       bool "ASUS ZS570ML Product"
+#       default n
 
-config ZS571ML
-       bool "ASUS ZS571ML Product"
-       default n
+#config ZS571ML
+#       bool "ASUS ZS571ML Product"
+#       default n
 
-config ZS550ML
-       bool "ASUS ZS550ML Product"
-       default n
+#config ZS550ML
+#       bool "ASUS ZS550ML Product"
+#       default n
 
 source "net/Kconfig"
 
