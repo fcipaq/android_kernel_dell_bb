@@ -125,9 +125,9 @@ static int mfld_sdio_setup(struct sdhci_pci_data *data)
 	struct pci_dev *pdev = data->pdev;
 	/* Control card power through a regulator */
 	wlan_vmmc_supply.dev_name = dev_name(&pdev->dev);
-	vwlan.gpio = get_gpio_by_name("WLAN-EN");
+	vwlan.gpio = get_gpio_by_name("WLAN-enable");
 	if (vwlan.gpio < 0)
-		pr_err("%s: No WLAN-EN GPIO in SFI table\n",
+		pr_err("%s: No WLAN-enable GPIO in SFI table\n",
 	       __func__);
 	pr_info("vwlan gpio %d\n", vwlan.gpio);
 	/* add a regulator to control wlan enable gpio */
@@ -185,13 +185,9 @@ static int clv_sdio_setup(struct sdhci_pci_data *data)
 	struct pci_dev *pdev = data->pdev;
 	/* Control card power through a regulator */
 	wlan_vmmc_supply.dev_name = dev_name(&pdev->dev);
-#ifdef CONFIG_PF450CL
-	vwlan.gpio = get_gpio_by_name("WL_BT_EN");
-#else
-	vwlan.gpio = get_gpio_by_name("WLAN-EN");
-#endif
+	vwlan.gpio = get_gpio_by_name("WLAN-enable");
 	if (vwlan.gpio < 0)
-		pr_err("%s: No WLAN-EN GPIO in SFI table\n",
+		pr_err("%s: No WLAN-enable GPIO in SFI table\n",
 	       __func__);
 	pr_info("vwlan gpio %d\n", vwlan.gpio);
 	/* add a regulator to control wlan enable gpio */
@@ -396,9 +392,9 @@ static int mrfl_sdio_setup(struct sdhci_pci_data *data)
 	struct pci_dev *pdev = data->pdev;
 	/* Control card power through a regulator */
 	wlan_vmmc_supply.dev_name = dev_name(&pdev->dev);
-	vwlan.gpio = get_gpio_by_name("WLAN-EN");
+	vwlan.gpio = get_gpio_by_name("WLAN-enable");
 	if (vwlan.gpio < 0)
-		pr_err("%s: No WLAN-EN GPIO in SFI table\n",
+		pr_err("%s: No WLAN-enable GPIO in SFI table\n",
 	       __func__);
 	pr_info("vwlan gpio %d\n", vwlan.gpio);
 	/* add a regulator to control wlan enable gpio */
@@ -472,7 +468,7 @@ static int byt_sdio_setup(struct sdhci_pci_data *data)
 #endif
 
 	if (vwlan.gpio < 0) {
-		pr_err("%s: No wlan-EN GPIO in SDHB ACPI block\n",
+		pr_err("%s: No wlan-enable GPIO in SDHB ACPI block\n",
 		       __func__);
 
 		if (INTEL_MID_BOARD(2, TABLET, BYT, BLB, PRO) ||

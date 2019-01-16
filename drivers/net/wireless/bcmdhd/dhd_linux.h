@@ -25,7 +25,10 @@
 #ifdef DHD_WMF
 #include <dhd_wmf_linux.h>
 #endif
-
+/* Linux wireless extension support */
+#if defined(WL_WIRELESS_EXT)
+#include <wl_iw.h>
+#endif /* defined(WL_WIRELESS_EXT) */
 #if defined(CONFIG_HAS_EARLYSUSPEND) && defined(DHD_USE_EARLYSUSPEND)
 #include <linux/earlysuspend.h>
 #endif /* defined(CONFIG_HAS_EARLYSUSPEND) && defined(DHD_USE_EARLYSUSPEND) */
@@ -42,11 +45,9 @@ struct wifi_platform_data {
 	int (*set_carddetect)(int val);
 	void *(*mem_prealloc)(int section, unsigned long size);
 	int (*get_mac_addr)(unsigned char *buf);
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 58)) || defined(CUSTOM_COUNTRY_CODE)
-	void *(*get_country_code)(char *ccode, u32 flags);
-#else /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 58)) || defined (CUSTOM_COUNTRY_CODE) */
+/* fcipaq */
 	void *(*get_country_code)(char *ccode);
-#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 58)) */
+/* fcipaq end */
  };
 #endif /* CONFIG_WIFI_CONTROL_FUNC */
 #define DHD_REGISTRATION_TIMEOUT  12000  /* msec : allowed time to finished dhd registration */

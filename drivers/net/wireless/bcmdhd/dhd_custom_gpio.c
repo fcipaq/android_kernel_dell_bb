@@ -18,9 +18,9 @@
 #include <dhd_linux.h>
 
 #include <wlioctl.h>
-//#if defined(WL_WIRELESS_EXT)
-//#include <wl_iw.h>
-//#endif
+#if defined(WL_WIRELESS_EXT)
+#include <wl_iw.h>
+#endif
 
 #define WL_ERROR(x) printf x
 #define WL_TRACE(x)
@@ -42,6 +42,12 @@ extern int sdioh_mmc_irq(int irq);
 #if defined(CUSTOMER_HW3) || defined(PLATFORM_MPS)
 #include <mach/gpio.h>
 #endif
+
+/* fcipaq */
+unsigned char *custom_mac = "989096fcabdc";
+module_param(custom_mac, charp, 0000);
+MODULE_PARM_DESC(custom_mac, "Custom wifi MAC address for Dell Venue 7840, 7040");
+/* fcipaq end */
 
 /* Customer specific Host GPIO defintion  */
 static int dhd_oob_gpio_num = -1;
@@ -109,8 +115,14 @@ dhd_customer_gpio_wlan_ctrl(void *adapter, int onoff)
 int wifi_get_mac_addr_intel(unsigned char *buf){
 	int ret = 0;
 	int i;
-	struct file *fp = NULL;
 	unsigned char c_mac[MAC_ADDRESS_LEN];
+
+/* fcipaq */
+#ifdef CONFIG_BCMDHD_DELL_CUSTOM_MAC
+	for (i = 0; i < MAC_ADDRESS_LEN; i++)
+		c_mac[i] = custom_mac[i];
+#else
+	struct file *fp = NULL;
 	char fname[]="/config/wifi/mac.txt";
 
 	WL_TRACE(("%s Enter\n", __FUNCTION__));
@@ -127,7 +139,7 @@ int wifi_get_mac_addr_intel(unsigned char *buf){
 		return 1;
 	}
 	dhd_os_close_image(fp);
-
+#endif
 	for (i =0; i< MAC_ADDRESS_LEN ; i+=2){
 		c_mac[i] = bcm_isdigit(c_mac[i]) ? c_mac[i]-'0' : bcm_toupper(c_mac[i])-'A'+10;
 		c_mac[i+1] = bcm_isdigit(c_mac[i+1]) ? c_mac[i+1]-'0' : bcm_toupper(c_mac[i+1])-'A'+10;
@@ -135,8 +147,13 @@ int wifi_get_mac_addr_intel(unsigned char *buf){
 		buf[i/2] = c_mac[i]*16 + c_mac[i+1];
 	}
 
+#ifdef CONFIG_BCMDHD_DELL_CUSTOM_MAC
+	WL_TRACE(("%s: read mac address from kernel command line: %x:%x:%x:%x:%x:%x\n",
+			 __FUNCTION__, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]));
+#else
 	WL_TRACE(("%s: read from file mac address: %x:%x:%x:%x:%x:%x\n",
 			 __FUNCTION__, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]));
+#endif
 
 	return ret;
 }
@@ -170,19 +187,13 @@ dhd_custom_get_mac_address(void *adapter, unsigned char *buf)
 }
 #endif /* GET_CUSTOM_MAC_ENABLE */
 
+#if !defined(WL_WIRELESS_EXT)
 struct cntry_locales_custom {
-	char iso_abbrev[WLC_CNTRY_BUF_SZ];
-	char custom_locale[WLC_CNTRY_BUF_SZ];
-	int32 custom_locale_rev;
+	char iso_abbrev[WLC_CNTRY_BUF_SZ];	/* ISO 3166-1 country abbreviation */
+	char custom_locale[WLC_CNTRY_BUF_SZ];	/* Custom firmware locale */
+	int32 custom_locale_rev;		/* Custom local revisin default -1 */
 };
-
-//#if !defined(WL_WIRELESS_EXT)
-//struct cntry_locales_custom {
-//	char iso_abbrev[WLC_CNTRY_BUF_SZ];	/* ISO 3166-1 country abbreviation */
-//	char custom_locale[WLC_CNTRY_BUF_SZ];	/* Custom firmware locale */
-//	int32 custom_locale_rev;		/* Custom local revisin default -1 */
-//};
-//#endif /* WL_WIRELESS_EXT */
+#endif /* WL_WIRELESS_EXT */
 
 /* Customized Locale table : OPTIONAL feature */
 const struct cntry_locales_custom translate_custom_table[] = {

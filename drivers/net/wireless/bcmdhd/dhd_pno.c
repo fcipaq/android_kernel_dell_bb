@@ -3556,15 +3556,9 @@ dhd_handle_swc_evt(dhd_pub_t *dhd, const void *event_data, int *send_evt_bytes)
 		return ptr;
 	}
 
-	if ((params->results_rxed_so_far + results->pkt_count) <= results->total_count) {
-		memcpy(change_array, results->list,
+	memcpy(change_array, results->list,
 		sizeof(wl_pfn_significant_net_t) * results->pkt_count);
-		params->results_rxed_so_far += results->pkt_count;
-	} else {
-		/* In case of spurious event or invalid data send hang event */
-		dhd->hang_reason = HANG_REASON_INVALID_EVENT_OR_DATA;
-		dhd_os_send_hang_message(dhd);
-	}
+	params->results_rxed_so_far += results->pkt_count;
 
 	if (params->results_rxed_so_far == results->total_count) {
 		params->results_rxed_so_far = 0;

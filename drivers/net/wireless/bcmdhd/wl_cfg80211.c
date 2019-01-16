@@ -2575,7 +2575,7 @@ wl_run_escan(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 					err = -EINVAL;
 					goto exit;
 				}
-				
+
 				for (i = 0; i < num_chans; i++)
 				{
 #ifdef WL_HOST_BAND_MGMT
@@ -11113,7 +11113,7 @@ wl_notify_pfn_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 		WL_ERR(("Data is NULL!\n"));
 		return 0;
 	}
- 
+
 	WL_DBG((">>> PNO Event\n"));
 	ndev = cfgdev_to_wlc_ndev(cfgdev, cfg);
 
@@ -13317,10 +13317,11 @@ static s32 wl_event_handler(void *data)
 		SMP_RD_BARRIER_DEPENDS();
 		if (tsk->terminated) {
 			DHD_OS_WAKE_UNLOCK(cfg->pub);
+	WL_ERR(("fcipaq break\n"));
 			break;
 		}
 		while ((e = wl_deq_event(cfg))) {
-			WL_DBG(("event type (%d), ifidx: %d bssidx: %d \n",
+			WL_ERR(("event type (%d), ifidx: %d bssidx: %d \n",
 				e->etype, e->emsg.ifidx, e->emsg.bsscfgidx));
 
 			if (e->emsg.ifidx > WL_MAX_IFS) {
@@ -13347,7 +13348,7 @@ static s32 wl_event_handler(void *data)
 						&e->emsg, e->edata);
 				}
 			} else {
-				WL_DBG(("Unknown Event (%d): ignoring\n", e->etype));
+				WL_ERR(("Unknown Event (%d): ignoring\n", e->etype));
 			}
 fail:
 			wl_put_event(e);
@@ -16456,12 +16457,6 @@ wl_cfg80211_add_iw_ie(struct bcm_cfg80211 *cfg, struct net_device *ndev, s32 bss
 
 	if (ie_id != DOT11_MNG_INTERWORKING_ID)
 		return BCME_UNSUPPORTED;
-
-	/* access network options (1 octet)  is the mandatory field */
-	if (!data || data_len == 0 || data_len > IW_IES_MAX_BUF_LEN) {
-		WL_ERR(("wrong data_len:%d\n", data_len));
-		return BCME_BADARG;
-	}
 
 	/* Validate the pktflag parameter */
 	if ((pktflag & ~(VNDR_IE_BEACON_FLAG | VNDR_IE_PRBRSP_FLAG |

@@ -58,6 +58,12 @@
 #ifdef ASUS_COUNTRY_CODE
 #include <wl_iw.h>
 
+/* fcipaq */
+unsigned char *custom_ccode = "DE";
+module_param(custom_ccode, charp, 00);
+MODULE_PARM_DESC(custom_ccode, "Custom wifi country code for Dell Venue 7840, 7040");
+/* fcipaq end */
+
 int read_custom_country_code(char *country_code);
 int override_nvram_ccode(char *memblk, char *ccode);
 #endif
@@ -8236,8 +8242,16 @@ dhdsdio_download_nvram(struct dhd_bus *bus)
 	len = dhd_os_get_image_block(memblock, MAX_NVRAMBUF_SIZE, image);
 #ifdef ASUS_COUNTRY_CODE
     memset(country_code, '\0', sizeof(country_code));
+/* fcipaq */
+#ifdef CONFIG_BCMDHD_DELL_CUSTOM_CCODE
+    country_code[0] = custom_ccode[0];
+    country_code[1] = custom_ccode[1];
+    DHD_ERROR(("%s: Custom country_code from kernel command line = %s \n", __FUNCTION__, country_code));
+#else
+/* fcipaq end */
     read_custom_country_code(country_code);
     DHD_ERROR(("%s: Custom country_code = %s \n", __FUNCTION__, country_code));
+#endif
     override_nvram_ccode(memblock, country_code);
 #endif
 	if (len > 0 && len < MAX_NVRAMBUF_SIZE) {

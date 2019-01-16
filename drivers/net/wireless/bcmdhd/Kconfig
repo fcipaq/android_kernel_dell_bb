@@ -45,6 +45,67 @@ config BCMDHD_NVRAM_PATH
 	---help---
 	  Path to the calibration file.
 
+config BCMDHD_DELL_CUSTOM_MAC
+	depends on BCMDHD && BCMDHD_SDIO
+	bool "Custom Wifi MAC address"
+	default y
+	---help---
+	  Custom Wifi MAC address.
+	  Set via kernel parameter custom_mac
+	  e.g. bcmdhd.custom_mac=0123456789ab
+	  will give 01:23:45:67:89:ab
+
+config BCMDHD_DELL_CUSTOM_CCODE
+	depends on BCMDHD
+	bool "Custom country code"
+	default y
+	---help---
+	  Custom Wifi MAC address.
+	  Set via kernel parameter custom_ccode
+	  e.g. bcmdhd.custom_ccode=US
+	  Supported codes:
+	    WW (world wide)
+	    AE
+	    BH
+	    CN
+	    CZ
+	    DE
+	    DK
+	    ES
+	    FR
+	    FI
+	    GB
+	    HK
+	    HU
+	    ID
+	    IL
+	    IN
+	    IT
+	    IS
+	    JP
+	    MY
+	    NL
+	    NO
+	    PT
+	    RU
+	    SA
+	    SE
+	    SG
+	    TH
+	    TR
+	    TW
+	    UA
+	    US
+	    VN
+
+config BCMDHD_WEXT
+	bool "Enable WEXT support"
+	depends on BCMDHD && CFG80211 = n
+	select WIRELESS_EXT
+	select WEXT_PRIV
+	help
+	  Enables WEXT support
+
 config DHD_USE_STATIC_BUF
 	bool "Enable memory preallocation"
 	depends on BCMDHD
