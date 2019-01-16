@@ -12,17 +12,21 @@ typedef struct __wait_queue wait_queue_t;
 typedef int (*wait_queue_func_t)(wait_queue_t *wait, unsigned mode, int flags, void *key);
 int default_wake_function(wait_queue_t *wait, unsigned mode, int flags, void *key);
 
-struct __wait_queue {
-	unsigned int flags;
+/* __wait_queue::flags */
 #define WQ_FLAG_EXCLUSIVE	0x01
-	void *private;
-	wait_queue_func_t func;
-	struct list_head task_list;
+#define WQ_FLAG_WOKEN		0x02
+
+struct __wait_queue {
+	unsigned int		flags;
+	void			*private;
+	wait_queue_func_t	func;
+	struct list_head	task_list;
 };
 
 struct wait_bit_key {
 	void *flags;
 	int bit_nr;
+	unsigned long timeout;
 };
 
 struct wait_bit_queue {
@@ -136,6 +140,7 @@ static inline void __remove_wait_queue(wait_queue_head_t *head,
 	list_del(&old->task_list);
 }
 
+typedef int wait_bit_action_f(struct wait_bit_key *);
 void __wake_up(wait_queue_head_t *q, unsigned int mode, int nr, void *key);
 void __wake_up_locked_key(wait_queue_head_t *q, unsigned int mode, void *key);
 void __wake_up_sync_key(wait_queue_head_t *q, unsigned int mode, int nr,
@@ -148,6 +153,7 @@ int __wait_on_bit_lock(wait_queue_head_t *, struct wait_bit_queue *, int (*)(voi
 void wake_up_bit(void *, int);
 int out_of_line_wait_on_bit(void *, int, int (*)(void *), unsigned);
 int out_of_line_wait_on_bit_lock(void *, int, int (*)(void *), unsigned);
+int out_of_line_wait_on_bit_timeout(void *, int, wait_bit_action_f *, unsigned, unsigned long);
 wait_queue_head_t *bit_waitqueue(void *, int);
 
 #define wake_up(x)			__wake_up(x, TASK_NORMAL, 1, NULL)
@@ -881,8 +887,9 @@ extern long interruptible_sleep_on_timeout(wait_queue_head_t *q,
 void prepare_to_wait(wait_queue_head_t *q, wait_queue_t *wait, int state);
 void prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int state);
 void finish_wait(wait_queue_head_t *q, wait_queue_t *wait);
-void abort_exclusive_wait(wait_queue_head_t *q, wait_queue_t *wait,
-			unsigned int mode, void *key);
+void abort_exclusive_wait(wait_queue_head_t *q, wait_queue_t *wait, unsigned int mode, void *key);
+long wait_woken(wait_queue_t *wait, unsigned mode, long timeout);
+int woken_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 int wake_bit_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 
@@ -914,6 +921,10 @@ int wake_bit_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 		(wait)->flags = 0;					\
 	} while (0)
 
+
+extern int bit_wait_timeout(struct wait_bit_key *);
+extern int bit_wait_io_timeout(struct wait_bit_key *);
+
 /**
  * wait_on_bit - wait for a bit to be cleared
  * @word: the word being waited on, a kernel virtual address
@@ -934,6 +945,32 @@ static inline int wait_on_bit(void *word, int bit,
 	if (!test_bit(bit, word))
 		return 0;
 	return out_of_line_wait_on_bit(word, bit, action, mode);
+}
+
+/**
+ * wait_on_bit_timeout - wait for a bit to be cleared or a timeout elapses
+ * @word: the word being waited on, a kernel virtual address
+ * @bit: the bit of the word being waited on
+ * @mode: the task state to sleep in
+ * @timeout: timeout, in jiffies
+ *
+ * Use the standard hashed waitqueue table to wait for a bit
+ * to be cleared. This is similar to wait_on_bit(), except also takes a
+ * timeout parameter.
+ *
+ * Returned value will be zero if the bit was cleared before the
+ * @timeout elapsed, or non-zero if the @timeout elapsed or process
+ * received a signal and the mode permitted wakeup on that signal.
+ */
+static inline int
+wait_on_bit_timeout(void *word, int bit, unsigned mode, unsigned long timeout)
+{
+	might_sleep();
+	if (!test_bit(bit, word))
+		return 0;
+	return out_of_line_wait_on_bit_timeout(word, bit,
+					       bit_wait_timeout,
+					       mode, timeout);
 }
 
 /**

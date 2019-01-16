@@ -1496,6 +1496,35 @@ static inline void unlock_sock_fast(struct sock *sk, bool slow)
 		spin_unlock_bh(&sk->sk_lock.slock);
 }
 
+/* Used by processes to "lock" a socket state, so that
+ * interrupts and bottom half handlers won't change it
+ * from under us. It essentially blocks any incoming
+ * packets, so that we won't get any new data or any
+ * packets that change the state of the socket.
+ *
+ * While locked, BH processing will add new packets to
+ * the backlog queue.  This queue is processed by the
+ * owner of the socket lock right before it is released.
+ *
+ * Since ~2.3.5 it is also exclusive sleep lock serializing
+ * accesses from user process context.
+ */
+
+//static inline bool sock_owned_by_user(struct sock *sk)
+//{
+//#ifdef CONFIG_LOCKDEP
+//	WARN_ON(!lockdep_sock_is_held(sk));
+//#endif
+//	return sk->sk_lock.owned;
+//}
+
+/* no reclassification while locks are held */
+static inline bool sock_allow_reclassification(struct sock *csk)
+{
+	struct sock *sk = (struct sock *)csk;
+
+	return !sk->sk_lock.owned && !spin_is_locked(&sk->sk_lock.slock);
+}
 
 extern struct sock		*sk_alloc(struct net *net, int family,
 					  gfp_t priority,

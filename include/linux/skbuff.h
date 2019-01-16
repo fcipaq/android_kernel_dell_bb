@@ -331,6 +331,11 @@ typedef unsigned int sk_buff_data_t;
 typedef unsigned char *sk_buff_data_t;
 #endif
 
+#if defined(CONFIG_NF_DEFRAG_IPV4) || defined(CONFIG_NF_DEFRAG_IPV4_MODULE) || \
+    defined(CONFIG_NF_DEFRAG_IPV6) || defined(CONFIG_NF_DEFRAG_IPV6_MODULE)
+#define NET_SKBUFF_NF_DEFRAG_NEEDED 1
+#endif
+
 /** 
  *	struct sk_buff - socket buffer
  *	@next: Next buffer in list
@@ -363,6 +368,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@protocol: Packet protocol from driver
  *	@destructor: Destruct function
  *	@nfct: Associated connection, if any
+ *	@nfct_reasm: netfilter conntrack re-assembly pointer
  *	@nf_bridge: Saved data about a bridged frame - see br_netfilter.c
  *	@skb_iif: ifindex of device we arrived on
  *	@tc_index: Traffic control index
@@ -448,6 +454,9 @@ struct sk_buff {
 	void			(*destructor)(struct sk_buff *skb);
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	struct nf_conntrack	*nfct;
+#endif
+#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
+	struct sk_buff		*nfct_reasm;
 #endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	struct nf_bridge_info	*nf_bridge;
@@ -655,6 +664,8 @@ extern struct sk_buff *skb_clone(struct sk_buff *skb,
 				 gfp_t priority);
 extern struct sk_buff *skb_copy(const struct sk_buff *skb,
 				gfp_t priority);
+extern struct sk_buff *__pskb_copy_fclone(struct sk_buff *skb, int headroom,
+				   gfp_t gfp_mask, bool fclone);
 extern struct sk_buff *__pskb_copy(struct sk_buff *skb,
 				 int headroom, gfp_t gfp_mask);
 
@@ -671,6 +682,7 @@ extern int	       skb_to_sgvec(struct sk_buff *skb,
 				    int len);
 extern int	       skb_cow_data(struct sk_buff *skb, int tailbits,
 				    struct sk_buff **trailer);
+struct sk_buff         *skb_clone_sk(struct sk_buff *skb);
 extern int	       skb_pad(struct sk_buff *skb, int pad);
 extern void copy_skb_header(struct sk_buff *new, const struct sk_buff *old);
 extern void skb_clone_fraglist(struct sk_buff *skb);
@@ -2195,6 +2207,14 @@ static inline struct sk_buff *pskb_copy(struct sk_buff *skb,
 	return __pskb_copy(skb, skb_headroom(skb), gfp_mask);
 }
 
+
+static inline struct sk_buff *pskb_copy_for_clone(struct sk_buff *skb,
+						  gfp_t gfp_mask)
+{
+	return __pskb_copy_fclone(skb, skb_headroom(skb), gfp_mask, true);
+}
+
+
 /**
  *	skb_clone_writable - is the header of a clone writable
  *	@skb: buffer to check
@@ -2490,6 +2510,11 @@ extern int	       skb_shift(struct sk_buff *tgt, struct sk_buff *skb,
 extern struct sk_buff *skb_segment(struct sk_buff *skb,
 				   netdev_features_t features);
 
+static inline int memcpy_from_msg(void *data, struct msghdr *msg, int len)
+{
+	return memcpy_fromiovec(data, msg->msg_iov, len);
+}
+
 unsigned int skb_gso_transport_seglen(const struct sk_buff *skb);
 
 static inline void *skb_header_pointer(const struct sk_buff *skb, int offset,
@@ -2700,6 +2725,18 @@ static inline void nf_conntrack_get(struct nf_conntrack *nfct)
 		atomic_inc(&nfct->use);
 }
 #endif
+#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
+static inline void nf_conntrack_get_reasm(struct sk_buff *skb)
+{
+	if (skb)
+		atomic_inc(&skb->users);
+}
+static inline void nf_conntrack_put_reasm(struct sk_buff *skb)
+{
+	if (skb)
+		kfree_skb(skb);
+}
+#endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 static inline void nf_bridge_put(struct nf_bridge_info *nf_bridge)
 {
@@ -2717,6 +2754,10 @@ static inline void nf_reset(struct sk_buff *skb)
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	nf_conntrack_put(skb->nfct);
 	skb->nfct = NULL;
+#endif
+#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
+	nf_conntrack_put_reasm(skb->nfct_reasm);
+	skb->nfct_reasm = NULL;
 #endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	nf_bridge_put(skb->nf_bridge);
@@ -2739,6 +2780,10 @@ static inline void __nf_copy(struct sk_buff *dst, const struct sk_buff *src)
 	nf_conntrack_get(src->nfct);
 	dst->nfctinfo = src->nfctinfo;
 #endif
+#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
+	dst->nfct_reasm = src->nfct_reasm;
+	nf_conntrack_get_reasm(src->nfct_reasm);
+#endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	dst->nf_bridge  = src->nf_bridge;
 	nf_bridge_get(src->nf_bridge);
@@ -2749,6 +2794,9 @@ static inline void nf_copy(struct sk_buff *dst, const struct sk_buff *src)
 {
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	nf_conntrack_put(dst->nfct);
+#endif
+#ifdef NET_SKBUFF_NF_DEFRAG_NEEDED
+	nf_conntrack_put_reasm(dst->nfct_reasm);
 #endif
 #ifdef CONFIG_BRIDGE_NETFILTER
 	nf_bridge_put(dst->nf_bridge);
@@ -2915,7 +2963,6 @@ static inline bool skb_head_is_locked(const struct sk_buff *skb)
 {
 	return !skb->head_frag || skb_cloned(skb);
 }
-
 /**
  * skb_gso_network_seglen - Return length of individual segments of a gso packet
  *
