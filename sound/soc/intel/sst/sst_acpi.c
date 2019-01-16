@@ -32,7 +32,6 @@
 #include <linux/firmware.h>
 #include <linux/pm_runtime.h>
 #include <linux/pm_qos.h>
-#include <linux/reboot.h>
 #include <asm/platform_byt_audio.h>
 #include <asm/platform_sst.h>
 #include <acpi/acpi_bus.h>
@@ -186,21 +185,14 @@ static const struct sst_lib_dnld_info  byt_lib_dnld_info = {
 	.mod_end            = SST_BYT_IMR_VIRT_END,
 	.mod_table_offset   = BYT_FW_MOD_TABLE_OFFSET,
 	.mod_table_size     = BYT_FW_MOD_TABLE_SIZE,
-	.mod_offset	    = BYT_FW_MOD_OFFSET,
 	.mod_ddr_dnld       = true,
 };
 
 static const struct sst_ipc_info cht_ipc_info = {
 	.use_32bit_ops = false,
 	.ipc_offset = 0,
-	.mbox_recv_off = 0x1000,
+	.mbox_recv_off = 0x400,
 };
-
-static struct sst_platform_debugfs_data byt_debugfs_data = {
-	.checkpoint_offset = 0xc00,
-	.checkpoint_size = 256,
-};
-
 
 struct sst_platform_info cht_platform_data = {
 	.probe_data = &cht_fwparse_info,
@@ -209,7 +201,6 @@ struct sst_platform_info cht_platform_data = {
 	.pdata = NULL,
 	.ipc_info = &cht_ipc_info,
 	.lib_info = NULL,
-	.start_recovery_timer = false,
 };
 
 struct sst_platform_info byt_rvp_platform_data = {
@@ -219,7 +210,6 @@ struct sst_platform_info byt_rvp_platform_data = {
 	.pdata = &sst_byt_pdata,
 	.ipc_info = &byt_ipc_info,
 	.lib_info = &byt_lib_dnld_info,
-	.start_recovery_timer = false,
 };
 
 struct sst_platform_info byt_ffrd8_platform_data = {
@@ -229,8 +219,6 @@ struct sst_platform_info byt_ffrd8_platform_data = {
 	.pdata = &sst_byt_pdata,
 	.ipc_info = &byt_ipc_info,
 	.lib_info = &byt_lib_dnld_info,
-	.start_recovery_timer = false,
-	.debugfs_data = &byt_debugfs_data,
 };
 
 int sst_workqueue_init(struct intel_sst_drv *ctx)
@@ -259,10 +247,14 @@ err_wq:
 
 void sst_init_locks(struct intel_sst_drv *ctx)
 {
+	mutex_init(&ctx->stream_lock);
 	mutex_init(&ctx->sst_lock);
+	mutex_init(&ctx->mixer_ctrl_lock);
+	mutex_init(&ctx->csr_lock);
 	spin_lock_init(&sst_drv_ctx->rx_msg_lock);
 	spin_lock_init(&ctx->ipc_spin_lock);
 	spin_lock_init(&ctx->block_lock);
+	spin_lock_init(&ctx->pvt_id_lock);
 }
 
 int sst_destroy_workqueue(struct intel_sst_drv *ctx)
@@ -272,8 +264,6 @@ int sst_destroy_workqueue(struct intel_sst_drv *ctx)
 		destroy_workqueue(ctx->mad_wq);
 	if (ctx->post_msg_wq)
 		destroy_workqueue(ctx->post_msg_wq);
-	if (ctx->recovery_wq)
-		destroy_workqueue(ctx->recovery_wq);
 	return 0;
 }
 
@@ -494,11 +484,6 @@ static int sst_platform_get_resources(const char *hid,
 	}
 }
 
-static struct notifier_block sst_reboot_notifier_block = {
-	.notifier_call = sst_reboot_callback,
-	.priority = 0,
-};
-
 int sst_acpi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -543,7 +528,6 @@ int sst_acpi_probe(struct platform_device *pdev)
 
 	sst_init_locks(ctx);
 
-	ctx->reboot_notify = 0;
 	ctx->stream_cnt = 0;
 	ctx->fw_in_mem = NULL;
 	ctx->use_dma = 1;
@@ -569,13 +553,6 @@ int sst_acpi_probe(struct platform_device *pdev)
 
 	ctx->use_32bit_ops = ctx->pdata->ipc_info->use_32bit_ops;
 	ctx->mailbox_recv_offset = ctx->pdata->ipc_info->mbox_recv_off;
-	if (ctx->pci_id == SST_CHT_PCI_ID) {
-		ctx->mailbox_size = SST_MAILBOX_SIZE_MOFD;
-		ctx->ipc_mailbox = ctx->ddr + SST_DDR_MAILBOX_BASE;
-	} else {
-		ctx->mailbox_size = SST_MAILBOX_SIZE;
-		ctx->ipc_mailbox = ctx->mailbox;
-	}
 
 	memcpy(&ctx->info, ctx->pdata->probe_data, sizeof(ctx->info));
 
@@ -588,7 +565,6 @@ int sst_acpi_probe(struct platform_device *pdev)
 		struct stream_info *stream = &ctx->streams[i];
 		mutex_init(&stream->lock);
 	}
-	sst_init_lib_mem_mgr(ctx);
 	ret = sst_request_firmware_async(ctx);
 	if (ret) {
 		pr_err("Firmware download failed:%d\n", ret);
@@ -628,16 +604,6 @@ int sst_acpi_probe(struct platform_device *pdev)
 	pm_runtime_enable(dev);
 	register_sst(dev);
 	sst_debugfs_init(ctx);
-	register_reboot_notifier(&sst_reboot_notifier_block);
-
-	if (ctx->pdata->start_recovery_timer) {
-		ret = sst_recovery_init(ctx);
-		if (ret) {
-			pr_err("%s:sst recovery intialization failed", __func__);
-			goto do_free_misc;
-		}
-	}
-
 	sst_set_fw_state_locked(ctx, SST_RESET);
 	sst_save_shim64(ctx, ctx->shim, ctx->shim_regs64);
 	pr_info("%s successfully done!\n", __func__);
@@ -667,11 +633,9 @@ int sst_acpi_remove(struct platform_device *pdev)
 	struct intel_sst_drv *ctx;
 
 	ctx = platform_get_drvdata(pdev);
-	sst_recovery_exit(ctx);
 	sst_debugfs_exit(ctx);
 	pm_runtime_get_noresume(ctx->dev);
 	pm_runtime_disable(ctx->dev);
-	unregister_reboot_notifier(&sst_reboot_notifier_block);
 	unregister_sst(ctx->dev);
 	sst_set_fw_state_locked(ctx, SST_SHUTDOWN);
 	misc_deregister(&lpe_ctrl);

@@ -50,18 +50,6 @@
 #define MAX_FRAGMENT_SIZE (1024 * 1024)
 #define SST_GET_BYTES_PER_SAMPLE(pcm_wd_sz)  (((pcm_wd_sz + 15) >> 4) << 1)
 
-int sst_reboot_callback(struct notifier_block *nfb, unsigned long event, void *data)
-{
-	pr_debug("%s fw state = %x\n", __func__, sst_drv_ctx->sst_state);
-
-	sst_drv_ctx->reboot_notify = 1;
-
-	if (sst_drv_ctx->sst_state == SST_FW_LOADING)
-		mutex_unlock(&sst_drv_ctx->sst_lock);
-
-	return NOTIFY_OK;
-}
-
 void sst_restore_fw_context(void)
 {
 	struct snd_sst_ctxt_params fw_context;
@@ -155,7 +143,7 @@ static int sst_send_algo_param(struct snd_ppp_params *algo_params)
 			 - sizeof(algo_params->params) + algo_params->size;
 	u32 offset = 0;
 
-	if (ipc_msg_size > sst_drv_ctx->mailbox_size)
+	if (ipc_msg_size > SST_MAILBOX_SIZE)
 		return -ENOMEM;
 	if (sst_create_ipc_msg(&msg, true))
 		return -ENOMEM;
@@ -188,7 +176,7 @@ static int sst_send_lpe_mixer_algo_params(void)
 		return retval;
 	}
 
-	mutex_lock(&sst_drv_ctx->sst_lock);
+	mutex_lock(&sst_drv_ctx->mixer_ctrl_lock);
 	input_mixer = (sst_drv_ctx->device_input_mixer)
 				& SST_INPUT_STREAM_MIXED;
 	pr_debug("Input Mixer settings %d", input_mixer);
@@ -202,7 +190,7 @@ static int sst_send_lpe_mixer_algo_params(void)
 	mixer_param.input_stream_bitmap = input_mixer;
 	mixer_param.size = sizeof(input_mixer);
 	algo_param.params = &mixer_param;
-	mutex_unlock(&sst_drv_ctx->sst_lock);
+	mutex_unlock(&sst_drv_ctx->mixer_ctrl_lock);
 	pr_debug("setting pp param\n");
 	pr_debug("Algo ID %d Str id %d Enable %d Size %d\n",
 			algo_param.algo_id, algo_param.str_id,
@@ -391,11 +379,6 @@ int intel_sst_check_device(void)
 
 	pr_debug("In %s\n", __func__);
 
-	if (sst_drv_ctx->reboot_notify) {
-		pr_info("Ignore sst command as device is rebooting\n");
-		return -EAGAIN;
-	}
-
 	pm_runtime_get_sync(sst_drv_ctx->dev);
 	atomic_inc(&sst_drv_ctx->pm_usage_count);
 
@@ -403,13 +386,6 @@ int intel_sst_check_device(void)
 				atomic_read(&sst_drv_ctx->pm_usage_count));
 
 	mutex_lock(&sst_drv_ctx->sst_lock);
-
-	if (sst_drv_ctx->sst_state == SST_RECOVERY) {
-		pr_debug("LPE is in recovery state\n");
-		mutex_unlock(&sst_drv_ctx->sst_lock);
-		sst_pm_runtime_put(sst_drv_ctx);
-		return -EAGAIN;
-	}
 
 	if (sst_drv_ctx->sst_state == SST_RESET) {
 
@@ -717,9 +693,23 @@ static int sst_cdev_codec_caps(struct snd_compr_codec_caps *codec)
 {
 
 	if (codec->codec == SND_AUDIOCODEC_MP3) {
+		codec->num_descriptors = 2;
+		codec->descriptor[0].max_ch = 2;
+		codec->descriptor[0].sample_rates = SNDRV_PCM_RATE_8000_48000;
+		codec->descriptor[0].bit_rate[0] = 320; /* 320kbps */
+		codec->descriptor[0].bit_rate[1] = 192;
+		codec->descriptor[0].num_bitrates = 2;
+		codec->descriptor[0].profiles = 0;
 		codec->descriptor[0].modes = SND_AUDIOCHANMODE_MP3_STEREO;
 		codec->descriptor[0].formats = 0;
 	} else if (codec->codec == SND_AUDIOCODEC_AAC) {
+		codec->num_descriptors = 2;
+		codec->descriptor[1].max_ch = 2;
+		codec->descriptor[1].sample_rates = SNDRV_PCM_RATE_8000_48000;
+		codec->descriptor[1].bit_rate[0] = 320; /* 320kbps */
+		codec->descriptor[1].bit_rate[1] = 192;
+		codec->descriptor[1].num_bitrates = 2;
+		codec->descriptor[1].profiles = 0;
 		codec->descriptor[1].modes = 0;
 		codec->descriptor[1].formats =
 			(SND_AUDIOSTREAMFORMAT_MP4ADTS |
@@ -727,19 +717,6 @@ static int sst_cdev_codec_caps(struct snd_compr_codec_caps *codec)
 	} else {
 		return -EINVAL;
 	}
-
-	codec->num_descriptors = 2;
-	codec->descriptor[1].max_ch = 2;
-	codec->descriptor[0].sample_rates[0] = 48000;
-	codec->descriptor[0].sample_rates[1] = 44100;
-	codec->descriptor[0].sample_rates[2] = 32000;
-	codec->descriptor[0].sample_rates[3] = 16000;
-	codec->descriptor[0].sample_rates[4] = 8000;
-	codec->descriptor[0].num_sample_rates = 5;
-	codec->descriptor[1].bit_rate[0] = 320; /* 320kbps */
-	codec->descriptor[1].bit_rate[1] = 192;
-	codec->descriptor[1].num_bitrates = 2;
-	codec->descriptor[1].profiles = 0;
 
 	return 0;
 }
@@ -1008,12 +985,13 @@ static int sst_set_generic_params(enum sst_controls cmd, void *arg)
 	int ret_val = 0;
 	pr_debug("Enter:%s, cmd:%d\n", __func__, cmd);
 
+	if (NULL == arg)
+		return -EINVAL;
+
 	switch (cmd) {
 	case SST_SET_RUNTIME_PARAMS: {
 		struct snd_sst_runtime_params *src;
 		struct snd_sst_runtime_params *dst;
-		if (NULL == arg)
-			return -EINVAL;
 
 		src = (struct snd_sst_runtime_params *)arg;
 		dst = &(sst_drv_ctx->runtime_param.param);
@@ -1021,20 +999,15 @@ static int sst_set_generic_params(enum sst_controls cmd, void *arg)
 		break;
 		}
 	case SST_SET_ALGO_PARAMS: {
-		unsigned int device_input_mixer;
-		if (NULL == arg)
-			return -EINVAL;
-		device_input_mixer = *((unsigned int *)arg);
+		unsigned int device_input_mixer = *((unsigned int *)arg);
 		pr_debug("LPE mixer algo param set %x\n", device_input_mixer);
-		mutex_lock(&sst_drv_ctx->sst_lock);
+		mutex_lock(&sst_drv_ctx->mixer_ctrl_lock);
 		sst_drv_ctx->device_input_mixer = device_input_mixer;
-		mutex_unlock(&sst_drv_ctx->sst_lock);
+		mutex_unlock(&sst_drv_ctx->mixer_ctrl_lock);
 		ret_val = sst_send_lpe_mixer_algo_params();
 		break;
 	}
 	case SST_SET_BYTE_STREAM: {
-		if (NULL == arg)
-			return -EINVAL;
 		ret_val = intel_sst_check_device();
 		if (ret_val)
 			return ret_val;
@@ -1045,8 +1018,6 @@ static int sst_set_generic_params(enum sst_controls cmd, void *arg)
 	}
 	case SST_GET_PROBE_BYTE_STREAM: {
 		struct snd_sst_probe_bytes *prb_bytes = (struct snd_sst_probe_bytes *)arg;
-		if (NULL == arg)
-			return -EINVAL;
 
 		if (sst_drv_ctx->probe_bytes) {
 			prb_bytes->len = sst_drv_ctx->probe_bytes->len;
@@ -1056,8 +1027,6 @@ static int sst_set_generic_params(enum sst_controls cmd, void *arg)
 	}
 	case SST_SET_PROBE_BYTE_STREAM: {
 		struct snd_sst_probe_bytes *prb_bytes = (struct snd_sst_probe_bytes *)arg;
-		if (NULL == arg)
-			return -EINVAL;
 
 		if (sst_drv_ctx->probe_bytes) {
 			sst_drv_ctx->probe_bytes->len = prb_bytes->len;
@@ -1080,17 +1049,6 @@ static int sst_set_generic_params(enum sst_controls cmd, void *arg)
 		if (ret_val)
 			pr_err("vtsv data send failed\n");
 		sst_pm_runtime_put(sst_drv_ctx);
-		break;
-	}
-	case SST_SET_VTSV_LIBS: {
-		struct snd_sst_vtsv_path *vtsv_path = (struct snd_sst_vtsv_path *)arg;
-		memcpy(sst_drv_ctx->vtsv_path.bytes, vtsv_path->bytes, vtsv_path->len);
-		ret_val = sst_cache_vtsv_libs(sst_drv_ctx);
-		break;
-	}
-	case SST_SET_MONITOR_LPE: {
-		if (sst_drv_ctx->pdata->start_recovery_timer)
-			ret_val = sst_set_timer(&sst_drv_ctx->monitor_lpe, *(bool *)arg);
 		break;
 	}
 	default:
@@ -1125,18 +1083,7 @@ static struct sst_device sst_dsp_device = {
 	.dev = NULL,
 	.ops = &pcm_ops,
 	.compr_ops = &compr_ops,
-	.cb_ops	   = NULL,
 };
-
-int sst_platform_cb(struct sst_platform_cb_params *cb_params)
-{
-	if (sst_dsp_device.cb_ops && sst_dsp_device.cb_ops->async_cb) {
-		return sst_dsp_device.cb_ops->async_cb(cb_params);
-	} else {
-		pr_info("Async ops not defined\n");
-		return 0;
-	}
-}
 
 /*
  * register_sst - function to register DSP

@@ -30,7 +30,6 @@
 #include <linux/async.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
-#include <asm/intel_scu_pmic.h>
 #include <asm/intel_mid_rpmsg.h>
 #include <asm/platform_mrfld_audio.h>
 #include <asm/intel_sst_mrfld.h>
@@ -45,6 +44,31 @@
 #include <linux/mfd/wm8994/registers.h>
 #include <linux/mfd/wm8994/pdata.h>
 #include "../../codecs/wm8994.h"
+
+#include <linux/i2c.h>
+
+#define I2C_ADAPTER 0x01
+#define I2C_ADDRESS_LEFT 0x34
+#define I2C_ADDRESS_RIGHT 0x35
+
+static struct i2c_board_info tfa9890_board_info_left = {
+	I2C_BOARD_INFO("tfa9890_i2c_left", I2C_ADDRESS_LEFT)
+};
+
+static struct i2c_board_info tfa9890_board_info_right = {
+	I2C_BOARD_INFO("tfa9890_i2c_right", I2C_ADDRESS_RIGHT)
+};
+
+static struct i2c_client *i2c_client_left;
+static struct i2c_client *i2c_client_right;
+
+static void tfa9890_register(void)
+{
+	struct i2c_adapter *adapter;
+	adapter = i2c_get_adapter(I2C_ADAPTER);
+	i2c_client_left = i2c_new_device(adapter, &tfa9890_board_info_left);
+	i2c_client_right = i2c_new_device(adapter, &tfa9890_board_info_right);
+}
 
 /* Codec PLL output clk rate */
 #define CODEC_SYSCLK_RATE			24576000
@@ -64,11 +88,26 @@
 struct mrfld_8958_mc_private {
 	struct snd_soc_jack jack;
 	int jack_retry;
-	u8 pmic_id;
 	void __iomem    *osc_clk0_reg;
 	int spk_gpio;
+	/* External amplifier */
+	int ext_amp_init;
+	int ext_amp_reset_gpio;
 };
 
+/* TODO: find better way of doing this */
+static struct snd_soc_dai *find_codec_dai(struct snd_soc_card *card, const char *dai_name)
+{
+	int i;
+	for (i = 0; i < card->num_rtd; i++) {
+			if (!strcmp(card->rtd[i].codec_dai->name, dai_name))
+					return card->rtd[i].codec_dai;
+	}
+	pr_err("%s: unable to find codec dai\n", __func__);
+	/* this should never occur */
+	WARN_ON(1);
+	return NULL;
+}
 
 /* set_osc_clk0-	enable/disables the osc clock0
  * addr:		address of the register to write to
@@ -118,49 +157,41 @@ static inline struct snd_soc_codec *mrfld_8958_get_codec(struct snd_soc_card *ca
  * card	: Sound card structure
  * src	: Input clock source to codec
  */
-static int mrfld_8958_set_codec_clk(struct snd_soc_card *card, int src)
+static int mrfld_8958_set_codec_clk(struct snd_soc_card *card, int src, const char *codec_dai_name)
 {
-	struct snd_soc_dai *aif1_dai = card->rtd[0].codec_dai;
+	struct snd_soc_dai *aif_dai = NULL;
 	int ret;
 
-	switch (src) {
-	case CODEC_IN_MCLK1:
-		/* Turn ON the PLL to generate required sysclk rate
-		 * from MCLK1 */
-		ret = snd_soc_dai_set_pll(aif1_dai,
-			WM8994_FLL1, WM8994_FLL_SRC_MCLK1,
-			CODEC_IN_MCLK1_RATE, CODEC_SYSCLK_RATE);
-		if (ret < 0) {
-			pr_err("Failed to start FLL: %d\n", ret);
-			return ret;
-		}
-		/* Switch to MCLK1 input */
-		ret = snd_soc_dai_set_sysclk(aif1_dai, WM8994_SYSCLK_FLL1,
-				CODEC_SYSCLK_RATE, SND_SOC_CLOCK_IN);
-		if (ret < 0) {
-			pr_err("Failed to set codec sysclk configuration %d\n",
-				 ret);
-			return ret;
-		}
-		break;
-	case CODEC_IN_MCLK2:
-		/* Switch to MCLK2 */
-		ret = snd_soc_dai_set_sysclk(aif1_dai, WM8994_SYSCLK_MCLK2,
-				32768, SND_SOC_CLOCK_IN);
-		if (ret < 0) {
-			pr_err("Failed to switch to MCLK2: %d", ret);
-			return ret;
-		}
-		/* Turn off PLL for MCLK1 */
-		ret = snd_soc_dai_set_pll(aif1_dai, WM8994_FLL1, 0, 0, 0);
-		if (ret < 0) {
-			pr_err("Failed to stop the FLL: %d", ret);
-			return ret;
-		}
-		break;
-	default:
+	pr_debug("%s called", __func__);
+
+	/* Assume card->rtd[0] = AIF1 by default */
+	if (codec_dai_name) {
+		aif_dai = find_codec_dai(card, codec_dai_name);
+	} else {
+		aif_dai = card->rtd[0].codec_dai;
+	}
+	if(!aif_dai){
+		pr_err("Failed to aif_dai\n");
 		return -EINVAL;
 	}
+
+	/* Turn ON the PLL to generate required sysclk rate
+	 * from MCLK1 */
+	ret = snd_soc_dai_set_pll(aif_dai,
+				  WM8994_FLL1, WM8994_FLL_SRC_MCLK1,
+				  CODEC_IN_MCLK1_RATE, CODEC_SYSCLK_RATE);
+	if (ret < 0) {
+		pr_err("Failed to start FLL: %d\n", ret);
+		return ret;
+	}
+	/* Switch to MCLK1 input */
+	ret = snd_soc_dai_set_sysclk(aif_dai, WM8994_SYSCLK_FLL1,
+				     CODEC_SYSCLK_RATE, SND_SOC_CLOCK_IN);
+	if (ret < 0) {
+		pr_err("Failed to set codec sysclk configuration %d\n", ret);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -171,29 +202,54 @@ static int mrfld_wm8958_set_clk_fmt(struct snd_soc_dai *codec_dai)
 	struct snd_soc_card *card = codec_dai->card;
 	struct mrfld_8958_mc_private *ctx = snd_soc_card_get_drvdata(card);
 
+	pr_debug("%s called", __func__);
+
 	/* Enable the osc clock at start so that it gets settling time */
 	set_soc_osc_clk0(ctx->osc_clk0_reg, true);
 
-	ret = snd_soc_dai_set_tdm_slot(codec_dai, 0, 0, 4, SNDRV_PCM_FORMAT_S24_LE);
-	if (ret < 0) {
-		pr_err("can't set codec pcm format %d\n", ret);
-		return ret;
-	}
+	if (codec_dai->id == 1) {
+		/* Set TDM slot available only on AIF 1 */
+		ret = snd_soc_dai_set_tdm_slot(codec_dai, 0, 0, 4, SNDRV_PCM_FORMAT_S24_LE);
+		if (ret < 0) {
+			pr_err("can't set codec pcm format %d\n", ret);
+			return ret;
+		}
 
-	/* WM8958 slave Mode */
-	fmt =   SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_IB_NF
-		| SND_SOC_DAIFMT_CBS_CFS;
-	ret = snd_soc_dai_set_fmt(codec_dai, fmt);
-	if (ret < 0) {
-		pr_err("can't set codec DAI configuration %d\n", ret);
-		return ret;
-	}
+		/* WM8958 Slave Mode */
+		fmt =   SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_IB_NF
+			| SND_SOC_DAIFMT_CBS_CFS;
+		ret = snd_soc_dai_set_fmt(codec_dai, fmt);
+		if (ret < 0) {
+			pr_err("can't set codec DAI 1 configuration %d\n", ret);
+			return ret;
+		}
 
-	/* FIXME: move this to SYS_CLOCK event handler when codec driver
-	 * dependency is clean.
-	 */
-	/* Switch to 19.2MHz MCLK1 input clock for codec */
-	ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1);
+		/* FIXME: move this to SYS_CLOCK event handler when codec driver
+		 * dependency is clean.
+		 */
+		/* Switch to 19.2MHz MCLK1 input clock for codec */
+		ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1, "wm8994-aif1");
+
+	} else if (codec_dai->id == 2) {
+		pr_debug("setting I2S to master mode in AIF2");
+		/* WM8958 Master I2S Mode */
+		fmt = SND_SOC_DAIFMT_CBM_CFM | SND_SOC_DAIFMT_I2S
+			| SND_SOC_DAIFMT_NB_NF;
+		ret = snd_soc_dai_set_fmt(codec_dai, fmt);
+		if (ret < 0) {
+			pr_err("can't set codec DAI 2 format %d\n", ret);
+			return ret;
+		}
+		/* Switch to 19.2MHz MCLK1 input clock for codec */
+		ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1, "wm8994-aif2");
+		if (ret < 0) {
+			pr_err("can't set codec DAI 2 clock %d\n", ret);
+			return ret;
+		}
+
+	} else {
+		return -EINVAL;
+	}
 
 	return ret;
 }
@@ -207,6 +263,23 @@ static int mrfld_8958_hw_params(struct snd_pcm_substream *substream,
 	return mrfld_wm8958_set_clk_fmt(codec_dai);
 }
 
+static int mrfld_8958_hw_params_ext_amp(struct snd_pcm_substream *substream,
+			   struct snd_pcm_hw_params *params)
+{
+	int ret = 0;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+
+	pr_debug("%s called", __func__);
+
+	ret = mrfld_wm8958_set_clk_fmt(codec_dai);
+	if (ret < 0) {
+		pr_err("can't set codec clk format %d\n", ret);
+		return ret;
+	}
+	return ret;
+}
+
 static int mrfld_wm8958_compr_set_params(struct snd_compr_stream *cstream)
 {
 	struct snd_soc_pcm_runtime *rtd = cstream->private_data;
@@ -214,6 +287,7 @@ static int mrfld_wm8958_compr_set_params(struct snd_compr_stream *cstream)
 
 	return mrfld_wm8958_set_clk_fmt(codec_dai);
 }
+
 static int mrfld_8958_set_bias_level(struct snd_soc_card *card,
 		struct snd_soc_dapm_context *dapm,
 		enum snd_soc_bias_level level)
@@ -226,7 +300,6 @@ static int mrfld_8958_set_bias_level(struct snd_soc_card *card,
 	switch (level) {
 	case SND_SOC_BIAS_PREPARE:
 		if (card->dapm.bias_level == SND_SOC_BIAS_STANDBY)
-
 			ret = mrfld_wm8958_set_clk_fmt(aif1_dai);
 		break;
 	default:
@@ -252,7 +325,7 @@ static int mrfld_8958_set_bias_level_post(struct snd_soc_card *card,
 		/* We are in stabdba down so */
 		/* Switch to 32KHz MCLK2 input clock for codec
 		 */
-		ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK2);
+		ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK2, "wm8994-aif1");
 		/* Turn off 19.2MHz soc osc clock */
 		set_soc_osc_clk0(ctx->osc_clk0_reg, false);
 		break;
@@ -276,59 +349,136 @@ static int mrfld_8958_set_spk_boost(struct snd_soc_dapm_widget *w,
 	pr_debug("%s: ON? %d\n", __func__, SND_SOC_DAPM_EVENT_ON(event));
 
 	if (SND_SOC_DAPM_EVENT_ON(event))
-		gpio_set_value((unsigned)ctx->spk_gpio, 0);
-	else if (SND_SOC_DAPM_EVENT_OFF(event))
 		gpio_set_value((unsigned)ctx->spk_gpio, 1);
+	else if (SND_SOC_DAPM_EVENT_OFF(event))
+		gpio_set_value((unsigned)ctx->spk_gpio, 0);
 
 	return ret;
 }
-#define PMIC_ID_ADDR		0x00
-#define PMIC_CHIP_ID_A0_VAL	0xC0
 
-static int mrfld_8958_set_vflex_vsel(struct snd_soc_dapm_widget *w,
-				struct snd_kcontrol *k, int event)
+static int wm8958_ext_amp_cal_get(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
 {
-#define VFLEXCNT		0xAB
-#define VFLEXVSEL_5V		0x01
-#define VFLEXVSEL_B0_VSYS_PT	0x80	/* B0: Vsys pass-through */
-#define VFLEXVSEL_A0_4P5V	0x41	/* A0: 4.5V */
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct mrfld_8958_mc_private *ctx =
+			snd_soc_card_get_drvdata(codec->card);
 
-	struct snd_soc_dapm_context *dapm = w->dapm;
-	struct snd_soc_card *card = dapm->card;
+	pr_debug("%s: ctx->ext_amp_init=%d\n", __func__, ctx->ext_amp_init);
+	ucontrol->value.enumerated.item[0] = ctx->ext_amp_init;
+
+	return 0;
+}
+
+static int wm8958_ext_amp_cal_set(struct snd_kcontrol *kcontrol,
+				  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct mrfld_8958_mc_private *ctx =
+		snd_soc_card_get_drvdata(codec->card);
+
+	int value = ucontrol->value.enumerated.item[0];
+	pr_debug("%s: ctx->ext_amp_init=%d, new value=%d\n", __func__,
+		 ctx->ext_amp_init, value);
+
+	if (value < 0 || value > 1)
+		return -EINVAL;
+	else
+		ctx->ext_amp_init = value;
+
+	return 0;
+}
+
+static int ext_amp_clock_control(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *k, int event)
+{
+	struct snd_soc_card *card = w->dapm->card;
+	int ret;
+
+	pr_debug("In %s\n", __func__);
+
+	if (SND_SOC_DAPM_EVENT_ON(event)) {
+		pr_debug("Enabling AIF2 Clock\n");
+		ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1, "wm8994-aif2");
+
+#ifdef DEBUG_TFA_STATUS
+		short data;
+		i2c_master_send(i2c_client_left, "\x00", 1);
+		i2c_master_recv(i2c_client_left, (char *) &data, 2);
+		pr_debug("SND_SOC_DAPM_EVENT_ON: TFA LEFT: %x", data);
+		i2c_master_send(i2c_client_right, "\x00", 1);
+		i2c_master_recv(i2c_client_right, (char *) &data, 2);
+		pr_debug("SND_SOC_DAPM_EVENT_ON: TFA RIGHT: %x", data);
+#endif
+
+		return ret;
+	} else { /* SND_SOC_DAPM_EVENT_OFF */
+
+#ifdef DEBUG_TFA_STATUS
+		short data;
+		i2c_master_send(i2c_client_left, "\x00", 1);
+		i2c_master_recv(i2c_client_left, (char *) &data, 2);
+		pr_debug("SND_SOC_DAPM_EVENT_OFF: TFA LEFT: %x", data);
+		i2c_master_send(i2c_client_right, "\x00", 1);
+		i2c_master_recv(i2c_client_right, (char *) &data, 2);
+		pr_debug("SND_SOC_DAPM_EVENT_OFF: TFA RIGHT: %x", data);
+#endif
+
+		pr_debug("Muting TFA9890s\n");
+		/* AMPE -> 0 */
+		if (i2c_master_send(i2c_client_left, "\x09\x82\x74", 3) != 3)
+			pr_err("i2c_client_left: failed to set AMPE to 0");
+		if (i2c_master_send(i2c_client_right, "\x09\x82\x74", 3) != 3)
+			pr_err("i2c_client_right: failed to set AMPE to 0");
+
+		/* Soft mute sleep */
+		msleep(100);
+
+		pr_debug("Switching off TFA9890s\n");
+		/* PWDN => 1 */
+		if (i2c_master_send(i2c_client_left, "\x09\x82\x75", 3) != 3)
+			pr_err("i2c_client_left: failed to set PWDN  1");
+		if (i2c_master_send(i2c_client_right, "\x09\x82\x75", 3) != 3)
+			pr_err("i2c_client_right: failed to set PWDN  to 1");
+
+		/* Sleep to accommodate for processing time (possibly unnecessary) */
+		usleep_range(5 * USEC_PER_MSEC, 5 * USEC_PER_MSEC);
+
+		pr_debug("AIF2 path disabled\n");
+		return 0;
+	}
+}
+
+static int ext_amp_i2s_clk_control(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *k, int event)
+{
+	struct snd_soc_card *card = w->dapm->card;
 	struct mrfld_8958_mc_private *ctx = snd_soc_card_get_drvdata(card);
 
-	u8 vflexvsel, pmic_id = ctx->pmic_id;
-	int retval = 0;
+	if (ctx->ext_amp_init == 1) {
+		pr_debug("Powering up TFA9890s\n");
 
-	pr_debug("%s: ON? %d\n", __func__, SND_SOC_DAPM_EVENT_ON(event));
+		/* PWDN => 0 and AMPE => 1 */
+		if (i2c_master_send(i2c_client_left, "\x09\x82\x7c", 3) != 3)
+			pr_err("i2c_client_left: failed to set AMPE to 1 and PWDN => 0");
+		if (i2c_master_send(i2c_client_right, "\x09\x82\x7c", 3) != 3)
+			pr_err("i2c_client_right: failed to set AMPE to 1 and PWDN => 0");
+	} else {
+		pr_debug("Not Powering up TFA9890s - pending amplifier init\n");
+	}
 
-	vflexvsel = (pmic_id == PMIC_CHIP_ID_A0_VAL) ? VFLEXVSEL_A0_4P5V : VFLEXVSEL_B0_VSYS_PT;
-	pr_debug("pmic_id %#x vflexvsel %#x\n", pmic_id,
-		SND_SOC_DAPM_EVENT_ON(event) ? VFLEXVSEL_5V : vflexvsel);
-
-	/*FIXME: seems to be issue with bypass mode in MOOR, for now
-		force the bias off volate as VFLEXVSEL_5V */
-	if ((INTEL_MID_BOARD(1, PHONE, MOFD)) ||
-			(INTEL_MID_BOARD(1, TABLET, MOFD)))
-		vflexvsel = VFLEXVSEL_5V;
-
-	if (SND_SOC_DAPM_EVENT_ON(event))
-		retval = intel_scu_ipc_iowrite8(VFLEXCNT, VFLEXVSEL_5V);
-	else if (SND_SOC_DAPM_EVENT_OFF(event))
-		retval = intel_scu_ipc_iowrite8(VFLEXCNT, vflexvsel);
-	if (retval)
-		pr_err("Error writing to VFLEXCNT register\n");
-
-	return retval;
+	return 0;
 }
 
 static const struct snd_soc_dapm_widget widgets[] = {
 	SND_SOC_DAPM_HP("Headphones", NULL),
 	SND_SOC_DAPM_MIC("AMIC", NULL),
 	SND_SOC_DAPM_MIC("DMIC", NULL),
-	SND_SOC_DAPM_SUPPLY("VFLEXCNT", SND_SOC_NOPM, 0, 0,
-			mrfld_8958_set_vflex_vsel,
-			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_SUPPLY("EXT_AMP_CONTROL", SND_SOC_NOPM, 0, 0,
+			ext_amp_clock_control,
+			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_PRE_PMD),
+	SND_SOC_DAPM_POST_SUPPLY("EXT_AMP_I2S_CONTROL", SND_SOC_NOPM, 0, 0,
+			ext_amp_i2s_clk_control,
+			SND_SOC_DAPM_POST_PMU),
 };
 static const struct snd_soc_dapm_widget spk_boost_widget[] = {
 	/* DAPM route is added only for Moorefield */
@@ -337,7 +487,43 @@ static const struct snd_soc_dapm_widget spk_boost_widget[] = {
 			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
+static const struct snd_kcontrol_new wm8958_ext_amp_controls[] = {
+	SOC_SINGLE_BOOL_EXT("External Amplifiers Initialized", 0,
+			    wm8958_ext_amp_cal_get, wm8958_ext_amp_cal_set),
+};
+
 static const struct snd_soc_dapm_route map[] = {
+	{ "Headphones", NULL, "HPOUT1L" },
+	{ "Headphones", NULL, "HPOUT1R" },
+
+	/* saltbay uses 2 DMICs, other configs may use more so change below
+	 * accordingly
+	 */
+	{ "DMIC", NULL, "MICBIAS1" },
+	{ "DMIC1DAT", NULL, "DMIC" },
+	{ "DMIC2DAT", NULL, "DMIC" },
+	/*{ "DMIC3DAT", NULL, "DMIC" },*/
+	/*{ "DMIC4DAT", NULL, "DMIC" },*/
+
+	/* MICBIAS2 is connected as Bias for AMIC so we link it
+	 * here. Also AMIC wires up to IN1LP pin.
+	 * DMIC is externally connected to 1.8V rail, so no link rqd.
+	 */
+	{ "AMIC", NULL, "MICBIAS2" },
+	{ "IN1LP", NULL, "AMIC" },
+
+	/* SWM map link the SWM outs to codec AIF */
+	{ "AIF1DAC1L", NULL, "Codec OUT0"  },
+	{ "AIF1DAC1R", NULL, "Codec OUT0"  },
+	{ "AIF1DAC2L", NULL, "Codec OUT1"  },
+	{ "AIF1DAC2R", NULL, "Codec OUT1"  },
+	{ "Codec IN0", NULL, "AIF1ADC1L" },
+	{ "Codec IN0", NULL, "AIF1ADC1R" },
+	{ "Codec IN1", NULL, "AIF1ADC1L" },
+	{ "Codec IN1", NULL, "AIF1ADC1R" },
+};
+
+static const struct snd_soc_dapm_route map_bb[] = {
 	{ "Headphones", NULL, "HPOUT1L" },
 	{ "Headphones", NULL, "HPOUT1R" },
 
@@ -365,16 +551,10 @@ static const struct snd_soc_dapm_route map[] = {
 	{ "Codec IN0", NULL, "AIF1ADC1R" },
 	{ "Codec IN1", NULL, "AIF1ADC1L" },
 	{ "Codec IN1", NULL, "AIF1ADC1R" },
-
-	{ "AIF1DAC1L", NULL, "VFLEXCNT" },
-	{ "AIF1DAC1R", NULL, "VFLEXCNT" },
-	{ "AIF1DAC2L", NULL, "VFLEXCNT" },
-	{ "AIF1DAC2R", NULL, "VFLEXCNT" },
-
-	{ "AIF1ADC1L", NULL, "VFLEXCNT" },
-	{ "AIF1ADC1R", NULL, "VFLEXCNT" },
-
+	{ "AIF2 Capture", NULL, "EXT_AMP_CONTROL" },
+	{ "AIF2CLK", NULL, "EXT_AMP_I2S_CONTROL" },
 };
+
 static const struct snd_soc_dapm_route mofd_spk_boost_map[] = {
 	{"SPKOUTLP", NULL, "SPK_BOOST"},
 	{"SPKOUTLN", NULL, "SPK_BOOST"},
@@ -504,6 +684,19 @@ static int mrfld_8958_init(struct snd_soc_pcm_runtime *runtime)
 
 	pr_debug("Entry %s\n", __func__);
 
+	/* External amplifier initialization */
+	ctx->ext_amp_init = 0;
+	snd_soc_add_codec_controls(codec, wm8958_ext_amp_controls,
+				   ARRAY_SIZE(wm8958_ext_amp_controls));
+	tfa9890_register();
+
+	/* Add missing codec pointer to card dapm context, which will be initialized
+	 * to all widgets defined in this file */
+	card->dapm.codec = codec;
+
+	ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1, "wm8994-aif1");
+	ret = mrfld_8958_set_codec_clk(card, CODEC_IN_MCLK1, "wm8994-aif2");
+
 	ret = snd_soc_dai_set_tdm_slot(aif1_dai, 0, 0, 4, SNDRV_PCM_FORMAT_S24_LE);
 	if (ret < 0) {
 		pr_err("can't set codec pcm format %d\n", ret);
@@ -625,6 +818,21 @@ static struct snd_soc_compr_ops mrfld_compr_ops = {
 	.set_params = mrfld_wm8958_compr_set_params,
 };
 
+static struct snd_soc_ops mrfld_8958_ext_amp_ops = {
+	.hw_params = mrfld_8958_hw_params_ext_amp,
+};
+
+static const struct snd_soc_pcm_stream mrfld_wm8958_ext_amp_params = {
+	/* .stream_name = "UNSPECIFIED" */
+	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	.rate_min = 48000,
+	.rate_max = 48000,
+	.channels_min = 2,
+	.channels_max = 2,
+	.rates = SNDRV_PCM_RATE_48000,
+	.sig_bits = 16,
+};
+
 struct snd_soc_dai_link mrfld_8958_msic_dailink[] = {
 	[MERR_SALTBAY_AUDIO] = {
 		.name = "Merrifield Audio Port",
@@ -697,6 +905,20 @@ struct snd_soc_dai_link mrfld_8958_msic_dailink[] = {
 		.platform_name = "sst-platform",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
+	},
+	/* CODEC<->CODEC links */
+	{
+		.name = "Audio AIF1-to-AIF2 Loop",
+		.stream_name = "NXP External Amplifiers",
+		.cpu_dai_name = "snd-soc-dummy-dai",
+		.platform_name = "snd-soc-dummy",
+		.codec_dai_name = "wm8994-aif2",
+		.codec_name = "wm8994-codec",
+		.dai_fmt = SND_SOC_DAIFMT_CBM_CFM | SND_SOC_DAIFMT_I2S
+						| SND_SOC_DAIFMT_NB_NF,
+		.params = &mrfld_wm8958_ext_amp_params,
+		.ops = &mrfld_8958_ext_amp_ops,
+		.dsp_loopback = false,
 	},
 };
 
@@ -783,7 +1005,7 @@ static int snd_mrfld_8958_config_gpio(struct platform_device *pdev,
 		/* Set GPIO as output and init it with high value. So
 		 * spk boost is disable by default */
 		ret = devm_gpio_request_one(&pdev->dev, (unsigned)drv->spk_gpio,
-				GPIOF_INIT_HIGH, "spk_boost");
+				GPIOF_INIT_LOW, "spk_boost");
 		if (ret) {
 			pr_err("GPIO request failed\n");
 			return ret;
@@ -810,6 +1032,23 @@ static int snd_mrfld_8958_mc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	drv->spk_gpio = mrfld_audio_pdata->spk_gpio;
+	drv->ext_amp_reset_gpio = get_gpio_by_name("audiocodec_rst");
+	if (drv->ext_amp_reset_gpio < 0) {
+		pr_info("audiocodec_rst not found in the SFI table.");
+	} else {
+		if (gpio_request(drv->ext_amp_reset_gpio, "snd_mrfld_8958")) {
+			pr_err("req audiocodec_rst failed.");
+		} else {
+			if (gpio_direction_output(drv->ext_amp_reset_gpio, 1))
+				pr_err("Failed to set ext_amp_reset_gpio high");
+			usleep_range(10,10);
+			if (gpio_direction_output(drv->ext_amp_reset_gpio, 0))
+				pr_err("Failed to set ext_amp_reset_gpio low");
+			gpio_free(drv->ext_amp_reset_gpio);
+			pr_debug("Reset TFA9890s succesfull");
+		}
+	}
+
 	ret_val = snd_mrfld_8958_config_gpio(pdev, drv);
 	if (ret_val) {
 		pr_err("GPIO configuration failed\n");
@@ -825,10 +1064,11 @@ static int snd_mrfld_8958_mc_probe(struct platform_device *pdev)
 		goto unalloc;
 	}
 
-	ret_val = intel_scu_ipc_ioread8(PMIC_ID_ADDR, &drv->pmic_id);
-	if (ret_val) {
-		pr_err("Error reading PMIC ID register\n");
-		goto unalloc;
+	if (SPID_PRODUCT_ID(INTEL, MOFD, TABLET, BB, PRO) ||
+	   SPID_PRODUCT_ID(INTEL, MOFD, TABLET, BB, ENG)) {
+		pr_debug("Selecting BB specific dapm route map\n");
+		snd_soc_card_mrfld.dapm_routes = map_bb;
+		snd_soc_card_mrfld.num_dapm_routes = ARRAY_SIZE(map_bb);
 	}
 
 	/* register the soc card */
@@ -861,6 +1101,27 @@ static int snd_mrfld_8958_mc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static void snd_mrfld_8958_mc_shutdown(struct platform_device *pdev)
+{
+	struct device dev = pdev->dev;
+	struct snd_soc_card *soc_card = platform_get_drvdata(pdev);
+	struct mrfld_8958_mc_private *drv = snd_soc_card_get_drvdata(soc_card);
+
+	pr_debug("In %s\n", __func__);
+	if (drv->ext_amp_reset_gpio >= 0) {
+		if (gpio_request(drv->ext_amp_reset_gpio, "snd_mrfld_8958")) {
+			pr_err("req audiocodec_rst failed.");
+		} else {
+			if (gpio_direction_output(drv->ext_amp_reset_gpio, 1))
+				pr_err("Failed to set ext_amp_reset_gpio high");
+			gpio_free(drv->ext_amp_reset_gpio);
+			pr_debug("Reset TFA9890s succesfull");
+		}
+	}
+
+	snd_mrfld_8958_poweroff(&dev);
+}
+
 const struct dev_pm_ops snd_mrfld_8958_mc_pm_ops = {
 	.prepare = snd_mrfld_8958_prepare,
 	.complete = snd_mrfld_8958_complete,
@@ -875,6 +1136,7 @@ static struct platform_driver snd_mrfld_8958_mc_driver = {
 	},
 	.probe = snd_mrfld_8958_mc_probe,
 	.remove = snd_mrfld_8958_mc_remove,
+	.shutdown = snd_mrfld_8958_mc_shutdown,
 };
 
 static int snd_mrfld_8958_driver_init(void)

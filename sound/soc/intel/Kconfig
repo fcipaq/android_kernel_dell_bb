@@ -44,26 +44,6 @@ config SND_YUKKABEACH_MACHINE
           Say Y if you have such a device
           If unsure select "N".
 
-config SND_BTNS_MACHINE
-	tristate "SOC Machine Audio driver for Intel BTNS MID platform"
-		depends on INTEL_SCU_IPC && X86
-		select SND_SOC_LM49453
-		select SND_SOC_LARGO
-		select SND_SOC_WM_ADSP_LARGO
-		select MFD_CORE
-		select MFD_ARIZONA_LARGO_SPI
-		select SND_SST_PLATFORM
-		select SND_SST_MACHINE
-		select SND_INTEL_SST
-		select SND_EFFECTS_OFFLOAD
-		default n
-		help
-			This adds support for ASoC machine driver for Intel(R) MID Merrifield platform
-			used as alsa device in audio substem in Intel(R) MID devices
-			Say Y if you have such a device
-			If unsure select "N".
-
-
 config SND_MRFLD_MACHINE
 	tristate "SOC Machine Audio driver for Intel Merrifield MID platform"
 	depends on INTEL_SCU_IPC && X86
@@ -86,23 +66,14 @@ config SND_MRFLD_MACHINE
 config SND_MOOR_MACHINE
 	tristate "SOC Machine Audio driver for Intel Moorefield MID platform"
 	depends on INTEL_SCU_IPC && X86
-	select SND_SOC_RT5647
 	select SND_SOC_WM8994
 	select MFD_CORE
 	select MFD_WM8994
 	select REGULATOR_WM8994
-	select SND_SOC_FLORIDA
-	select SND_SOC_WM_ADSP
-	select SND_SOC_ARIZONA
-	select MFD_ARIZONA
-	select MFD_FLORIDA
-	select REGULATOR_ARIZONA
-	select GPIO_ARIZONA
 	select SND_SST_PLATFORM
 	select SND_SST_MACHINE
 	select SND_INTEL_SST
 	select SND_EFFECTS_OFFLOAD
-	select ARCH_HAS_OPP
 	default n
 	help
 	  This adds support for ASoC machine driver for Intel(R) MID Moorefield platform
@@ -130,7 +101,6 @@ config SND_BYT_MACHINE
 config SND_CHT_MACHINE
 	tristate "SOC Machine Audio driver for Intel Cherrytrail MID platform"
 	select SND_SOC_RT5672
-	select SND_SOC_TLV320AIC31XX
 	select SND_SST_PLATFORM
 	select SND_SST_MACHINE
 	select SND_INTEL_SST
@@ -153,25 +123,6 @@ config SND_CTP_MACHINE
 	select SND_INTEL_SST
 	select SND_COMPRESS_OFFLOAD
 	select SND_SOC_COMMS_SSP
-	default n
-	help
-          This adds support for ASoC machine driver for Intel(R) MID Cloverview platform
-	  used as alsa device in audio substem in Intel(R) MID devices
-          Say Y if you have such a device
-          If unsure select "N".
-
-config SND_CTP_MACHINE_5671
-	tristate "SOC Machine Audio driver for Intel Cloverview MID platform with ALC5671 codec"
-	depends on INTEL_SCU_IPC_UTIL && X86 && GPIO_LANGWELL
-	select SND_SOC_RT5671
-	select MFD_CORE
-	select SND_SST_PLATFORM
-	select SND_SST_MACHINE
-	select SND_INTEL_SST
-	select SND_COMPRESS_SST
-	select SND_COMPRESS_OFFLOAD
-	select SND_SOC_COMMS_SSP
-	depends on PF450CL
 	default n
 	help
           This adds support for ASoC machine driver for Intel(R) MID Cloverview platform

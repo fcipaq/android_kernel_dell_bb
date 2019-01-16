@@ -210,9 +210,6 @@ static int wm_hubs_read_dc_servo(struct snd_soc_codec *codec,
 	case 2:
 		dcs_reg = WM8994_DC_SERVO_4E;
 		break;
-	case 1:
-		dcs_reg = WM8994_DC_SERVO_READBACK;
-		break;
 	default:
 		dcs_reg = WM8993_DC_SERVO_3;
 		break;
@@ -286,6 +283,7 @@ static void enable_dc_servo(struct snd_soc_codec *codec)
 		wait_for_dc_servo(codec,
 				  WM8993_DCS_TRIG_STARTUP_0 |
 				  WM8993_DCS_TRIG_STARTUP_1);
+		msleep(160);
 	}
 
 	if (wm_hubs_read_dc_servo(codec, &reg_l, &reg_r) < 0)
@@ -576,17 +574,19 @@ static int hp_event(struct snd_soc_dapm_widget *w,
 				    WM8993_HPOUT1L_OUTP |
 				    WM8993_HPOUT1R_OUTP |
 				    WM8993_HPOUT1L_RMV_SHORT |
-				    WM8993_HPOUT1R_RMV_SHORT, 0);
-
-		snd_soc_update_bits(codec, WM8993_ANALOGUE_HP_0,
+				    WM8993_HPOUT1R_RMV_SHORT |
 				    WM8993_HPOUT1L_DLY |
 				    WM8993_HPOUT1R_DLY, 0);
-
+		usleep_range(2000, 2100); /* 2msec */
 		snd_soc_write(codec, WM8993_DC_SERVO_0, 0);
-
+		usleep_range(2000, 2100); /* 2msec */
 		snd_soc_update_bits(codec, WM8993_POWER_MANAGEMENT_1,
 				    WM8993_HPOUT1L_ENA | WM8993_HPOUT1R_ENA,
 				    0);
+		usleep_range(2000, 2100); /* 2msec */
+		snd_soc_update_bits(codec, WM8993_CHARGE_PUMP_1,
+					WM8993_CP_ENA, 0);
+		usleep_range(5000, 5100); /* 5msec */
 		break;
 	}
 

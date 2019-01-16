@@ -1,7 +1,7 @@
 /*
- *  atom_controls.h - Intel MID Platform driver header file
+ *  controls_v2.h - Intel MID Platform driver header file
  *
- *  Copyright (C) 2014 Intel Corp
+ *  Copyright (C) 2013 Intel Corp
  *  Author: Ramesh Babu <ramesh.babu.koul@intel.com>
  *  Author: Omair M Abdullah <omair.m.abdullah@intel.com>
  *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -15,12 +15,16 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *
  */
 
-#ifndef __ATOM_CONTROLS_H__
-#define __ATOM_CONTROLS_H__
+#ifndef __SST_CONTROLS_V2_H__
+#define __SST_CONTROLS_V2_H__
 
 /*
  * This section defines the map for the mixer widgets.
@@ -55,14 +59,8 @@
 #define SST_MIX_VAD		SST_MIX(17)
 #define SST_MIX_FM		SST_MIX(18)
 
-#define SST_MIX_PCM3            SST_MIX(19)
-#define SST_MIX_PCM4            SST_MIX(20)
-#define SST_MIX_HF_SNS_3	SST_MIX(21)
-#define SST_MIX_HF_SNS_4	SST_MIX(22)
-#define SST_MIX_LL_PCM0		SST_MIX(23)
-
-#define SST_MIX_MEDIA0          SST_MIX(24)
-#define SST_MIX_MEDIA1          SST_MIX(25)
+#define SST_MIX_MEDIA0		SST_MIX(19)
+#define SST_MIX_MEDIA1		SST_MIX(20)
 
 #define SST_NUM_MIX		(SST_MIX_MEDIA1 + 1)
 
@@ -77,7 +75,7 @@
 
 #define SST_BT_FM_MUX_SHIFT	0
 #define SST_VOICE_MODE_SHIFT	1
-#define SST_BT_MODE_SHIFT	3
+#define SST_BT_MODE_SHIFT	2
 
 /* in each mixer register we will define one bit for each input */
 #define SST_MIX_IP(x)		(x)
@@ -99,11 +97,10 @@
 #define SST_IP_PCM1		SST_MIX_IP(14)
 #define SST_IP_LOW_PCM0		SST_MIX_IP(15)
 #define SST_IP_FM		SST_MIX_IP(16)
-#define SST_IP_PCM2		SST_MIX_IP(17)
-#define SST_IP_MEDIA0           SST_MIX_IP(18)
-#define SST_IP_MEDIA1           SST_MIX_IP(19)
-#define SST_IP_MEDIA2           SST_MIX_IP(20)
-#define SST_IP_MEDIA3           SST_MIX_IP(21)
+#define SST_IP_MEDIA0		SST_MIX_IP(17)
+#define SST_IP_MEDIA1		SST_MIX_IP(18)
+#define SST_IP_MEDIA2		SST_MIX_IP(19)
+#define SST_IP_MEDIA3		SST_MIX_IP(20)
 
 #define SST_IP_LAST		SST_IP_MEDIA3
 
@@ -143,31 +140,24 @@ enum sst_path_index {
 	SST_PATH_INDEX_PCM0_OUT                 = (0x0D << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_PCM1_OUT                 = (0x0E << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_PCM2_OUT                 = (0x0F << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PCM3_OUT                 = (0x10 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PCM4_OUT                 = (0x11 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_AWARE_OUT                = (0x12 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_VAD_OUT                  = (0x13 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_AWARE_OUT                = (0x10 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_VAD_OUT                  = (0x11 << SST_PATH_ID_SHIFT),
 
-	SST_PATH_INDEX_MEDIA0_OUT               = (0x14 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_MEDIA1_OUT               = (0x15 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_MEDIA2_OUT		= (0x16 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_MEDIA3_OUT		= (0x17 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_MEDIA0_OUT               = (0x12 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_MEDIA1_OUT               = (0x13 << SST_PATH_ID_SHIFT),
 
-	SST_PATH_INDEX_FM_OUT                   = (0x18 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_FM_OUT                   = (0x14 << SST_PATH_ID_SHIFT),
 
-	SST_PATH_INDEX_PROBE1_PIPE_OUT		= (0x19 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE2_PIPE_OUT		= (0x1A << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE3_PIPE_OUT		= (0x1B << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE4_PIPE_OUT		= (0x1C << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE5_PIPE_OUT		= (0x1D << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE6_PIPE_OUT		= (0x1E << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE7_PIPE_OUT		= (0x1F << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PROBE8_PIPE_OUT		= (0x20 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE1_PIPE_OUT		= (0x15 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE2_PIPE_OUT		= (0x16 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE3_PIPE_OUT		= (0x17 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE4_PIPE_OUT		= (0x18 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE5_PIPE_OUT		= (0x19 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE6_PIPE_OUT		= (0x1A << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE7_PIPE_OUT		= (0x1B << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_PROBE8_PIPE_OUT		= (0x1C << SST_PATH_ID_SHIFT),
 
-	SST_PATH_INDEX_SIDETONE_OUT		= (0x21 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_HF_SNS_3_OUT		= (0x23 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_HF_SNS_4_OUT		= (0x24 << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_LOW_PCM0_OUT		= (0x25 << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_SIDETONE_OUT		= (0x1D << SST_PATH_ID_SHIFT),
 
 	/* Start of input paths */
 	SST_PATH_INDEX_MODEM_IN                 = (0x80 << SST_PATH_ID_SHIFT),
@@ -190,7 +180,6 @@ enum sst_path_index {
 
 	SST_PATH_INDEX_PCM0_IN                  = (0x8D << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_PCM1_IN                  = (0x8E << SST_PATH_ID_SHIFT),
-	SST_PATH_INDEX_PCM2_IN                  = (0x9E << SST_PATH_ID_SHIFT),
 
 	SST_PATH_INDEX_MEDIA0_IN                = (0x8F << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_MEDIA1_IN                = (0x90 << SST_PATH_ID_SHIFT),
@@ -207,7 +196,7 @@ enum sst_path_index {
 	SST_PATH_INDEX_PROBE7_PIPE_IN           = (0x99 << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_PROBE8_PIPE_IN           = (0x9A << SST_PATH_ID_SHIFT),
 
-	SST_PATH_INDEX_MEDIA3_IN                = (0x9C << SST_PATH_ID_SHIFT),
+	SST_PATH_INDEX_MEDIA3_IN		= (0x9C << SST_PATH_ID_SHIFT),
 	SST_PATH_INDEX_LOW_PCM0_IN		= (0x9D << SST_PATH_ID_SHIFT),
 
 	SST_PATH_INDEX_RESERVED                 = (0xFF << SST_PATH_ID_SHIFT),
@@ -232,12 +221,11 @@ enum sst_swm_inputs {
 	SST_SWM_IN_VOIP		= (SST_PATH_INDEX_VOIP_IN	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_IN_PCM0		= (SST_PATH_INDEX_PCM0_IN	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_IN_PCM1		= (SST_PATH_INDEX_PCM1_IN	  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_IN_PCM2		= (SST_PATH_INDEX_PCM2_IN	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_IN_MEDIA0	= (SST_PATH_INDEX_MEDIA0_IN	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_IN_MEDIA1	= (SST_PATH_INDEX_MEDIA1_IN	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_IN_MEDIA2	= (SST_PATH_INDEX_MEDIA2_IN	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_IN_FM		= (SST_PATH_INDEX_FM_IN		  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_IN_MEDIA3       = (SST_PATH_INDEX_MEDIA3_IN       | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
+	SST_SWM_IN_MEDIA3	= (SST_PATH_INDEX_MEDIA3_IN	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_IN_LOW_PCM0	= (SST_PATH_INDEX_LOW_PCM0_IN	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_IN_END		= (SST_PATH_INDEX_RESERVED	  | SST_DEFAULT_CELL_NBR)
 };
@@ -255,8 +243,6 @@ enum sst_swm_outputs {
 	SST_SWM_OUT_MEDIA_LOOP2	= (SST_PATH_INDEX_MEDIA_LOOP2_OUT | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_PROBE	= (SST_PATH_INDEX_PROBE_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_HF_SNS	= (SST_PATH_INDEX_HF_SNS_OUT	  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_OUT_HF_SNS_3	= (SST_PATH_INDEX_HF_SNS_3_OUT	  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_OUT_HF_SNS_4	= (SST_PATH_INDEX_HF_SNS_4_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_HF		= (SST_PATH_INDEX_HF_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_SPEECH	= (SST_PATH_INDEX_SPEECH_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_RXSPEECH	= (SST_PATH_INDEX_RX_SPEECH_OUT	  | SST_DEFAULT_CELL_NBR),
@@ -264,14 +250,11 @@ enum sst_swm_outputs {
 	SST_SWM_OUT_PCM0	= (SST_PATH_INDEX_PCM0_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_PCM1	= (SST_PATH_INDEX_PCM1_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_PCM2	= (SST_PATH_INDEX_PCM2_OUT	  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_OUT_PCM3        = (SST_PATH_INDEX_PCM3_OUT        | SST_DEFAULT_CELL_NBR),
-	SST_SWM_OUT_PCM4        = (SST_PATH_INDEX_PCM4_OUT        | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_AWARE	= (SST_PATH_INDEX_AWARE_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_VAD		= (SST_PATH_INDEX_VAD_OUT	  | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_MEDIA0	= (SST_PATH_INDEX_MEDIA0_OUT	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_OUT_MEDIA1	= (SST_PATH_INDEX_MEDIA1_OUT	  | SST_DEFAULT_CELL_NBR), /* Part of Media Mixer */
 	SST_SWM_OUT_FM		= (SST_PATH_INDEX_FM_OUT	  | SST_DEFAULT_CELL_NBR),
-	SST_SWM_OUT_LOW_PCM0    = (SST_PATH_INDEX_LOW_PCM0_OUT    | SST_DEFAULT_CELL_NBR),
 	SST_SWM_OUT_END		= (SST_PATH_INDEX_RESERVED	  | SST_DEFAULT_CELL_NBR),
 };
 
@@ -434,14 +417,10 @@ enum sst_module_id {
 	SST_MODULE_ID_NLF		  = 0x009B,
 	SST_MODULE_ID_TNR		  = 0x009C,
 	SST_MODULE_ID_WNR		  = 0x009D,
-	SST_MODULE_ID_MEDIA_BMF		  = 0x009E,
-	SST_MODULE_ID_MEDIA_WNR		  = 0x009F,
-	SST_MODULE_ID_MEDIA_AGC		  = 0x00A2,
 
 	SST_MODULE_ID_LOG		  = 0xFF00,
-	SST_MODULE_ID_VOICE_DL		  = 0x00A0,
-	SST_MODULE_ID_VOICE_UL		  = 0x00A1,
-	SST_MODULE_ID_TASK		  = 0xFFFF
+
+	SST_MODULE_ID_TASK		  = 0xFFFF,
 };
 
 enum sst_cmd {
@@ -460,9 +439,7 @@ enum sst_cmd {
 	FBA_VB_AEC		= 47,
 	FBA_VB_NR_UL		= 48,
 	FBA_VB_AGC		= 49,
-	MMX_SET_BMF		= 50,
 	FBA_VB_WNR		= 52,
-	MMX_SET_WNR		= 52,
 	FBA_VB_SLV		= 53,
 	FBA_VB_NR_DL		= 55,
 	SBA_PROBE		= 66,
@@ -488,7 +465,6 @@ enum sst_cmd {
 	SBA_SET_MEDIA_PATH	= 119,
 	MMX_SET_MEDIA_PATH	= 119,
 	FBA_VB_TNR_UL		= 119,
-	MMX_SET_AGC		= 120,
 	FBA_VB_TNR_DL		= 121,
 	FBA_VB_NLF		= 125,
 	SBA_VB_LPRO		= 126,
@@ -497,20 +473,281 @@ enum sst_cmd {
 	SBA_VB_SET_IIR          = 129,
 	SBA_SET_SSP_SLOT_MAP	= 130,
 	AWARE_ENV_CLASS_PARAMS	= 130,
-	FBA_VB_ALGO_LOCK	= 132,
 	VAD_ENV_CLASS_PARAMS	= 2049,
 };
 
-/*  In the FBA Uplink module, up to 4 FIR/IIR can be used.
- *  They are not really module, but more 4 submodules of
- *  the FBA uplink module. Bit 11/12 of COMMAND ID are
- *  used for FIR/IIR Cell ID selection.
-*/
-enum fba_fir_iir_cell_id {
-	FBA_FIR_IIR_CELL_ID_0 = (0x0000 << 11),
-	FBA_FIR_IIR_CELL_ID_1 = (0x0001 << 11),
-	FBA_FIR_IIR_CELL_ID_2 = (0x0002 << 11),
-	FBA_FIR_IIR_CELL_ID_3 = (0x0003 << 11),
-
+enum sst_dsp_switch {
+	SST_SWITCH_OFF = 0,
+	SST_SWITCH_ON = 3,
 };
-#endif /* __ATOM_CONTROLS_H__ */
+
+enum sst_path_switch {
+	SST_PATH_OFF = 0,
+	SST_PATH_ON = 1,
+};
+
+enum sst_swm_state {
+	SST_SWM_OFF = 0,
+	SST_SWM_ON = 3,
+};
+
+#define SST_FILL_LOCATION_IDS(dst, cell_idx, pipe_id)		do {	\
+		dst.location_id.p.cell_nbr_idx = (cell_idx);		\
+		dst.location_id.p.path_id = (pipe_id);			\
+	} while (0)
+#define SST_FILL_LOCATION_ID(dst, loc_id)				(\
+	dst.location_id.f = (loc_id))
+#define SST_FILL_MODULE_ID(dst, mod_id)					(\
+	dst.module_id = (mod_id))
+
+#define SST_FILL_DESTINATION1(dst, id)				do {	\
+		SST_FILL_LOCATION_ID(dst, (id) & 0xFFFF);		\
+		SST_FILL_MODULE_ID(dst, ((id) & 0xFFFF0000) >> 16);	\
+	} while (0)
+#define SST_FILL_DESTINATION2(dst, loc_id, mod_id)		do {	\
+		SST_FILL_LOCATION_ID(dst, loc_id);			\
+		SST_FILL_MODULE_ID(dst, mod_id);			\
+	} while (0)
+#define SST_FILL_DESTINATION3(dst, cell_idx, path_id, mod_id)	do {	\
+		SST_FILL_LOCATION_IDS(dst, cell_idx, path_id);		\
+		SST_FILL_MODULE_ID(dst, mod_id);			\
+	} while (0)
+
+#define SST_FILL_DESTINATION(level, dst, ...)				\
+	SST_FILL_DESTINATION##level(dst, __VA_ARGS__)
+#define SST_FILL_DEFAULT_DESTINATION(dst)				\
+	SST_FILL_DESTINATION(2, dst, SST_DEFAULT_LOCATION_ID, SST_DEFAULT_MODULE_ID)
+
+struct sst_destination_id {
+	union sst_location_id {
+		struct {
+			u8 cell_nbr_idx;	/* module index */
+			u8 path_id;		/* pipe_id */
+		} __packed	p;		/* part */
+		u16		f;		/* full */
+	} __packed location_id;
+	u16	   module_id;
+} __packed;
+
+struct sst_dsp_header {
+	struct sst_destination_id dst;
+	u16 command_id;
+	u16 length;
+} __packed;
+
+/*
+ *
+ * Common Commands
+ *
+ */
+struct sst_cmd_generic {
+	struct sst_dsp_header header;
+} __packed;
+
+struct swm_input_ids {
+	struct sst_destination_id input_id;
+} __packed;
+
+struct sst_cmd_set_swm {
+	struct sst_dsp_header header;
+	struct sst_destination_id output_id;
+	u16    switch_state;
+	u16    nb_inputs;
+	struct swm_input_ids input[SST_CMD_SWM_MAX_INPUTS];
+} __packed;
+
+struct sst_cmd_set_media_path {
+	struct sst_dsp_header header;
+	u16    switch_state;
+} __packed;
+
+struct pcm_cfg {
+		u8 s_length:2;
+		u8 rate:3;
+		u8 format:3;
+} __packed;
+
+struct sst_cmd_set_speech_path {
+	struct sst_dsp_header header;
+	u16    switch_state;
+	struct {
+		u16 rsvd:8;
+		struct pcm_cfg cfg;
+	} config;
+} __packed;
+
+struct gain_cell {
+	struct sst_destination_id dest;
+	s16 cell_gain_left;
+	s16 cell_gain_right;
+	u16 gain_time_constant;
+} __packed;
+
+#define NUM_GAIN_CELLS 1
+struct sst_cmd_set_gain_dual {
+	struct sst_dsp_header header;
+	u16    gain_cell_num;
+	struct gain_cell cell_gains[NUM_GAIN_CELLS];
+} __packed;
+
+struct sst_cmd_set_params {
+	struct sst_destination_id dst;
+	u16 command_id;
+	char params[0];
+} __packed;
+
+/*
+ *
+ * Media (MMX) commands
+ *
+ */
+
+/*
+ *
+ * SBA commands
+ *
+ */
+struct sst_cmd_sba_vb_start {
+	struct sst_dsp_header header;
+} __packed;
+
+union sba_media_loop_params {
+	struct {
+		u16 rsvd:8;
+		struct pcm_cfg cfg;
+	} part;
+	u16 full;
+} __packed;
+
+struct sst_cmd_sba_set_media_loop_map {
+	struct	sst_dsp_header header;
+	u16	switch_state;
+	union	sba_media_loop_params param;
+	u16	map;
+} __packed;
+
+struct sst_cmd_tone_stop {
+	struct	sst_dsp_header header;
+	u16	switch_state;
+} __packed;
+
+enum sst_ssp_mode {
+	SSP_MODE_MASTER = 0,
+	SSP_MODE_SLAVE = 1,
+};
+
+enum sst_ssp_pcm_mode {
+	SSP_PCM_MODE_NORMAL = 0,
+	SSP_PCM_MODE_NETWORK = 1,
+};
+
+enum sst_ssp_duplex {
+	SSP_DUPLEX = 0,
+	SSP_RX = 1,
+	SSP_TX = 2,
+};
+
+enum sst_ssp_fs_frequency {
+	SSP_FS_8_KHZ = 0,
+	SSP_FS_16_KHZ = 1,
+	SSP_FS_44_1_KHZ = 2,
+	SSP_FS_48_KHZ = 3,
+};
+
+enum sst_ssp_fs_polarity {
+	SSP_FS_ACTIVE_LOW = 0,
+	SSP_FS_ACTIVE_HIGH = 1,
+};
+
+enum sst_ssp_protocol {
+	SSP_MODE_PCM = 0,
+	SSP_MODE_I2S = 1,
+};
+
+enum sst_ssp_port_id {
+	SSP_MODEM = 0,
+	SSP_BT = 1,
+	SSP_FM = 2,
+	SSP_CODEC = 3,
+};
+
+struct sst_cmd_sba_hw_set_ssp {
+	struct sst_dsp_header header;
+	u16 selection;			/* 0:SSP0(def), 1:SSP1, 2:SSP2 */
+
+	u16 switch_state;
+
+	u16 nb_bits_per_slots:6;        /* 0-32 bits, 24 (def) */
+	u16 nb_slots:4;			/* 0-8: slots per frame  */
+	u16 mode:3;			/* 0:Master, 1: Slave  */
+	u16 duplex:3;
+
+	u16 active_tx_slot_map:8;       /* Bit map, 0:off, 1:on */
+	u16 reserved1:8;
+
+	u16 active_rx_slot_map:8;       /* Bit map 0: Off, 1:On */
+	u16 reserved2:8;
+
+	u16 frame_sync_frequency;
+
+	u16 frame_sync_polarity:8;
+	u16 data_polarity:8;
+
+	u16 frame_sync_width;           /* 1 to N clocks */
+	u16 ssp_protocol:8;
+	u16 start_delay:8;		/* Start delay in terms of clock ticks */
+} __packed;
+
+#define SST_MAX_TDM_SLOTS 8
+
+struct sst_param_sba_ssp_slot_map {
+	struct sst_dsp_header header;
+
+	u16 param_id;
+	u16 param_len;
+	u16 ssp_index;
+
+	u8 rx_slot_map[SST_MAX_TDM_SLOTS];
+	u8 tx_slot_map[SST_MAX_TDM_SLOTS];
+} __packed;
+
+enum {
+	SST_PROBE_EXTRACTOR = 0,
+	SST_PROBE_INJECTOR = 1,
+};
+
+struct sst_cmd_probe {
+	struct sst_dsp_header header;
+
+	u16 switch_state;
+	struct sst_destination_id probe_dst;
+
+	u16 shared_mem:1;
+	u16 probe_in:1;
+	u16 probe_out:1;
+	u16 rsvd_1:13;
+
+	u16 rsvd_2:5;
+	u16 probe_mode:2;
+	u16 rsvd_3:1;
+	struct pcm_cfg cfg;
+
+	u16 sm_buf_id;
+
+	u16 gain[6];
+	u16 rsvd_4[9];
+} __packed;
+
+struct sst_probe_config {
+	const char *name;
+	u16 loc_id;
+	u16 mod_id;
+	u8 task_id;
+	struct pcm_cfg cfg;
+};
+
+int sst_mix_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
+int sst_mix_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
+int sst_vtsv_enroll_set(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
+int sst_vtsv_enroll_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
+#endif

@@ -83,18 +83,18 @@ void memcpy32_toio(void *dst, const void *src, int count)
  * intel_sst_reset_dsp_medfield - Resetting SST DSP
  *
  * This resets DSP in case of Medfield platfroms
- * All CSR operations should be in the context of
- * sst_lock
  */
 int intel_sst_reset_dsp_mfld(void)
 {
 	union config_status_reg csr;
 
-	pr_debug("Resetting the DSP in medfield\n");
+	pr_info("Resetting the DSP in medfield\n");
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.full |= 0x382;
 	csr.part.run_stall = 0x1;
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 
 	return 0;
 }
@@ -108,6 +108,7 @@ int sst_start_mfld(void)
 {
 	union config_status_reg csr;
 
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.part.bypass = 0;
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
@@ -117,9 +118,10 @@ int sst_start_mfld(void)
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.part.run_stall = 0;
 	csr.part.sst_reset = 0;
-	pr_debug("Starting the DSP_medfld %x\n", csr.full);
+	pr_info("Starting the DSP_medfld %x\n", csr.full);
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
-	pr_debug("Starting the DSP_medfld\n");
+	pr_info("Starting the DSP_medfld\n");
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 
 	return 0;
 }
@@ -132,22 +134,24 @@ int intel_sst_reset_dsp_mrfld(void)
 {
 	union config_status_reg_mrfld csr;
 
-	pr_debug("sst: Resetting the DSP in mrfld\n");
+	pr_info("sst: Resetting the DSP in mrfld\n");
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
 
-	pr_debug("value:0x%llx\n", csr.full);
+	pr_info("value:0x%llx\n", csr.full);
 
 	csr.full |= 0x7;
 	sst_shim_write64(sst_drv_ctx->shim, SST_CSR, csr.full);
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
 
-	pr_debug("value:0x%llx\n", csr.full);
+	pr_info("value:0x%llx\n", csr.full);
 
 	csr.full &= ~(0x1);
 	sst_shim_write64(sst_drv_ctx->shim, SST_CSR, csr.full);
 
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
-	pr_debug("value:0x%llx\n", csr.full);
+	pr_info("value:0x%llx\n", csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 	return 0;
 }
 
@@ -160,22 +164,24 @@ int sst_start_mrfld(void)
 {
 	union config_status_reg_mrfld csr;
 
-	pr_debug("sst: Starting the DSP in mrfld LALALALA\n");
+	pr_info("sst: Starting the DSP in mrfld LALALALA\n");
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
-	pr_debug("value:0x%llx\n", csr.full);
+	pr_info("value:0x%llx\n", csr.full);
 
 	csr.full |= 0x7;
 	sst_shim_write64(sst_drv_ctx->shim, SST_CSR, csr.full);
 
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
-	pr_debug("value:0x%llx\n", csr.full);
+	pr_info("value:0x%llx\n", csr.full);
 
 	csr.part.xt_snoop = 1;
 	csr.full &= ~(0x5);
 	sst_shim_write64(sst_drv_ctx->shim, SST_CSR, csr.full);
 
 	csr.full = sst_shim_read64(sst_drv_ctx->shim, SST_CSR);
-	pr_debug("sst: Starting the DSP_merrifield:%llx\n", csr.full);
+	pr_info("sst: Starting the DSP_merrifield:%llx\n", csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 	return 0;
 }
 
@@ -183,19 +189,20 @@ int sst_start_mrfld(void)
  * intel_sst_set_bypass - Sets/clears the bypass bits
  *
  * This sets/clears the bypass bits
- * CSR register updates should be in context of sst_lock
  */
 void intel_sst_set_bypass_mfld(bool set)
 {
 	union config_status_reg csr;
 
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	if (set == true)
 		csr.full |= 0x380;
 	else
 		csr.part.bypass = 0;
-	pr_debug("SetupByPass set %d Val 0x%x\n", set, csr.full);
+	pr_info("SetupByPass set %d Val 0x%x\n", set, csr.full);
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 
 }
 #define SST_CALC_DMA_DSTN(lpe_viewpt_rqd, ia_viewpt_addr, elf_paddr, \
@@ -274,7 +281,7 @@ static void sst_fill_info(struct intel_sst_drv *sst,
 
 	info->lpe_viewpt_rqd = sst->info.lpe_viewpt_rqd;
 	info->dma_max_len = sst->info.dma_max_len;
-	pr_debug("%s: dma_max_len 0x%x", __func__, info->dma_max_len);
+	pr_info("%s: dma_max_len 0x%x", __func__, info->dma_max_len);
 }
 
 static inline int sst_validate_elf(const struct firmware *sst_bin, bool dynamic)
@@ -283,13 +290,13 @@ static inline int sst_validate_elf(const struct firmware *sst_bin, bool dynamic)
 
 	BUG_ON(!sst_bin);
 
-	pr_debug("IN %s\n", __func__);
+	pr_info("IN %s\n", __func__);
 
 	elf = (Elf32_Ehdr *)sst_bin->data;
 
 	if ((elf->e_ident[0] != 0x7F) || (elf->e_ident[1] != 'E') ||
 	    (elf->e_ident[2] != 'L') || (elf->e_ident[3] != 'F')) {
-		pr_debug("ELF Header Not found!%zu\n", sst_bin->size);
+		pr_info("ELF Header Not found!%zu\n", sst_bin->size);
 		return -EINVAL;
 	}
 
@@ -299,7 +306,7 @@ static inline int sst_validate_elf(const struct firmware *sst_bin, bool dynamic)
 			return -EINVAL;
 		}
 	}
-	pr_debug("Valid ELF Header...%zu\n", sst_bin->size);
+	pr_info("Valid ELF Header...%zu\n", sst_bin->size);
 	return 0;
 }
 
@@ -317,11 +324,11 @@ static int sst_validate_fw_image(const void *sst_fw_in_mem, unsigned long size,
 {
 	struct fw_header *header;
 
-	pr_debug("%s\n", __func__);
+	pr_info("%s\n", __func__);
 
 	/* Read the header information from the data pointer */
 	header = (struct fw_header *)sst_fw_in_mem;
-	pr_debug("header sign=%s size=%x modules=%x fmt=%x size=%zx\n",
+	pr_info("header sign=%s size=%x modules=%x fmt=%x size=%zx\n",
 			header->signature, header->file_size, header->modules,
 			header->file_format, sizeof(*header));
 
@@ -365,8 +372,8 @@ static int sst_validate_library(const struct firmware *fw_lib,
 	}
 	module = (void *)fw_lib->data + sizeof(*header);
 	*entry_point = module->entry_point;
-	pr_debug("Module entry point 0x%x\n", *entry_point);
-	pr_debug("Module Sign %s, Size 0x%x, Blocks 0x%x Type 0x%x\n",
+	pr_info("Module entry point 0x%x\n", *entry_point);
+	pr_info("Module Sign %s, Size 0x%x, Blocks 0x%x Type 0x%x\n",
 			module->signature, module->mod_size,
 			module->blocks, module->type);
 
@@ -391,9 +398,9 @@ static int sst_validate_library(const struct firmware *fw_lib,
 		err = -EINVAL;
 		goto exit;
 	} else
-		pr_debug("Library is safe for download...\n");
+		pr_info("Library is safe for download...\n");
 
-	pr_debug("iram 0x%x, dram 0x%x, iram 0x%x, dram 0x%x\n",
+	pr_info("iram 0x%x, dram 0x%x, iram 0x%x, dram 0x%x\n",
 			isize, dsize, slot->iram_size, slot->dram_size);
 exit:
 	return err;
@@ -417,7 +424,7 @@ sst_get_elf_sg_len(struct intel_sst_drv *sst, Elf32_Ehdr *elf, Elf32_Phdr *pr,
 {
 	unsigned int i = 0, count = 0;
 
-	pr_debug("in %s: dma_max_len 0x%x\n", __func__, info.dma_max_len);
+	pr_info("in %s: dma_max_len 0x%x\n", __func__, info.dma_max_len);
 
 	while (i < elf->e_phnum) {
 		if (pr[i].p_type == PT_LOAD) {
@@ -450,7 +457,7 @@ sst_get_elf_sg_len(struct intel_sst_drv *sst, Elf32_Ehdr *elf, Elf32_Phdr *pr,
 		i++;
 	}
 
-	pr_debug("gotcha count %d\n", count);
+	pr_info("gotcha count %d\n", count);
 	return count;
 }
 
@@ -484,7 +491,7 @@ static int sst_alloc_dma_chan(struct sst_dma *dma)
 	struct pci_dev *dmac = NULL;
 	const char *hid;
 
-	pr_debug("%s\n", __func__);
+	pr_info("%s\n", __func__);
 	dma->dev = NULL;
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_MEMCPY, mask);
@@ -544,7 +551,7 @@ static int sst_alloc_dma_chan(struct sst_dma *dma)
 static void sst_dma_transfer_complete(void *arg)
 {
 	sst_drv_ctx  = (struct intel_sst_drv *)arg;
-	pr_debug(" sst_dma_transfer_complete\n");
+	pr_info(" sst_dma_transfer_complete\n");
 	sst_wake_up_block(sst_drv_ctx, 0, FW_DWNL_ID, FW_DWNL_ID, NULL, 0);
 }
 
@@ -574,7 +581,7 @@ static int sst_dma_firmware(struct sst_dma *dma, struct sst_sg_list *sg_list)
 	enum dma_ctrl_flags flag = DMA_CTRL_ACK;
 	struct scatterlist *sg_src_list, *sg_dst_list;
 	int length;
-	pr_debug("%s: use_lli %d\n", __func__, sst_drv_ctx->use_lli);
+	pr_info("%s: use_lli %d\n", __func__, sst_drv_ctx->use_lli);
 
 	sg_src_list = sg_list->src;
 	sg_dst_list = sg_list->dst;
@@ -606,9 +613,7 @@ static int sst_dma_firmware(struct sst_dma *dma, struct sst_sg_list *sg_list)
 
 		/* dma single block mode */
 		for_each_sg(sg_src_list, sg, length, i) {
-			if ((sg == NULL) || (sg_dst_list == NULL))
-				return -EINVAL;
-			pr_debug("dma desc %d, length %d\n", i, sg->length);
+			pr_info("dma desc %d, length %d\n", i, sg->length);
 			src_addr = sg_phys(sg);
 			dstn_addr = sg_phys(sg_dst_list);
 			if (sg_dst_list)
@@ -620,6 +625,7 @@ static int sst_dma_firmware(struct sst_dma *dma, struct sst_sg_list *sg_list)
 			retval = sst_dma_wait_for_completion(sst_drv_ctx);
 			if (retval)
 				pr_err("sst_dma_firmware..timeout!\n");
+
 		}
 	}
 
@@ -649,7 +655,7 @@ static int sst_fill_sglist(unsigned long from, unsigned long to,
 	int len = 0;
 	unsigned long dstn, src;
 
-	pr_debug("%s entry", __func__);
+	pr_info("%s entry", __func__);
 	if (!sg_src || !sg_dstn)
 		return -EINVAL;
 
@@ -660,14 +666,14 @@ static int sst_fill_sglist(unsigned long from, unsigned long to,
 		/* split blocks to dma_max_len */
 
 		len = block_size - offset;
-		pr_debug("DMA blk src %lx,dstn %lx,len %d,offset %d, size %d\n",
+		pr_info("DMA blk src %lx,dstn %lx,len %d,offset %d, size %d\n",
 			src, dstn, len, offset, block_size);
 		if (len > dma_max_len) {
-			pr_debug("block size exceeds %d\n", dma_max_len);
+			pr_info("block size exceeds %d\n", dma_max_len);
 			len = dma_max_len;
 			offset += len;
 		} else {
-			pr_debug("Node length less that %d\n", dma_max_len);
+			pr_info("Node length less that %d\n", dma_max_len);
 			offset = 0;
 		}
 
@@ -728,7 +734,7 @@ sst_parse_elf_fw_dma(struct intel_sst_drv *sst, const void *fw_in_mem,
 
 	elf = (Elf32_Ehdr *)fw_in_mem;
 	pr = (Elf32_Phdr *) (fw_in_mem + elf->e_phoff);
-	pr_debug("%s entry\n", __func__);
+	pr_info("%s entry\n", __func__);
 
 	sst_fill_info(sst, &info);
 
@@ -790,10 +796,10 @@ static int sst_parse_module_dma(struct intel_sst_drv *sst_ctx,
 	int retval, sg_len = 0;
 	struct scatterlist *sg_src, *sg_dst;
 
-	pr_debug("module sign %s size %x blocks %x type %x\n",
+	pr_info("module sign %s size %x blocks %x type %x\n",
 			module->signature, module->mod_size,
 			module->blocks, module->type);
-	pr_debug("module entrypoint 0x%x\n", module->entry_point);
+	pr_info("module entrypoint 0x%x\n", module->entry_point);
 
 	block = (void *)module + sizeof(*module);
 
@@ -903,7 +909,7 @@ static int sst_parse_fw_dma(const void *sst_fw_in_mem, unsigned long size,
 
 static void sst_dma_free_resources(struct sst_dma *dma)
 {
-	pr_debug("entry:%s\n", __func__);
+	pr_info("entry:%s\n", __func__);
 
 	dma_release_channel(dma->ch);
 }
@@ -1012,7 +1018,7 @@ sst_parse_elf_fw_memcpy(struct intel_sst_drv *sst, const void *fw_in_mem,
 
 	elf = (Elf32_Ehdr *)fw_in_mem;
 	pr = (Elf32_Phdr *) (fw_in_mem + elf->e_phoff);
-	pr_debug("%s entry\n", __func__);
+	pr_info("%s entry\n", __func__);
 
 	sst_fill_info(sst, &info);
 
@@ -1041,10 +1047,10 @@ static int sst_parse_module_memcpy(struct fw_module_header *module,
 	int ret_val = 0;
 	void __iomem *ram_iomem;
 
-	pr_debug("module sign %s size %x blocks %x type %x\n",
+	pr_info("module sign %s size %x blocks %x type %x\n",
 			module->signature, module->mod_size,
 			module->blocks, module->type);
-	pr_debug("module entrypoint 0x%x\n", module->entry_point);
+	pr_info("module entrypoint 0x%x\n", module->entry_point);
 
 	block = (void *)module + sizeof(*module);
 
@@ -1139,7 +1145,7 @@ static void sst_memcpy_free_lib_resources(void)
 {
 	struct sst_memcpy_list *listnode, *tmplistnode;
 
-	pr_debug("entry:%s\n", __func__);
+	pr_info("entry:%s\n", __func__);
 
 	/*Free the list*/
 	if (!list_empty(&sst_drv_ctx->libmemcpy_list)) {
@@ -1155,7 +1161,7 @@ void sst_memcpy_free_resources(void)
 {
 	struct sst_memcpy_list *listnode, *tmplistnode;
 
-	pr_debug("entry:%s\n", __func__);
+	pr_info("entry:%s\n", __func__);
 
 	/*Free the list*/
 	if (!list_empty(&sst_drv_ctx->memcpy_list)) {
@@ -1173,7 +1179,7 @@ void sst_firmware_load_cb(const struct firmware *fw, void *context)
 	struct intel_sst_drv *ctx = context;
 	int ret = 0;
 
-	pr_debug("In %s\n", __func__);
+	pr_info("In %s\n", __func__);
 
 	if (fw == NULL) {
 		pr_err("request fw failed\n");
@@ -1186,7 +1192,7 @@ void sst_firmware_load_cb(const struct firmware *fw, void *context)
 			ctx->fw_in_mem != NULL)
 		goto out;
 
-	pr_debug("Request Fw completed\n");
+	pr_info("Request Fw completed\n");
 	trace_sst_fw_download("End of FW request", ctx->sst_state);
 
 	if (ctx->info.use_elf == true)
@@ -1203,8 +1209,8 @@ void sst_firmware_load_cb(const struct firmware *fw, void *context)
 		goto out;
 	}
 
-	pr_debug("copied fw to %p", ctx->fw_in_mem);
-	pr_debug("phys: %lx", (unsigned long)virt_to_phys(ctx->fw_in_mem));
+	pr_info("copied fw to %p", ctx->fw_in_mem);
+	pr_info("phys: %lx", (unsigned long)virt_to_phys(ctx->fw_in_mem));
 	memcpy(ctx->fw_in_mem, fw->data, fw->size);
 
 	trace_sst_fw_download("Start FW parsing", ctx->sst_state);
@@ -1256,7 +1262,7 @@ static int sst_request_fw(struct intel_sst_drv *sst)
 
 	snprintf(name, sizeof(name), "%s%04x%s", "fw_sst_",
 				sst->pci_id, ".bin");
-	pr_debug("Requesting FW %s now...\n", name);
+	pr_info("Requesting FW %s now...\n", name);
 
 	retval = request_firmware(&fw, name, sst->dev);
 	if (fw == NULL) {
@@ -1280,8 +1286,8 @@ static int sst_request_fw(struct intel_sst_drv *sst)
 		retval = -ENOMEM;
 		goto end_release;
 	}
-	pr_debug("copied fw to %p", sst->fw_in_mem);
-	pr_debug("phys: %lx", (unsigned long)virt_to_phys(sst->fw_in_mem));
+	pr_info("copied fw to %p", sst->fw_in_mem);
+	pr_info("phys: %lx", (unsigned long)virt_to_phys(sst->fw_in_mem));
 	memcpy(sst->fw_in_mem, fw->data, fw->size);
 	trace_sst_fw_download("Start FW parsing", sst->sst_state);
 	if (sst->use_dma) {
@@ -1318,7 +1324,7 @@ end_release:
 
 static inline void print_lib_info(struct snd_sst_lib_download_info *resp)
 {
-	pr_debug("codec Type %d Ver %d Built %s: %s\n",
+	pr_info("codec Type %d Ver %d Built %s: %s\n",
 		resp->dload_lib.lib_info.lib_type,
 		resp->dload_lib.lib_info.lib_version,
 		resp->dload_lib.lib_info.b_date,
@@ -1372,7 +1378,7 @@ static int sst_download_library(const struct firmware *fw_lib,
 		retval = -EIO;
 		goto free_block;
 	}
-	pr_debug("FW responded, ready for download now...\n");
+	pr_info("FW responded, ready for download now...\n");
 	codec_fw = kzalloc(fw_lib->size, GFP_KERNEL);
 	if (!codec_fw) {
 		memset(lib, 0, sizeof(*lib));
@@ -1395,6 +1401,7 @@ static int sst_download_library(const struct firmware *fw_lib,
 
 	/* downloading on success */
 	mutex_lock(&sst_drv_ctx->sst_lock);
+	mutex_lock(&sst_drv_ctx->csr_lock);
 
 	sst_drv_ctx->sst_state = SST_FW_LOADING;
 	csr.full = readl(sst_drv_ctx->shim + SST_CSR);
@@ -1404,6 +1411,7 @@ static int sst_download_library(const struct firmware *fw_lib,
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.part.bypass = 0x7;
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 
 	if (sst_drv_ctx->use_dma) {
 		ret_val = sst_do_dma(&sst_drv_ctx->library_list);
@@ -1414,6 +1422,7 @@ static int sst_download_library(const struct firmware *fw_lib,
 	} else
 		sst_do_memcpy(&sst_drv_ctx->libmemcpy_list);
 	/* set the FW to running again */
+	mutex_lock(&sst_drv_ctx->csr_lock);
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.part.bypass = 0x0;
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
@@ -1421,6 +1430,7 @@ static int sst_download_library(const struct firmware *fw_lib,
 	csr.full = sst_shim_read(sst_drv_ctx->shim, SST_CSR);
 	csr.part.run_stall = 0;
 	sst_shim_write(sst_drv_ctx->shim, SST_CSR, csr.full);
+	mutex_unlock(&sst_drv_ctx->csr_lock);
 send_ipc:
 	/* send download complete and wait */
 	if (sst_create_ipc_msg(&msg, true)) {
@@ -1436,7 +1446,7 @@ send_ipc:
 	memcpy(msg->mailbox_data, &msg->header, sizeof(u32));
 	memcpy(msg->mailbox_data + sizeof(u32), lib, sizeof(*lib));
 	sst_add_to_dispatch_list_and_post(sst_drv_ctx, msg);
-	pr_debug("Waiting for FW response Download complete\n");
+	pr_info("Waiting for FW response Download complete\n");
 	retval = sst_wait_timeout(sst_drv_ctx, block);
 	sst_drv_ctx->sst_state = SST_FW_RUNNING;
 	if (block->data) {
@@ -1446,7 +1456,7 @@ send_ipc:
 			pr_err("err in lib dload %x\n", resp->result);
 			goto free_resources;
 		} else {
-			pr_debug("Codec download complete...\n");
+			pr_info("Codec download complete...\n");
 			print_lib_info(resp);
 		}
 	} else if (retval) {
@@ -1455,7 +1465,7 @@ send_ipc:
 		goto free_resources;
 	}
 
-	pr_debug("FW success on Download complete\n");
+	pr_info("FW success on Download complete\n");
 
 free_resources:
 	if (sst_drv_ctx->use_dma) {
@@ -1485,7 +1495,7 @@ static void sst_dccm_config_write(void __iomem *dram_base, unsigned int ddr_base
 	bss_reset |= (1 << MRFLD_FW_BSS_RESET_BIT);
 	addr = (void __iomem *)(dram_base + MRFLD_FW_FEATURE_BASE_OFFSET);
 	MEMCPY_TOIO(addr, &bss_reset, sizeof(u32));
-	pr_debug("%s: config written to DCCM\n", __func__);
+	pr_info("%s: config written to DCCM\n", __func__);
 }
 
 void sst_post_download_mrfld(struct intel_sst_drv *ctx)
@@ -1493,7 +1503,7 @@ void sst_post_download_mrfld(struct intel_sst_drv *ctx)
 	sst_dccm_config_write(ctx->dram, ctx->ddr_base);
 	/* For mrfld, download all libraries the first time fw is
 	 * downloaded */
-	pr_debug("%s: lib_dwnld = %u\n", __func__, ctx->lib_dwnld_reqd);
+	pr_info("%s: lib_dwnld = %u\n", __func__, ctx->lib_dwnld_reqd);
 	if (ctx->lib_dwnld_reqd) {
 		sst_load_all_modules_elf(ctx, sst_modules_mrfld, ARRAY_SIZE(sst_modules_mrfld));
 		ctx->lib_dwnld_reqd = false;
@@ -1510,12 +1520,26 @@ void sst_post_download_byt(struct intel_sst_drv *ctx)
 	sst_dccm_config_write(ctx->dram, ctx->ddr_base);
 	sst_fill_config(ctx, 2 * sizeof(u32));
 
-	pr_debug("%s: lib_dwnld = %u\n", __func__, ctx->lib_dwnld_reqd);
+	pr_info("%s: lib_dwnld = %u\n", __func__, ctx->lib_dwnld_reqd);
 	if (ctx->lib_dwnld_reqd) {
 		sst_load_all_modules_elf(ctx, sst_modules_byt,
 					ARRAY_SIZE(sst_modules_byt));
 		ctx->lib_dwnld_reqd = false;
 	}
+}
+
+static void sst_init_lib_mem_mgr(struct intel_sst_drv *ctx)
+{
+	struct sst_mem_mgr *mgr = &ctx->lib_mem_mgr;
+	const struct sst_lib_dnld_info *lib_info = ctx->pdata->lib_info;
+
+	memset(mgr, 0, sizeof(*mgr));
+	mgr->current_base = lib_info->mod_base + lib_info->mod_table_offset
+						+ lib_info->mod_table_size;
+	mgr->avail = lib_info->mod_end - mgr->current_base + 1;
+
+	pr_info("current base = 0x%lx , avail = 0x%x\n",
+		(unsigned long)mgr->current_base, mgr->avail);
 }
 
 /**
@@ -1529,7 +1553,7 @@ int sst_load_fw(void)
 	int ret_val = 0;
 	struct sst_block *block;
 
-	pr_debug("sst_load_fw\n");
+	pr_info("sst_load_fw\n");
 
 	if (sst_drv_ctx->sst_state !=  SST_RESET ||
 			sst_drv_ctx->sst_state == SST_SHUTDOWN)
@@ -1538,7 +1562,7 @@ int sst_load_fw(void)
 	if (!sst_drv_ctx->fw_in_mem) {
 		trace_sst_fw_download("Req FW sent in check device",
 					sst_drv_ctx->sst_state);
-		pr_debug("sst: FW not in memory retry to download\n");
+		pr_info("sst: FW not in memory retry to download\n");
 		ret_val = sst_request_fw(sst_drv_ctx);
 		if (ret_val)
 			return ret_val;
@@ -1619,15 +1643,15 @@ int sst_load_library(struct snd_sst_lib_download *lib, u8 ops)
 
 	memset(buf, 0, sizeof(buf));
 
-	pr_debug("Lib Type 0x%x, Slot 0x%x, ops 0x%x\n",
+	pr_info("Lib Type 0x%x, Slot 0x%x, ops 0x%x\n",
 			lib->lib_info.lib_type, lib->slot_info.slot_num, ops);
-	pr_debug("Version 0x%x, name %s, caps 0x%x media type 0x%x\n",
+	pr_info("Version 0x%x, name %s, caps 0x%x media type 0x%x\n",
 		lib->lib_info.lib_version, lib->lib_info.lib_name,
 		lib->lib_info.lib_caps, lib->lib_info.media_type);
 
-	pr_debug("IRAM Size 0x%x, offset 0x%x\n",
+	pr_info("IRAM Size 0x%x, offset 0x%x\n",
 		lib->slot_info.iram_size, lib->slot_info.iram_offset);
-	pr_debug("DRAM Size 0x%x, offset 0x%x\n",
+	pr_info("DRAM Size 0x%x, offset 0x%x\n",
 		lib->slot_info.dram_size, lib->slot_info.dram_offset);
 
 	switch (lib->lib_info.lib_type) {
@@ -1663,7 +1687,7 @@ int sst_load_library(struct snd_sst_lib_download *lib, u8 ops)
 			lib->slot_info.slot_num);
 	len += snprintf(buf + len, sizeof(buf) - len, ".bin");
 
-	pr_debug("Requesting %s\n", buf);
+	pr_info("Requesting %s\n", buf);
 
 	error = request_firmware(&fw_lib, buf, sst_drv_ctx->dev);
 	if (fw_lib == NULL) {
@@ -1689,7 +1713,7 @@ int sst_load_library(struct snd_sst_lib_download *lib, u8 ops)
 		goto wake_free;
 
 	/* lib is downloaded and init send alloc again */
-	pr_debug("Library is downloaded now...\n");
+	pr_info("Library is downloaded now...\n");
 wake_free:
 	/* sst_wake_up_alloc_block(sst_drv_ctx, pvt_id, error, NULL); */
 	release_firmware(fw_lib);
@@ -1783,7 +1807,7 @@ static int sst_relocate_elf(char *in_elf, int elf_size, phys_addr_t rel_base,
 	if (retval < 0)
 		return retval;
 
-	pr_debug("GOT entries relocated\n");
+	pr_info("GOT entries relocated\n");
 
 	/* Update the program headers in the ELF */
 	for (i = 0; i < ehdr->e_phnum; i++) {
@@ -1792,7 +1816,7 @@ static int sst_relocate_elf(char *in_elf, int elf_size, phys_addr_t rel_base,
 			phdr[i].p_paddr += rbase;
 		}
 	}
-	pr_debug("program header entries updated\n");
+	pr_info("program header entries updated\n");
 
 	return retval;
 }
@@ -1804,7 +1828,7 @@ int sst_get_next_lib_mem(struct sst_mem_mgr *mgr, int size,
 {
 	int retval = 0;
 
-	pr_debug("library orig size = 0x%x", size);
+	pr_info("library orig size = 0x%x", size);
 	if (size % ALIGN_256)
 		size += (ALIGN_256 - (size % ALIGN_256));
 	if (size > mgr->avail)
@@ -1814,9 +1838,9 @@ int sst_get_next_lib_mem(struct sst_mem_mgr *mgr, int size,
 	mgr->current_base += size;
 	mgr->avail -= size;
 	mgr->count++;
-	pr_debug("library base = 0x%lx", *lib_base);
-	pr_debug("library aligned size = 0x%x", size);
-	pr_debug("lib count = %d\n", mgr->count);
+	pr_info("library base = 0x%lx", *lib_base);
+	pr_info("library aligned size = 0x%x", size);
+	pr_info("lib count = %d\n", mgr->count);
 	return retval;
 
 }
@@ -1826,7 +1850,7 @@ static int sst_download_lib_elf(struct intel_sst_drv *sst, const void *lib,
 {
 	int retval = 0;
 
-	pr_debug("In %s\n", __func__);
+	pr_info("In %s\n", __func__);
 
 	if (sst->use_dma) {
 		retval = sst_parse_elf_fw_dma(sst, lib,
@@ -1848,7 +1872,7 @@ free_dma_res:
 		sst_do_memcpy(&sst->libmemcpy_list);
 		sst_memcpy_free_lib_resources();
 	}
-	pr_debug("download lib complete");
+	pr_info("download lib complete");
 	return retval;
 }
 
@@ -1858,13 +1882,13 @@ static void sst_fill_fw_module_table(struct sst_module_info *mod_list,
 	int i;
 	u32 *write_ptr = (u32 *)ddr_base;
 
-	pr_debug("In %s\n", __func__);
+	pr_info("In %s\n", __func__);
 
 	for (i = 0; i < list_size; i++) {
 		if (mod_list[i].status == SST_LIB_DOWNLOADED) {
-			pr_debug("status dnwld for %d\n", i);
-			pr_debug("module id %d\n", mod_list[i].id);
-			pr_debug("entry pt 0x%x\n", mod_list[i].entry_pt);
+			pr_info("status dnwld for %d\n", i);
+			pr_info("module id %d\n", mod_list[i].id);
+			pr_info("entry pt 0x%x\n", mod_list[i].entry_pt);
 
 			*write_ptr++ = mod_list[i].id;
 			*write_ptr++ = mod_list[i].entry_pt;
@@ -1880,14 +1904,14 @@ static int sst_request_lib_elf(struct sst_module_info *mod_entry,
 
 	snprintf(name, sizeof(name), "%s%s%04x%s", mod_entry->name,
 			"_", pci_id, ".bin");
-	pr_debug("Requesting %s\n", name);
+	pr_info("Requesting %s\n", name);
 
 	retval = request_firmware(fw_lib, name, dev);
 	if (retval) {
 		pr_err("%s library load failed %d\n", name, retval);
 		return retval;
 	}
-	pr_debug("got lib\n");
+	pr_info("got lib\n");
 	mod_entry->status = SST_LIB_FOUND;
 	return 0;
 }
@@ -1929,7 +1953,9 @@ int sst_load_all_modules_elf(struct intel_sst_drv *ctx, struct sst_module_info *
 	unsigned int mod_table_offset = ctx->pdata->lib_info->mod_table_offset;
 	unsigned long lib_base;
 
-	pr_debug("In %s", __func__);
+	pr_info("In %s", __func__);
+
+	sst_init_lib_mem_mgr(ctx);
 
 	for (i = 0; i < num_modules; i++) {
 		mod = &mod_table[i];
@@ -1947,14 +1973,14 @@ int sst_load_all_modules_elf(struct intel_sst_drv *ctx, struct sst_module_info *
 			release_firmware(fw_lib);
 			continue;
 		}
-		pr_debug("elf validated\n");
+		pr_info("elf validated\n");
 		retval = sst_allocate_lib_mem(fw_lib, lib_size,
 				&ctx->lib_mem_mgr, &out_elf, &lib_base);
 		if (retval < 0) {
 			pr_err("lib mem allocation failed: %d\n", retval);
 			continue;
 		}
-		pr_debug("lib space allocated\n");
+		pr_info("lib space allocated\n");
 
 		/* relocate in place */
 		retval = sst_relocate_elf(out_elf, lib_size,
@@ -1965,7 +1991,7 @@ int sst_load_all_modules_elf(struct intel_sst_drv *ctx, struct sst_module_info *
 			kfree(out_elf);
 			continue;
 		}
-		pr_debug("relocation done\n");
+		pr_info("relocation done\n");
 		release_firmware(fw_lib);
 		trace_sst_lib_download("Start of download Lib", mod->name);
 		/* write to ddr imr region,use memcpy method */

@@ -133,27 +133,39 @@ static int lpe_mixer_headset_set(struct snd_kcontrol *kcontrol,
 static int sst_probe_byte_control_get(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
+	int ret = 0;
 
 	if (!sst_dsp) {
 		pr_err("sst: DSP not registered\n");
 		return -ENODEV;
 	}
 
-	return sst_dsp->ops->set_generic_params(SST_GET_PROBE_BYTE_STREAM,
-				ucontrol->value.bytes.data);
+/* fcipaq: Use integer.value instead of bytes.data since it can hold 1024 bytes. 
+	This is bad coding, but it's still working since it is a union... */
+ 
+	ret = sst_dsp->ops->set_generic_params(SST_GET_PROBE_BYTE_STREAM,
+				ucontrol->value.integer.value);
+
+	return ret;
 }
 
 static int sst_probe_byte_control_set(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
+	int ret = 0;	
 
 	if (!sst_dsp) {
 		pr_err("sst: DSP not registered\n");
 		return -ENODEV;
 	}
 
-	return sst_dsp->ops->set_generic_params(SST_SET_PROBE_BYTE_STREAM,
-				ucontrol->value.bytes.data);
+/* fcipaq: Use integer.value instead of bytes.data since it can hold 1024 bytes. 
+	This is bad coding, but it's still working since it is a union... */
+
+	ret = sst_dsp->ops->set_generic_params(SST_GET_PROBE_BYTE_STREAM,
+				ucontrol->value.integer.value);
+
+	return ret;
 }
 
 static const char *lpe_mixer_text[] = {

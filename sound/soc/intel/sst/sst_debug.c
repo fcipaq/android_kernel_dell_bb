@@ -63,26 +63,54 @@ static ssize_t sst_debug_shim_read(struct file *file, char __user *user_buf,
 				   size_t count, loff_t *ppos)
 {
 	struct intel_sst_drv *drv = file->private_data;
-	char *buf;
-	int  ret = 0;
+	unsigned long long val = 0;
+	unsigned int addr;
+	char buf[512];
+	char name[8];
+	int pos = 0, ret = 0;
+
+	buf[0] = 0;
 
 	ret = is_fw_running(drv);
 	if (ret) {
 		pr_err("FW not running, cannot read SHIM registers\n");
 		return ret;
 	}
-	buf = sst_get_shim_buf(drv);
+
+	for (addr = SST_SHIM_BEGIN; addr <= SST_SHIM_END; addr += 8) {
+		switch (drv->pci_id) {
+		case SST_CLV_PCI_ID:
+			val = sst_shim_read(drv->shim, addr);
+			break;
+		case SST_MRFLD_PCI_ID:
+		case PCI_DEVICE_ID_INTEL_SST_MOOR:
+		case SST_BYT_PCI_ID:
+		case SST_CHT_PCI_ID:
+			val = sst_shim_read64(drv->shim, addr);
+			break;
+		}
+
+		name[0] = 0;
+		switch (addr) {
+		case SST_ISRX:
+			strcpy(name, "ISRX"); break;
+		case SST_ISRD:
+			strcpy(name, "ISRD"); break;
+		case SST_IPCX:
+			strcpy(name, "IPCX"); break;
+		case SST_IPCD:
+			strcpy(name, "IPCD"); break;
+		case SST_IMRX:
+			strcpy(name, "IMRX"); break;
+		case SST_IMRD:
+			strcpy(name, "IMRD"); break;
+		}
+		pos += sprintf(buf + pos, "0x%.2x: %.8llx  %s\n", addr, val, name);
+	}
 
 	sst_pm_runtime_put(drv);
-
-	if (!buf) {
-		pr_err("Unable to allocate shim buffer\n");
-		return -ENOMEM;
-	}
-	ret = simple_read_from_buffer(user_buf, count, ppos,
+	return simple_read_from_buffer(user_buf, count, ppos,
 			buf, strlen(buf));
-	kfree(buf);
-	return ret;
 }
 
 static ssize_t sst_debug_shim_write(struct file *file,
@@ -288,7 +316,7 @@ static ssize_t sst_debug_sram_ia_lpe_mbox_read(struct file *file,
 	if (ret)
 		return ret;
 	ret = copy_sram_to_user_buffer(user_buf, count, ppos, IA_LPE_MAILBOX_DUMP_SZ,
-				       (u32 *)(drv->ipc_mailbox + SST_MAILBOX_SEND),
+				       (u32 *)(drv->mailbox + SST_MAILBOX_SEND),
 				       SST_MAILBOX_SEND);
 	sst_pm_runtime_put(drv);
 	return ret;
@@ -312,7 +340,7 @@ static ssize_t sst_debug_sram_lpe_ia_mbox_read(struct file *file,
 		return ret;
 
 	ret = copy_sram_to_user_buffer(user_buf, count, ppos, LPE_IA_MAILBOX_DUMP_SZ,
-				       (u32 *)(drv->ipc_mailbox + drv->mailbox_recv_offset),
+				       (u32 *)(drv->mailbox + drv->mailbox_recv_offset),
 				       drv->mailbox_recv_offset);
 	sst_pm_runtime_put(drv);
 	return ret;
@@ -614,8 +642,7 @@ static ssize_t sst_debug_readme_read(struct file *file, char __user *user_buf,
 					"dma single block mode\n"
 		"7. iram_dump, dram_dump, interfaces provide mmap support to\n"
 		"get the iram and dram dump, these buffers will have data only\n"
-		"after the recovery is triggered\n"
-		"8. lpe_stack, dumps lpe stack area. Valid only when LPE is active\n";
+		"after the recovery is triggered\n";
 
 	const char *ctp_buf =
 		"8. Enable input clock by 'echo enable > osc_clk0'.\n"
@@ -1035,35 +1062,6 @@ static const struct file_operations sst_debug_dma_reg = {
 		.read = sst_debug_dma_reg_read,
 };
 
-static ssize_t sst_debug_lpe_stack_read(struct file *file,
-		char __user *user_buf, size_t count, loff_t *ppos)
-{
-	int retval = 0;
-	struct intel_sst_drv *sst = file->private_data;
-	void __iomem *addr;
-
-
-	retval = is_fw_running(sst);
-	if (retval)
-		return retval;
-
-	addr = sst->dram + SST_LPE_STACK_OFFSET;
-
-	pr_debug("Dumping DCCM from %p, num_dwrds %d...\n", (u32 *)addr, SST_LPE_STACK_SIZE);
-
-	retval = copy_sram_to_user_buffer(user_buf, count, ppos, SST_LPE_STACK_SIZE/(sizeof(u32)),
-				       (u32 *)(addr), 0);
-	sst_pm_runtime_put(sst);
-
-
-	return retval;
-}
-
-static const struct file_operations sst_debug_lpe_stack_dump = {
-		.open = simple_open,
-		.read = sst_debug_lpe_stack_read,
-};
-
 /**
  * sst_debug_remap - function remaps the iram/dram buff to userspace
  *
@@ -1272,7 +1270,6 @@ static const struct sst_debug sst_common_dbg_entries[] = {
 	{"sram_ia_lpe_mailbox", &sst_debug_sram_ia_lpe_mbox_ops, 0400},
 	{"sram_lpe_ia_mailbox", &sst_debug_sram_lpe_ia_mbox_ops, 0400},
 	{"README", &sst_debug_readme_ops, 0400},
-	{"lpe_stack", &sst_debug_lpe_stack_dump, 0400},
 };
 
 static const struct sst_debug ctp_dbg_entries[] = {

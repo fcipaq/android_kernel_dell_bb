@@ -28,7 +28,7 @@
 #include <linux/input.h>
 #include <linux/gpio.h>
 #include <linux/slab.h>
-#include <asm/intel_soc_pmc.h>
+#include <linux/vlv2_plat_clock.h>
 #include <linux/acpi_gpio.h>
 #include <linux/mutex.h>
 #include <asm/platform_cht_audio.h>
@@ -70,56 +70,6 @@ struct cht_mc_private {
 	bool process_button_events;
 
 };
-
-struct cht_slot_info {
-	unsigned int tx_mask;
-	unsigned int rx_mask;
-	int slots;
-	int slot_width;
-};
-
-static const struct snd_soc_pcm_stream cht_dai_params_ssp0 = {
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_48000,
-	.rate_max = SNDRV_PCM_RATE_48000,
-	.channels_min = 2,
-	.channels_max = 2,
-};
-
-static const struct snd_soc_pcm_stream cht_dai_params_ssp1_fm = {
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_48000,
-	.rate_max = SNDRV_PCM_RATE_48000,
-	.channels_min = 2,
-	.channels_max = 2,
-};
-
-static const struct snd_soc_pcm_stream cht_dai_params_ssp1_bt_nb = {
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_8000,
-	.rate_max = SNDRV_PCM_RATE_8000,
-	.channels_min = 2,
-	.channels_max = 2,
-};
-
-static const struct snd_soc_pcm_stream cht_dai_params_ssp1_bt_wb = {
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_16000,
-	.rate_max = SNDRV_PCM_RATE_16000,
-	.channels_min = 2,
-	.channels_max = 2,
-};
-
-static const struct snd_soc_pcm_stream cht_dai_params_ssp2 = {
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_48000,
-	.rate_max = SNDRV_PCM_RATE_48000,
-	.channels_min = 2,
-	.channels_max = 2,
-};
-
-
-#define SST_BT_FM_MUX_SHIFT	0
 
 static int cht_hs_detection(void);
 
@@ -464,7 +414,7 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 		return -EIO;
 	}
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
-		pmc_pc_configure(VLV2_PLAT_CLK_AUDIO,
+		vlv2_plat_configure_clock(VLV2_PLAT_CLK_AUDIO,
 				PLAT_CLK_FORCE_ON);
 		pr_debug("Platform clk turned ON\n");
 		snd_soc_codec_set_sysclk(codec, RT5670_SCLK_S_PLL1,
@@ -476,7 +426,7 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 		 */
 		snd_soc_codec_set_sysclk(codec, RT5670_SCLK_S_RCCLK,
 				0, 0, SND_SOC_CLOCK_IN);
-		pmc_pc_configure(VLV2_PLAT_CLK_AUDIO,
+		vlv2_plat_configure_clock(VLV2_PLAT_CLK_AUDIO,
 				PLAT_CLK_FORCE_OFF);
 		pr_debug("Platform clk turned OFF\n");
 	}
@@ -584,130 +534,33 @@ static int cht_compr_set_params(struct snd_compr_stream *cstream)
 
 static const struct snd_soc_pcm_stream cht_dai_params = {
 	.formats = SNDRV_PCM_FMTBIT_S24_LE,
-	.rate_min = SNDRV_PCM_RATE_48000,
-	.rate_max = SNDRV_PCM_RATE_48000,
+	.rate_min = 48000,
+	.rate_max = 48000,
 	.channels_min = 2,
 	.channels_max = 2,
 };
 
-#define CHT_CONFIG_SLOT(slot_tx_mask, slot_rx_mask, num_slot, width)\
-	(struct cht_slot_info){ .tx_mask = slot_tx_mask,			\
-				  .rx_mask = slot_rx_mask,			\
-				  .slots = num_slot,				\
-				  .slot_width = width, }
-
-static int cht_set_slot_and_format(struct snd_soc_dai *dai,
-			struct cht_slot_info *slot_info, unsigned int fmt)
-{
-	int ret;
-
-	ret = snd_soc_dai_set_tdm_slot(dai, slot_info->tx_mask,
-		slot_info->rx_mask, slot_info->slots, slot_info->slot_width);
-	if (ret < 0) {
-		pr_err("can't set codec pcm format %d\n", ret);
-		return ret;
-	}
-
-	ret = snd_soc_dai_set_fmt(dai, fmt);
-	if (ret < 0) {
-		pr_err("can't set codec DAI configuration %d\n", ret);
-		return ret;
-	}
-	return ret;
-}
-
-
 static int cht_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 			    struct snd_pcm_hw_params *params)
 {
-	int ret = 0;
-	unsigned int fmt;
-	struct cht_slot_info *info;
 	struct snd_interval *rate = hw_param_interval(params,
 			SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels = hw_param_interval(params,
 						SNDRV_PCM_HW_PARAM_CHANNELS);
 
-	/* WM8958 slave Mode */
-	fmt =   SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_IB_NF |
-		SND_SOC_DAIFMT_CBS_CFS;
-
-	info = &CHT_CONFIG_SLOT(0xF, 0xF, 4, SNDRV_PCM_FORMAT_S24_LE);
-	ret = cht_set_slot_and_format(rtd->cpu_dai, info, fmt);
-
 	pr_debug("Invoked %s for dailink %s\n", __func__, rtd->dai_link->name);
 
-	rate->min = rate->max = SNDRV_PCM_RATE_48000;
+	/* The DSP will covert the FE rate to 48k, stereo, 24bits */
+	rate->min = rate->max = 48000;
 	channels->min = channels->max = 2;
 
 	/* set SSP2 to 24-bit */
 	snd_mask_set(&params->masks[SNDRV_PCM_HW_PARAM_FORMAT -
-					SNDRV_PCM_HW_PARAM_FIRST_MASK],
-					SNDRV_PCM_FORMAT_S24_LE);
+				    SNDRV_PCM_HW_PARAM_FIRST_MASK],
+				    SNDRV_PCM_FORMAT_S24_LE);
 	return 0;
 }
 
-#define SST_MUX_REG 25
-#define SST_BT_FM_MUX_SHIFT	0
-#define SST_BT_MODE_SHIFT	2
-static int cht_bt_fm_fixup(struct snd_soc_dai_link *dai_link, struct snd_soc_dai *dai)
-{
-	unsigned int fmt;
-	bool is_bt, is_bt_wb;
-	unsigned int mask, reg_val;
-	int ret;
-	struct cht_slot_info *info;
-
-	mask = (1 << fls(1)) - 1;
-	reg_val = snd_soc_platform_read(dai->platform, SST_MUX_REG);
-	is_bt = (reg_val >> SST_BT_FM_MUX_SHIFT) & mask;
-	is_bt_wb = (reg_val >> SST_BT_MODE_SHIFT) & mask;
-
-	if (is_bt) {
-		if (is_bt_wb)
-			dai_link->params = &cht_dai_params_ssp1_bt_wb;
-		else
-			dai_link->params = &cht_dai_params_ssp1_bt_nb;
-
-		fmt = SND_SOC_DAIFMT_IB_NF | SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_CBS_CFS;
-		info = &CHT_CONFIG_SLOT(0x01, 0x01, 1, SNDRV_PCM_FORMAT_S16_LE);
-	} else {
-		fmt = SND_SOC_DAIFMT_IB_NF | SND_SOC_DAIFMT_LEFT_J | SND_SOC_DAIFMT_CBS_CFS;
-		dai_link->params = &cht_dai_params_ssp1_fm;
-		info = &CHT_CONFIG_SLOT(0x03, 0x03, 2, SNDRV_PCM_FORMAT_S16_LE);
-	}
-	ret = cht_set_slot_and_format(dai, info, fmt);
-
-	return ret;
-}
-
-static int cht_modem_fixup(struct snd_soc_dai_link *dai_link, struct snd_soc_dai *dai)
-{
-	int ret;
-	unsigned int fmt;
-	struct cht_slot_info *info;
-
-	info = &CHT_CONFIG_SLOT(0x01, 0x01, 1, SNDRV_PCM_FORMAT_S16_LE);
-	fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF
-						| SND_SOC_DAIFMT_CBS_CFS;
-
-	ret = cht_set_slot_and_format(dai, info, fmt);
-	return 0;
-}
-
-static int cht_codec_loop_fixup(struct snd_soc_dai_link *dai_link, struct snd_soc_dai *dai)
-{
-	int ret;
-	unsigned int fmt;
-	struct cht_slot_info *info;
-
-	info = &CHT_CONFIG_SLOT(0xF, 0xF, 4, SNDRV_PCM_FORMAT_S24_LE);
-	fmt = SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_IB_NF
-					| SND_SOC_DAIFMT_CBS_CFS;
-	ret = cht_set_slot_and_format(dai, info, fmt);
-
-	return ret;
-}
 static int cht_set_bias_level(struct snd_soc_card *card,
 				struct snd_soc_dapm_context *dapm,
 				enum snd_soc_bias_level level)
@@ -909,8 +762,9 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.platform_name = "sst-platform",
 		.codec_dai_name = "rt5670-aif1",
 		.codec_name = "rt5670.2-001c",
-		.params = &cht_dai_params_ssp2,
-		.be_fixup = cht_codec_loop_fixup,
+		.dai_fmt = SND_SOC_DAIFMT_DSP_B | SND_SOC_DAIFMT_IB_NF
+			| SND_SOC_DAIFMT_CBS_CFS,
+		.params = &cht_dai_params,
 		.dsp_loopback = true,
 	},
 	{
@@ -920,8 +774,7 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.platform_name = "sst-platform",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
-		.params = &cht_dai_params_ssp0,
-		.be_fixup = cht_modem_fixup,
+		.params = &cht_dai_params,
 		.dsp_loopback = true,
 	},
 	{
@@ -931,8 +784,7 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.platform_name = "sst-platform",
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
-		.params = &cht_dai_params_ssp1_bt_nb,
-		.be_fixup = cht_bt_fm_fixup,
+		.params = &cht_dai_params,
 		.dsp_loopback = true,
 	},
 	/* back ends */
@@ -1015,13 +867,6 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 	int codec_gpio;
 
 	pr_debug("Entry %s\n", __func__);
-
-	/* Audio Platform clock is on by default. The machine driver requests
-	 * this clock to be turned ON and OFF on playing any stream. But
-	 * until any stream is played the clock remains ON. Hence request the
-	 * clock to be turned OFF initially.
-	 */
-	pmc_pc_configure(VLV2_PLAT_CLK_AUDIO, PLAT_CLK_FORCE_OFF);
 
 	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_ATOMIC);
 	if (!drv) {

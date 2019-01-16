@@ -30,8 +30,7 @@
 #include <linux/device.h>
 #include <linux/gpio.h>
 #include <linux/slab.h>
-#include <linux/reboot.h>
-#include <asm/intel_soc_pmc.h>
+#include <linux/vlv2_plat_clock.h>
 #include <linux/acpi_gpio.h>
 #include <asm/intel-mid.h>
 #include <linux/mutex.h>
@@ -40,7 +39,6 @@
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 #include <sound/jack.h>
-#include <linux/input.h>
 #include "../../codecs/rt5640.h"
 
 #ifdef CONFIG_SND_SOC_COMMS_SSP
@@ -61,20 +59,6 @@
 #define BYT_BUTTON_EN_DELAY             1500
 
 #define BYT_HS_DET_RETRY_COUNT          6
-
-static struct platform_device *byt_pdev;
-
-static int byt_bl_reboot_callback(struct notifier_block *nfb, unsigned long event, void *data)
-{
-	pr_info("%s triggered\n", __func__);
-	snd_soc_suspend(&byt_pdev->dev);
-	return NOTIFY_OK;
-}
-
-static struct notifier_block byt_bl_reboot_notifier_block = {
-	.notifier_call = byt_bl_reboot_callback,
-	.priority = 1,
-};
 
 struct byt_mc_private {
 #ifdef CONFIG_SND_SOC_COMMS_SSP
@@ -547,7 +531,7 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 		return -EIO;
 	}
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
-		pmc_pc_configure(VLV2_PLAT_CLK_AUDIO,
+		vlv2_plat_configure_clock(VLV2_PLAT_CLK_AUDIO,
 				PLAT_CLK_FORCE_ON);
 		pr_debug("Platform clk turned ON\n");
 		snd_soc_codec_set_sysclk(codec, RT5640_SCLK_S_PLL1,
@@ -561,7 +545,7 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 		snd_soc_write(codec, RT5640_ADDA_CLK1, 0x7774);
 		snd_soc_codec_set_sysclk(codec, RT5640_SCLK_S_RCCLK,
 				0, 0, SND_SOC_CLOCK_IN);
-		pmc_pc_configure(VLV2_PLAT_CLK_AUDIO,
+		vlv2_plat_configure_clock(VLV2_PLAT_CLK_AUDIO,
 				PLAT_CLK_FORCE_OFF);
 		pr_debug("Platform clk turned OFF\n");
 	}
@@ -955,7 +939,6 @@ static int byt_init(struct snd_soc_pcm_runtime *runtime)
 		pr_err("jack creation failed\n");
 		return ret;
 	}
-	snd_jack_set_key(ctx->jack.jack, SND_JACK_BTN_0, KEY_MEDIA);
 	ret = snd_soc_jack_add_gpios(&ctx->jack, ctx->num_jack_gpios, hs_gpio);
 	if (ret) {
 		pr_err("adding jack GPIO failed\n");
@@ -1210,7 +1193,6 @@ static int snd_byt_mc_probe(struct platform_device *pdev)
 	}
 
 	/* register the soc card */
-	byt_pdev = pdev;
 	snd_soc_card_byt.dev = &pdev->dev;
 	snd_soc_card_set_drvdata(&snd_soc_card_byt, drv);
 	ret_val = snd_soc_register_card(&snd_soc_card_byt);
@@ -1219,7 +1201,6 @@ static int snd_byt_mc_probe(struct platform_device *pdev)
 		return ret_val;
 	}
 	platform_set_drvdata(pdev, &snd_soc_card_byt);
-	register_reboot_notifier(&byt_bl_reboot_notifier_block);
 	pr_info("%s successful\n", __func__);
 	return ret_val;
 }
@@ -1242,7 +1223,6 @@ static int snd_byt_mc_remove(struct platform_device *pdev)
 	struct byt_mc_private *drv = snd_soc_card_get_drvdata(soc_card);
 
 	pr_debug("In %s\n", __func__);
-	unregister_reboot_notifier(&byt_bl_reboot_notifier_block);
 	snd_byt_unregister_jack(drv);
 	snd_soc_card_set_drvdata(soc_card, NULL);
 	snd_soc_unregister_card(soc_card);
