@@ -114,7 +114,10 @@ $(DRIVER_NAME)-objs += \
 	$(DISPLAYDIR)/ospm/dc_maxfifo.o \
 	$(DISPLAYDIR)/ospm/video_ospm.o \
 	$(DISPLAYDIR)/ospm/early_suspend.o \
-	$(DISPLAYDIR)/ospm/early_suspend_sysfs.o
+	$(DISPLAYDIR)/ospm/early_suspend_sysfs.o \
+	$(DISPLAYDIR)/sdc16x25_8_cmd.o \
+	$(DISPLAYDIR)/sdc25x16_cmd.o 
+
 
 $(DRIVER_NAME)-objs += $(DISPLAYDIR)/cmn_dc_callbacks.o
 

@@ -55,7 +55,7 @@
 #include "android_hdmi.h"
 
 static struct intel_mid_panel_list panel_list[] = {
-#if 0 /* Marked unused panel driver */
+#if 0
 	{JDI_7x12_VID, MDFLD_DSI_ENCODER_DPI, jdi_vid_init},
 	{JDI_7x12_CMD, MDFLD_DSI_ENCODER_DBI, jdi_cmd_init},
 	{CMI_7x12_VID, MDFLD_DSI_ENCODER_DPI, cmi_vid_init},
@@ -67,9 +67,9 @@ static struct intel_mid_panel_list panel_list[] = {
 	{SHARP_25x16_CMD, MDFLD_DSI_ENCODER_DBI, sharp25x16_cmd_init},
 	{JDI_25x16_VID, MDFLD_DSI_ENCODER_DPI, jdi25x16_vid_init},
 	{JDI_25x16_CMD, MDFLD_DSI_ENCODER_DBI, jdi25x16_cmd_init},
+#endif
 	{SDC_16x25_CMD, MDFLD_DSI_ENCODER_DBI, sdc16x25_8_cmd_init},
 	{SDC_25x16_CMD, MDFLD_DSI_ENCODER_DBI, sdc25x16_cmd_init},
-#endif
 #ifdef CONFIG_SUPPORT_MIPI_OTM1284A_DISPLAY
 	{OTM1284A_VID, MDFLD_DSI_ENCODER_DPI, otm1284a_vid_init},
 #endif
@@ -136,9 +136,10 @@ mdfld_dsi_encoder_t get_mipi_panel_type(struct drm_device *dev)
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(panel_list); i++)
-		if (panel_list[i].p_type == dev_priv->panel_id)
-			return panel_list[i].encoder_type;
+//	for (i = 0; i < ARRAY_SIZE(panel_list); i++)
+//		if (panel_list[i].p_type == dev_priv->panel_id)
+//			return panel_list[i].encoder_type;
+	return MDFLD_DSI_ENCODER_DBI;
 	DRM_ERROR("can't find panel id : %d\n", dev_priv->panel_id);
 	BUG();
 

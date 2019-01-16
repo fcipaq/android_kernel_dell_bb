@@ -33,14 +33,36 @@
 #define WIDTH 1600
 #define HEIGHT 2560
 
+#define PIXEL_SHIFT_MAX_X       10
+#define PIXEL_SHIFT_MAX_Y       8
+
+#define PIXEL_SHIFT_INITIAL_X       0
+#define PIXEL_SHIFT_INITIAL_Y       1
+#define DEFAULT_TE_DELAY            704
+
 static int mipi_reset_gpio;
 static int bias_en_gpio;
 
 static u8 sdc16x25_8_eight_lane_enable[] = { 0xf2, 0x03, 0x00, 0x01, 0xa4, 0x03, 0x05, 0xa0 };
 static u8 sdc16x25_8_test_key_enable[] = { 0xf0, 0x5a, 0x5a };
 static u8 sdc16x25_8_test_key_disable[] = { 0xf0, 0xa5, 0xa5 };
-static u8 sdc16x25_8_mcs_column_addr[] = { 0x2a, 0x00, 0x00, (WIDTH - 1) >> 8, (WIDTH - 1)  & 0xff };
-static u8 sdc16x25_8_mcs_page_addr[] = { 0x2b, 0x00, 0x00, (HEIGHT - 1) >> 8, (HEIGHT -1) & 0xff };
+static u8 sdc16x25_8_mcs_column_addr[] = { 0x2a, 0x00, 0x00, (WIDTH -  1) >> 8, (WIDTH -1)  & 0xff };
+static u8 sdc16x25_8_mcs_page_addr[] = { 0x2b, 0x00, 0x00, (HEIGHT - 1) >> 8, (HEIGHT - 1) & 0xff };
+
+static
+int sdc16x25_8_cmd_panel_reset( struct mdfld_dsi_config *dsi_config);
+
+static
+int sdc16x25_8_cmd_power_mode(struct mdfld_dsi_config *dsi_config)
+{
+	u32 data = 0;
+
+	mdfld_dsi_get_power_mode(dsi_config,
+			(u8 *) &data,
+			MDFLD_DSI_LP_TRANSMISSION);
+	PSB_DEBUG_ENTRY(" power mode = %02x\n", data);
+	return data;
+}
 
 static
 int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
@@ -51,6 +73,14 @@ int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 	u8 cmd;
 
 	PSB_DEBUG_ENTRY("\n");
+
+	if (sdc16x25_8_cmd_power_mode(dsi_config)) {
+		mdfld_dsi_send_mcs_short_lp(sender,
+				    write_display_brightness, 0x00, 1,
+				    MDFLD_DSI_SEND_PACKAGE);
+		msleep(10);
+	} else
+		sdc16x25_8_cmd_panel_reset(dsi_config);
 
 	/* interface control: dual DSI */
 	cmd = sdc16x25_8_test_key_enable[0];
@@ -71,7 +101,14 @@ int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 	if (ret)
 		goto err_out;
 
-	msleep(200);
+	u8 set_teline[] = {0x44,
+			(drm_psb_te_timer_delay >> 8) & 0xff,
+			0xff & drm_psb_te_timer_delay };
+	ret = mdfld_dsi_send_mcs_long_lp(sender, set_teline,
+					sizeof(set_teline),
+					MDFLD_DSI_SEND_PACKAGE);
+	if (ret)
+		goto err_out;
 
 	/* exit sleep */
 	cmd = exit_sleep_mode;
@@ -79,19 +116,19 @@ int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 					  cmd, 0, 0, MDFLD_DSI_SEND_PACKAGE);
 	if (ret)
 		goto err_out;
-	msleep(200);
-
-	/* send display brightness */
-	cmd = write_display_brightness;
-	ret = mdfld_dsi_send_mcs_short_lp(sender,
-					  cmd, 0xff, 1, MDFLD_DSI_SEND_PACKAGE);
-	if (ret)
-		goto err_out;
+	msleep(120);
 
 	/* display control */
 	cmd = write_ctrl_display;
 	ret = mdfld_dsi_send_mcs_short_lp(sender,
 					  cmd, 0x20, 1, MDFLD_DSI_SEND_PACKAGE);
+	if (ret)
+		goto err_out;
+
+	/* ACL control */
+	cmd = write_ctrl_cabc;
+	ret = mdfld_dsi_send_mcs_short_lp(sender,
+					  cmd, 0x03, 1, MDFLD_DSI_SEND_PACKAGE);
 	if (ret)
 		goto err_out;
 
@@ -147,7 +184,7 @@ void sdc16x25_8_cmd_controller_init(
 	hw_ctx->high_low_switch_count = 0x2b;
 	hw_ctx->clk_lane_switch_time_cnt =  0x2b0014;
 	hw_ctx->lp_byteclk = 0x6;
-	hw_ctx->dphy_param = 0x2a18681f;
+	hw_ctx->dphy_param = 0x2a1ff81f;
 	hw_ctx->eot_disable = 0x3;
 	hw_ctx->init_count = 0xf0;
 	hw_ctx->dbi_bw_ctrl = 1024;
@@ -170,7 +207,7 @@ sdc16x25_8_cmd_panel_connection_detect(struct mdfld_dsi_config *dsi_config)
 	int pipe = dsi_config->pipe;
 
 	PSB_DEBUG_ENTRY("\n");
-
+	DRM_INFO("fcipaq panel is sdc16x25\n");
 	if (pipe == 0) {
 		status = MDFLD_DSI_PANEL_CONNECTED;
 	} else {
@@ -187,6 +224,10 @@ int sdc16x25_8_cmd_power_on(
 {
 	struct mdfld_dsi_pkg_sender *sender =
 		mdfld_dsi_get_pkg_sender(dsi_config);
+        struct drm_device *dev = dsi_config->dev;
+        struct drm_psb_private *dev_priv =
+                (struct drm_psb_private *) dev->dev_private;
+        static bool init_power_on = true;
 	int ret;
 	u8 cmd;
 
@@ -203,6 +244,8 @@ int sdc16x25_8_cmd_power_on(
 					  cmd, 0, 0, MDFLD_DSI_SEND_PACKAGE);
 	if (ret)
 		goto err_out;
+	msleep(10);
+
 	return 0;
 
 err_out:
@@ -254,6 +297,19 @@ power_off_err:
 }
 
 static
+int sdc16x25_8_cmd_enable_pixel_shift(int *max_x,
+                         int *max_y)
+{
+        int val_x = PIXEL_SHIFT_MAX_X;
+        int val_y = PIXEL_SHIFT_MAX_Y;
+
+        *max_x = val_x;
+        *max_y = val_y;
+
+        return true;
+}
+
+static
 int sdc16x25_8_cmd_set_brightness(
 				  struct mdfld_dsi_config *dsi_config,
 				  int level)
@@ -270,29 +326,46 @@ int sdc16x25_8_cmd_set_brightness(
 	}
 
 	duty_val = (0xFF * level) / 255;
-	mdfld_dsi_send_mcs_short_lp(sender,
+	/* fcipaq: zero brigntess not allowed */
+	if (duty_val == 0)
+	{
+		DRM_DEBUG("Prevented setting zero brightness (i.e. completely dark screen).\n");
+		duty_val = 1;
+	}
+
+ 	mdfld_dsi_send_mcs_short_lp(sender,
 				    write_display_brightness, duty_val, 1,
 				    MDFLD_DSI_SEND_PACKAGE);
 	return 0;
 }
 
-static void _get_panel_reset_gpio(void)
+static void get_panel_gpios(void)
 {
-	int ret = 0;
+	PSB_DEBUG_ENTRY("\n");
+
 	if (mipi_reset_gpio == 0) {
-		ret = get_gpio_by_name("disp0_rst");
-		if (ret < 0) {
+		mipi_reset_gpio = get_gpio_by_name("disp0_rst");
+		if (mipi_reset_gpio < 0) {
 			DRM_ERROR("Faild to get panel reset gpio, " \
 				  "use default reset pin\n");
-			return;
+			mipi_reset_gpio = 190;
 		}
-		mipi_reset_gpio = ret;
-		ret = gpio_request(mipi_reset_gpio, "mipi_display");
-		if (ret) {
-			DRM_ERROR("Faild to request panel reset gpio\n");
-			return;
+		if (gpio_request(mipi_reset_gpio, "mipi_display")) {
+			DRM_ERROR("Failed to request panel reset gpio\n");
+			BUG();
 		}
-		gpio_direction_output(mipi_reset_gpio, 0);
+	}
+	if (bias_en_gpio == 0) {
+		bias_en_gpio = get_gpio_by_name("disp_bias_en");
+		if (bias_en_gpio < 0) {
+			DRM_ERROR("Faild to get bias_enable gpio, " \
+				  "use default pin\n");
+			bias_en_gpio = 189;
+		}
+		if (gpio_request(bias_en_gpio, "bias_enable")) {
+			DRM_ERROR("Failed to request bias_enable gpio\n");
+			BUG();
+		}
 	}
 }
 
@@ -300,21 +373,7 @@ static
 int sdc16x25_8_cmd_panel_reset(
 			       struct mdfld_dsi_config *dsi_config)
 {
-	int ret = 0;
-
 	PSB_DEBUG_ENTRY("\n");
-
-	if (bias_en_gpio == 0) {
-		bias_en_gpio = 189;
-		ret = gpio_request(bias_en_gpio, "bias_enable");
-		if (ret) {
-			DRM_ERROR("Faild to request bias_enable gpio\n");
-			return -EINVAL;
-		}
-		gpio_direction_output(bias_en_gpio, 0);
-	}
-
-	_get_panel_reset_gpio();
 
 	gpio_direction_output(bias_en_gpio, 0);
 	gpio_direction_output(mipi_reset_gpio, 0);
@@ -324,24 +383,7 @@ int sdc16x25_8_cmd_panel_reset(
 	gpio_set_value_cansleep(bias_en_gpio, 1);
 	gpio_set_value_cansleep(mipi_reset_gpio, 1);
 	msleep(5);
-	return 0;
-}
 
-static
-int sdc16x25_8_cmd_exit_deep_standby(
-				     struct mdfld_dsi_config *dsi_config)
-{
-	PSB_DEBUG_ENTRY("\n");
-
-	if (bias_en_gpio)
-		gpio_set_value_cansleep(bias_en_gpio, 1);
-	_get_panel_reset_gpio();
-	gpio_direction_output(mipi_reset_gpio, 0);
-
-	gpio_set_value_cansleep(mipi_reset_gpio, 0);
-	msleep(15);
-	gpio_set_value_cansleep(mipi_reset_gpio, 1);
-	msleep(5);
 	return 0;
 }
 
@@ -396,7 +438,7 @@ void sdc16x25_8_cmd_init(struct drm_device *dev, struct panel_funcs *p_funcs)
 		return;
 	}
 	PSB_DEBUG_ENTRY("\n");
-	p_funcs->reset = sdc16x25_8_cmd_panel_reset;
+	get_panel_gpios();
 	p_funcs->power_on = sdc16x25_8_cmd_power_on;
 	p_funcs->power_off = sdc16x25_8_cmd_power_off;
 	p_funcs->drv_ic_init = sdc16x25_8_cmd_drv_ic_init;
@@ -408,7 +450,8 @@ void sdc16x25_8_cmd_init(struct drm_device *dev, struct panel_funcs *p_funcs)
 		sdc16x25_8_cmd_panel_connection_detect;
 	p_funcs->set_brightness =
 		sdc16x25_8_cmd_set_brightness;
-	p_funcs->exit_deep_standby =
-		sdc16x25_8_cmd_exit_deep_standby;
-
+//	p_funcs->enable_pixel_shift = sdc16x25_8_cmd_enable_pixel_shift;
+	drm_psb_te_timer_delay = DEFAULT_TE_DELAY;
+	/* Enable usage of separate te_thread */
+//	drm_psb_te_thread = 1;
 }

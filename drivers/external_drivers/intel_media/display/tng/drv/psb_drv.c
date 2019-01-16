@@ -1225,11 +1225,11 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 		case PROJ_ID_ZX550ML:
 			switch (Read_LCD_ID()){
 				case ZE551ML_LCD_ID_NT_TM:
-					dev_priv->panel_id = NT35596_VID;
+					dev_priv->panel_id = SDC_16x25_CMD;
 					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 					break;
 				case ZE551ML_LCD_ID_NT_AUO:
-					dev_priv->panel_id = NT35596_VID;
+					dev_priv->panel_id = SDC_16x25_CMD;
 					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 					break;
 				case ZE551ML_LCD_ID_OTM_INX:
@@ -1243,11 +1243,11 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 			if (Read_HW_ID() == HW_ID_EVB) {
 				switch (Read_LCD_ID()){
 					case ZE551ML_LCD_ID_NT_TM:
-						dev_priv->panel_id = NT35596_VID;
+						dev_priv->panel_id = SDC_16x25_CMD;
 						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 						break;
 					case ZE551ML_LCD_ID_NT_AUO:
-						dev_priv->panel_id = NT35596_VID;
+						dev_priv->panel_id = SDC_16x25_CMD;
 						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 						break;
 					case ZE551ML_LCD_ID_OTM_INX:
@@ -1264,11 +1264,11 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 			if (Read_HW_ID() == HW_ID_EVB) {
 				switch (Read_LCD_ID()){
 					case ZE551ML_LCD_ID_NT_TM:
-						dev_priv->panel_id = NT35596_VID;
+						dev_priv->panel_id = SDC_16x25_CMD;
 						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 						break;
 					case ZE551ML_LCD_ID_NT_AUO:
-						dev_priv->panel_id = NT35596_VID;
+						dev_priv->panel_id = SDC_16x25_CMD;
 						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 						break;
 					case ZE551ML_LCD_ID_OTM_INX:
@@ -1284,7 +1284,7 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 		case PROJ_ID_ZS550ML:
 			switch (Read_LCD_ID()) {
 				case ZE551ML_LCD_ID_NT_AUO:
-					dev_priv->panel_id = NT35596_VID;
+					dev_priv->panel_id = SDC_16x25_CMD;
 					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 					break;
 				case ZS550ML_LCD_ID_SYN_BOE:
@@ -1294,7 +1294,7 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 			}
 			break;
 		default:
-			dev_priv->panel_id = NT35596_VID;
+			dev_priv->panel_id = SDC_16x25_CMD;
 			strncpy(panel_name_id, "NT35596", strlen("NT35596"));
 			break;
 	}
