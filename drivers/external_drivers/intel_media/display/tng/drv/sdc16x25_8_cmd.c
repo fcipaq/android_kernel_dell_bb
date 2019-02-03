@@ -327,11 +327,11 @@ int sdc16x25_8_cmd_set_brightness(
 
 	duty_val = (0xFF * level) / 255;
 	/* fcipaq: zero brigntess not allowed */
-	if (duty_val == 0)
-	{
-		DRM_DEBUG("Prevented setting zero brightness (i.e. completely dark screen).\n");
-		duty_val = 1;
-	}
+//	if (duty_val == 0)
+//	{
+//		DRM_DEBUG("Prevented setting zero brightness (i.e. completely dark screen).\n");
+//		duty_val = 1;
+//	}
 
  	mdfld_dsi_send_mcs_short_lp(sender,
 				    write_display_brightness, duty_val, 1,

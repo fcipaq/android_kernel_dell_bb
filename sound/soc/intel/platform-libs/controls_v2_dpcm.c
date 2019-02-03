@@ -349,6 +349,14 @@ static void sst_send_algo_cmd(struct sst_data *sst,
 {
 	int len;
 	struct sst_cmd_set_params *cmd;
+//fcipaq
+// the memcpy below leads to a segmentation fault
+// Needs to be investigated.
+// return command solved it for now as this is only necesseary for
+// codec <-> codec playback
+
+pr_err("*ERROR*: controls_v2_dpcm.c: sst_send_algo_cmd PLEASE SEE CODE\n");
+return ;
 
 	/* bc->max includes sizeof algos + length field */
 	len = sizeof(cmd->dst) + sizeof(cmd->command_id) + bc->max;
