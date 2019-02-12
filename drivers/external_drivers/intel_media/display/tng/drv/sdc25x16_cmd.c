@@ -37,7 +37,7 @@
 //#define PIXEL_SHIFT_MAX_X       10
 //#define PIXEL_SHIFT_MAX_Y       8
 #define PIXEL_SHIFT_MAX_X       64
-#define PIXEL_SHIFT_MAX_Y       64
+#define PIXEL_SHIFT_MAX_Y       32
 
 #define PIXEL_SHIFT_INITIAL_X       0
 #define PIXEL_SHIFT_INITIAL_Y       1

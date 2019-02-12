@@ -1210,7 +1210,7 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 
 	ctx->vgacntr = 0x80000000;
 
-	/* fcipaq: Enable a resolution that is smaller than the actual        */
+	/* fcipaq: Enable a resolution which is smaller than the physical     */
 	/* native resolution, so the picture can be shifted within a frame.   */
 	/* AMOLED wear leveling.					      */
 	if ((get_panel_type(dev, 0) == SDC_25x16_CMD) || (get_panel_type(dev, 0) == SDC_16x25_CMD)) {
@@ -1333,7 +1333,6 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 	/* fcipaq: init AMOLED wear leveling worker */
 
 	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
-
 		memcpy(&amoled_wl_dev, dev, sizeof(struct drm_device));
 		INIT_DELAYED_WORK(&wl_delayed_work, amoled_wearleveling_worker);
 		schedule_delayed_work(&wl_delayed_work, AMOLED_SHIFT_TIMEOUT);
