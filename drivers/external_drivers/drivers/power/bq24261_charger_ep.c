@@ -1450,8 +1450,8 @@ static void bq24261_wdt_reset_worker(struct work_struct *work)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset\n", ret);
-	else
-		dev_info(&chip->client->dev, "WDT reset\n");
+//	else
+//		dev_info(&chip->client->dev, "WDT reset\n");
 
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
@@ -1490,8 +1490,8 @@ static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset of IC #2\n", ret);
-	else
-		dev_info(&chip->client->dev, "WDT reset of IC #2\n");
+//	else
+//		dev_info(&chip->client->dev, "WDT reset of IC #2\n");
 
 	bq24261_wdt_boost_ic2(chip, 1);
 
@@ -1984,7 +1984,7 @@ static ssize_t dock_print_state(struct switch_dev *sdev, char *buf)
 }
 
 /* Dell Venue 7040 (aka Eaglespeak) has two BQ24261 ICs, as it features two batteries  */
-/* The attachable's keyboard power supply is connected to the second IC's VBUS booster */
+/* The attachable keyboard's power supply is connected to the second IC's VBUS booster */
 /* This function checks, if the current IC is the second one.          		       */
 /* This function is platform specific.						       */
 int is_second_ic(struct i2c_client *client)
