@@ -29,15 +29,15 @@
 #include "mdfld_dsi_pkg_sender.h"
 
 #include "displays/sdc16x25_8_cmd.h"
+#include <linux/random.h>
 
 #define WIDTH 1600
 #define HEIGHT 2560
 
-#define PIXEL_SHIFT_MAX_X       10
-#define PIXEL_SHIFT_MAX_Y       8
+#define PIXEL_SHIFT_MAX_X       16
+#define PIXEL_SHIFT_MAX_Y       32
+#define ENABLE_PIXEL_SHIFT	1
 
-#define PIXEL_SHIFT_INITIAL_X       0
-#define PIXEL_SHIFT_INITIAL_Y       1
 #define DEFAULT_TE_DELAY            704
 
 static int mipi_reset_gpio;
@@ -207,7 +207,7 @@ sdc16x25_8_cmd_panel_connection_detect(struct mdfld_dsi_config *dsi_config)
 	int pipe = dsi_config->pipe;
 
 	PSB_DEBUG_ENTRY("\n");
-	DRM_INFO("fcipaq panel is sdc16x25\n");
+
 	if (pipe == 0) {
 		status = MDFLD_DSI_PANEL_CONNECTED;
 	} else {
@@ -246,6 +246,33 @@ int sdc16x25_8_cmd_power_on(
 		goto err_out;
 	msleep(10);
 
+	if (!init_power_on) {
+		if (dev_priv->amoled_shift.curr_x < dev_priv->amoled_shift.max_x)
+			dev_priv->amoled_shift.curr_x++;
+		else
+			dev_priv->amoled_shift.curr_x = 0;
+
+		if (dev_priv->amoled_shift.curr_y < dev_priv->amoled_shift.max_y)
+			dev_priv->amoled_shift.curr_y++;
+		else
+			dev_priv->amoled_shift.curr_y = 0;
+	} 
+	else {
+		dev_priv->amoled_shift.dir_x = 0;
+		dev_priv->amoled_shift.dir_y = 0;
+
+		/* Start pixel shift at a random position. */
+
+		get_random_bytes(&dev_priv->amoled_shift.curr_x, sizeof(dev_priv->amoled_shift.curr_x));
+		dev_priv->amoled_shift.curr_x = dev_priv->amoled_shift.curr_x % PIXEL_SHIFT_MAX_X;
+
+		get_random_bytes(&dev_priv->amoled_shift.curr_y, sizeof(dev_priv->amoled_shift.curr_y));
+		dev_priv->amoled_shift.curr_y = dev_priv->amoled_shift.curr_y % PIXEL_SHIFT_MAX_Y;
+
+		dev_priv->amoled_shift.flip_done = 0;
+
+		init_power_on = false;
+	}
 	return 0;
 
 err_out:
@@ -326,12 +353,6 @@ int sdc16x25_8_cmd_set_brightness(
 	}
 
 	duty_val = (0xFF * level) / 255;
-	/* fcipaq: zero brigntess not allowed */
-//	if (duty_val == 0)
-//	{
-//		DRM_DEBUG("Prevented setting zero brightness (i.e. completely dark screen).\n");
-//		duty_val = 1;
-//	}
 
  	mdfld_dsi_send_mcs_short_lp(sender,
 				    write_display_brightness, duty_val, 1,
@@ -413,6 +434,9 @@ struct drm_display_mode *sdc16x25_8_cmd_get_config_mode(void)
 	mode->clock =  mode->vrefresh * mode->vtotal * mode->htotal / 1000;
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
 
+	mode->hdisplay = WIDTH - PIXEL_SHIFT_MAX_X;
+	mode->vdisplay = HEIGHT - PIXEL_SHIFT_MAX_Y;
+
 	drm_mode_set_name(mode);
 	drm_mode_set_crtcinfo(mode, 0);
 
@@ -450,8 +474,6 @@ void sdc16x25_8_cmd_init(struct drm_device *dev, struct panel_funcs *p_funcs)
 		sdc16x25_8_cmd_panel_connection_detect;
 	p_funcs->set_brightness =
 		sdc16x25_8_cmd_set_brightness;
-//	p_funcs->enable_pixel_shift = sdc16x25_8_cmd_enable_pixel_shift;
+	p_funcs->enable_pixel_shift = sdc16x25_8_cmd_enable_pixel_shift;
 	drm_psb_te_timer_delay = DEFAULT_TE_DELAY;
-	/* Enable usage of separate te_thread */
-//	drm_psb_te_thread = 1;
 }

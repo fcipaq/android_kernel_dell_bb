@@ -107,6 +107,7 @@ struct panel_funcs {
 	int (*drv_get_cabc_mode)(struct mdfld_dsi_config *dsi_config);
 	void (*set_legacy_coefficient)(struct mdfld_dsi_config *dsi_config);
 	void (*set_legacy_gamma_table)(struct mdfld_dsi_config *dsi_config);
+	int (*enable_pixel_shift)(int *max_x, int *max_y);
 
 };
 

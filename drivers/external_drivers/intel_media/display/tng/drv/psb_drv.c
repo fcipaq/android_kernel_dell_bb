@@ -1209,96 +1209,7 @@ bool mrst_get_vbt_data(struct drm_psb_private *dev_priv)
 
 	strncpy(panel_name, panel_desc, PANEL_NAME_MAX_LEN);
 
-	switch(Read_PROJ_ID()) {
-		case PROJ_ID_ZE550ML:
-			switch (Read_LCD_ID()) {
-				case ZE550ML_LCD_ID_OTM_TM:
-				case ZE550ML_LCD_ID_OTM_CPT:
-					dev_priv->panel_id = OTM1284A_VID;
-					strncpy(panel_name_id, "OTM1284A", strlen("OTM1284A"));
-					break;
-			}
-			break;
-		case PROJ_ID_ZE551ML:
-		case PROJ_ID_ZE551ML_CKD:
-		case PROJ_ID_ZE551ML_ESE:
-		case PROJ_ID_ZX550ML:
-			switch (Read_LCD_ID()){
-				case ZE551ML_LCD_ID_NT_TM:
-					dev_priv->panel_id = SDC_16x25_CMD;
-					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-					break;
-				case ZE551ML_LCD_ID_NT_AUO:
-					dev_priv->panel_id = SDC_16x25_CMD;
-					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-					break;
-				case ZE551ML_LCD_ID_OTM_INX:
-					dev_priv->panel_id = OTM1901A_VID;
-					strncpy(panel_name_id, "OTM1901A", strlen("OTM1901A"));
-					break;
-			}
-			break;
-		case PROJ_ID_ZS570ML:
-		case PROJ_ID_TAURUS_CES:
-			if (Read_HW_ID() == HW_ID_EVB) {
-				switch (Read_LCD_ID()){
-					case ZE551ML_LCD_ID_NT_TM:
-						dev_priv->panel_id = SDC_16x25_CMD;
-						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-						break;
-					case ZE551ML_LCD_ID_NT_AUO:
-						dev_priv->panel_id = SDC_16x25_CMD;
-						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-						break;
-					case ZE551ML_LCD_ID_OTM_INX:
-						dev_priv->panel_id = OTM1901A_VID;
-						strncpy(panel_name_id, "OTM1901A", strlen("OTM1901A"));
-						break;
-				}
-			} else {
-				dev_priv->panel_id = SAMSUNG_FHD_CMD;
-				strncpy(panel_name_id, "SAMSUNG_FHD", strlen("SAMSUNG_FHD"));
-			}
-			break;
-		case PROJ_ID_ZS571ML:
-			if (Read_HW_ID() == HW_ID_EVB) {
-				switch (Read_LCD_ID()){
-					case ZE551ML_LCD_ID_NT_TM:
-						dev_priv->panel_id = SDC_16x25_CMD;
-						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-						break;
-					case ZE551ML_LCD_ID_NT_AUO:
-						dev_priv->panel_id = SDC_16x25_CMD;
-						strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-						break;
-					case ZE551ML_LCD_ID_OTM_INX:
-						dev_priv->panel_id = OTM1901A_VID;
-						strncpy(panel_name_id, "OTM1901A", strlen("OTM1901A"));
-						break;
-				}
-			} else {
-				dev_priv->panel_id = SAMSUNG_WQHD_CMD;
-				strncpy(panel_name_id, "SAMSUNG_WQHD", strlen("SAMSUNG_WQHD"));
-			}
-			break;
-		case PROJ_ID_ZS550ML:
-			switch (Read_LCD_ID()) {
-				case ZE551ML_LCD_ID_NT_AUO:
-					dev_priv->panel_id = SDC_16x25_CMD;
-					strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-					break;
-				case ZS550ML_LCD_ID_SYN_BOE:
-					dev_priv->panel_id = TD4300_VID;
-					strncpy(panel_name_id, "TD4300", strlen("TD4300"));
-					break;
-			}
-			break;
-		default:
-			dev_priv->panel_id = SDC_16x25_CMD;
-			strncpy(panel_name_id, "NT35596", strlen("NT35596"));
-			break;
-	}
-//	dev_priv->panel_id = PanelID;
+	dev_priv->panel_id = PanelID;
 
 	panel_unique_id = panel_name;
 	if (strcmp(panel_name_id, panel_unique_id) == 0 || panel_unique_id == NULL || panel_unique_id == 0)
@@ -2075,7 +1986,8 @@ static int psb_driver_load(struct drm_device *dev, unsigned long chipset)
 	*/
 	dpst_init(dev, 5, 1);
 
-	mdfld_dsi_dsr_enable(dev_priv->dsi_configs[0]);
+	if (get_panel_type(dev, 0) != SDC_25x16_CMD)
+		mdfld_dsi_dsr_enable(dev_priv->dsi_configs[0]);
 
 	return PVRSRVDrmLoad(dev, chipset);
  out_err:

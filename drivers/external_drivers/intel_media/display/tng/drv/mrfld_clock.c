@@ -64,10 +64,10 @@ extern int Read_HW_ID(void);
 #define MRFLD_DPLL_M_MAX_100	    64
 #define MRFLD_DPLL_P1_MIN_100	    2
 #define MRFLD_DPLL_P1_MAX_100	    2
-#define MRFLD_DSIPLL_M_MIN_19	    80
-#define MRFLD_DSIPLL_M_MAX_19	    120
-#define MRFLD_DSIPLL_P1_MIN_19	    2
-#define MRFLD_DSIPLL_P1_MAX_19	    6
+#define MRFLD_DSIPLL_M_MIN_19	    131
+#define MRFLD_DSIPLL_M_MAX_19	    175
+#define MRFLD_DSIPLL_P1_MIN_19	    3
+#define MRFLD_DSIPLL_P1_MAX_19	    8
 #define MRFLD_DSIPLL_M_MIN_25	    97
 #define MRFLD_DSIPLL_M_MAX_25	    140
 #define MRFLD_DSIPLL_P1_MIN_25	    3
@@ -80,6 +80,7 @@ extern int Read_HW_ID(void);
 #define MRFLD_DSIPLL_M_MAX_100	    140
 #define MRFLD_DSIPLL_P1_MIN_100	    3
 #define MRFLD_DSIPLL_P1_MAX_100	    9
+
 
 static const struct mrst_limit_t mrfld_limits[] = {
 	{			/* MRFLD_LIMT_DPLL_19 */

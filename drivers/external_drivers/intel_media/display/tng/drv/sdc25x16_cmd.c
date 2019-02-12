@@ -29,14 +29,30 @@
 #include "mdfld_dsi_pkg_sender.h"
 #include <asm/intel_scu_pmic.h>
 #include "displays/sdc25x16_cmd.h"
+#include <linux/random.h>
+
+#define WIDTH 2560
+#define HEIGHT 1600
+
+//#define PIXEL_SHIFT_MAX_X       10
+//#define PIXEL_SHIFT_MAX_Y       8
+#define PIXEL_SHIFT_MAX_X       64
+#define PIXEL_SHIFT_MAX_Y       64
+
+#define PIXEL_SHIFT_INITIAL_X       0
+#define PIXEL_SHIFT_INITIAL_Y       1
+
+/* Set the panel update delay to 8 ms */
+#define DEFAULT_PANEL_DELAY 8000
 
 static int vdd_1_8v_gpio;
+static int tcon_rdy_gpio;
+static int bias_en_gpio;
 
 static u8 sdc_column_addr[] = {
 			0x2a, 0x00, 0x00, 0x04, 0xff};
 static u8 sdc_page_addr[] = {
 			0x2b, 0x00, 0x00, 0x06, 0x3f};
-#if 0
 static	u8 sdc_set_300nit[34] = { 0x83,
 								0x80, 0x80,
 								0x80, 0x80,
@@ -57,10 +73,6 @@ static	u8 sdc_set_300nit[34] = { 0x83,
 								0x80, 0x80,
 								0x00};
 static	u8 sdc_set_AID[] = { 0x85, 0x06, 0x00 };
-static	u8 sdc_300_ELVSS[] = { 0xbb, 0x19};
-static	u8 sdc_set_ACL_off[] = { 0xbb, 0x10};
-#endif
-
 
 static	u8 sdc_gamma_setting[] = { 0x82, 0x1f};
 static	u8 sdc_AOR_setting[] = { 0x85, 0x6, 0};
@@ -69,11 +81,15 @@ static	u8 sdc_ELVSS_para[] = { 0xbb, 0xF};
 static	u8 sdc_global_para_47[] = { 0xb0, 0x2e};
 static	u8 sdc_gamma_update[] = { 0xbb, 0x1};
 
+static	u8 sdc_300_ELVSS[] = { 0xbb, 0x19};
+
 
 static	u8 sdc_global_para_70[] = { 0xb0, 0x45};
+static	u8 sdc_set_ACL_off[] = { 0xbb, 0x10};
 static	u8 sdc_set_ACL_on[] = { 0xbb, 0x12};
 
-static u8 sdc_brightness_list[21][5] = {
+
+static u8 sdc_brightness_list[30][5] = {
 			{0x1f, 0x06, 0x00, 0x00, 0x0f},
 			{0x00, 0x06, 0x00, 0x19, 0x1b},
 			{0x01, 0x06, 0x00, 0x1a, 0x1c},
@@ -94,7 +110,18 @@ static u8 sdc_brightness_list[21][5] = {
 			{0x10, 0xfe, 0x00, 0x1f, 0x1f},
 			{0x11, 0x11, 0x01, 0x1f, 0x1f},
 			{0x12, 0x23, 0x01, 0x1f, 0x1f},
-			{0x13, 0x32, 0x01, 0x1f, 0x1f}
+			{0x13, 0x32, 0x01, 0x1f, 0x1f},
+/* fcipaq: low brightness for night time reading */
+			{0x14, 0x3c, 0x01, 0x1f, 0x1f},
+			{0x15, 0x50, 0x01, 0x1f, 0x1f},
+			{0x16, 0x64, 0x01, 0x1f, 0x1f},
+			{0x17, 0x78, 0x01, 0x1f, 0x1f},
+			{0x18, 0x82, 0x01, 0x1f, 0x1f},
+			{0x19, 0x87, 0x01, 0x1f, 0x1f},
+			{0x1a, 0x8c, 0x01, 0x1f, 0x1f},
+			{0x1b, 0x91, 0x01, 0x1f, 0x1f},
+			{0x1c, 0x96, 0x01, 0x1f, 0x1f}
+/* fcipaq end */
 			};
 
 static
@@ -111,6 +138,7 @@ int sdc25x16_set_dimming(struct mdfld_dsi_pkg_sender *sender,
 	err = mdfld_dsi_send_gen_long_hs(sender,
 			sdc_gamma_setting,
 			2, MDFLD_DSI_SEND_PACKAGE);
+	
 	if (err) {
 		DRM_ERROR("%s: %d: sdc_gamma_setting\n",
 		__func__, __LINE__);
@@ -170,7 +198,11 @@ int sdc25x16_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 		= mdfld_dsi_get_pkg_sender(dsi_config);
 	int err = 0;
 	int i;
-
+/***/
+	u8 set_teline[] = {0x44,
+			(drm_psb_te_timer_delay >> 8) & 0xff,
+			0xff & drm_psb_te_timer_delay };
+/***/
 	PSB_DEBUG_ENTRY("\n");
 	if (!sender) {
 		DRM_ERROR("Cannot get sender\n");
@@ -183,6 +215,17 @@ int sdc25x16_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 		__func__, __LINE__);
 		goto ic_init_err;
 	}
+/***/
+	err = mdfld_dsi_send_gen_long_hs(sender,
+					set_teline,
+					sizeof(set_teline),
+					MDFLD_DSI_SEND_PACKAGE);
+	if (err) {
+		DRM_ERROR("%s: %d: set_teline\n",
+		__func__, __LINE__);
+		goto ic_init_err;
+	}
+/***/
 	err = mdfld_dsi_send_gen_long_hs(sender,
 			sdc_global_para_70,
 			2, MDFLD_DSI_SEND_PACKAGE);
@@ -302,11 +345,37 @@ int sdc25x16_cmd_panel_connection_detect(
 }
 
 static
+void vdd3_power_ctrl(bool on)
+{
+        u8 addr, value;
+        addr = 0xaa;
+
+        if (intel_scu_ipc_ioread8(addr, &value))
+                DRM_ERROR("%s: %d: failed to read VDD3\n", __func__, __LINE__);
+
+        /* Control vDD3 power rail with 3.3v */
+        value &= ~0x60;
+        value |= 0x60;
+        if (on)
+                value |= 0x1;
+        else
+                value &= 0x01;
+
+        if (intel_scu_ipc_iowrite8(addr, value))
+                DRM_ERROR("%s: %d: failed to write VDD3\n", __func__, __LINE__);
+}
+
+static
 int sdc25x16_cmd_power_on(
 	struct mdfld_dsi_config *dsi_config)
 {
 	struct mdfld_dsi_pkg_sender *sender =
 		mdfld_dsi_get_pkg_sender(dsi_config);
+        struct drm_device *dev = dsi_config->dev;
+        struct drm_psb_private *dev_priv =
+                (struct drm_psb_private *) dev->dev_private;
+	/* I think the following variable should be global... :) */
+        static bool init_power_on = true;
 	int err = 0;
 
 	PSB_DEBUG_ENTRY("\n");
@@ -318,6 +387,38 @@ int sdc25x16_cmd_power_on(
 	/* Set Display on 0x29 */
 	err = mdfld_dsi_send_mcs_short_hs(sender, set_display_on, 0, 0,
 			MDFLD_DSI_SEND_PACKAGE);
+
+	if (init_power_on) {
+		dev_priv->amoled_shift.dir_x = 0;
+		dev_priv->amoled_shift.dir_y = 0;
+
+		/* Start pixel shift at a random position. */
+
+		get_random_bytes(&dev_priv->amoled_shift.curr_x, sizeof(dev_priv->amoled_shift.curr_x));
+		dev_priv->amoled_shift.curr_x = dev_priv->amoled_shift.curr_x % PIXEL_SHIFT_MAX_X;
+
+		get_random_bytes(&dev_priv->amoled_shift.curr_y, sizeof(dev_priv->amoled_shift.curr_y));
+		dev_priv->amoled_shift.curr_y = dev_priv->amoled_shift.curr_y % PIXEL_SHIFT_MAX_Y;
+
+		dev_priv->amoled_shift.flip_done = 0;
+
+		init_power_on = false;
+	}
+/* controlled by psb_intel_display2.c --> amoled worker */
+/*
+        else {
+                if (dev_priv->amoled_shift.curr_x < dev_priv->amoled_shift.max_x)
+                        dev_priv->amoled_shift.curr_x++;
+                else
+                        dev_priv->amoled_shift.curr_x = 0;
+
+                if (dev_priv->amoled_shift.curr_y < dev_priv->amoled_shift.max_y)
+                        dev_priv->amoled_shift.curr_y++;
+
+                else
+                        dev_priv->amoled_shift.curr_y = 0;
+        }
+*/	
 	if (err) {
 		DRM_ERROR("%s: %d: Set Display On\n", __func__, __LINE__);
 		goto power_err;
@@ -360,10 +461,30 @@ static int sdc25x16_cmd_power_off(
 	}
 	msleep(120);
 
+        if (vdd_1_8v_gpio)
+                gpio_set_value_cansleep(vdd_1_8v_gpio, 0);
+        msleep(10);
+
+        if (bias_en_gpio)
+                gpio_set_value_cansleep(bias_en_gpio, 0);
+
 	return 0;
 power_off_err:
 	err = -EIO;
 	return err;
+}
+
+static
+int sdc25x16_cmd_enable_pixel_shift(int *max_x,
+                         int *max_y)
+{
+        int val_x = PIXEL_SHIFT_MAX_X;
+        int val_y = PIXEL_SHIFT_MAX_Y;
+
+        *max_x = val_x;
+        *max_y = val_y;
+
+        return true;
 }
 
 static
@@ -381,8 +502,11 @@ int sdc25x16_cmd_set_brightness(
 		DRM_ERROR("Failed to get DSI packet sender\n");
 		return -EINVAL;
 	}
-	i = 20 - (20 * level)/ 255;
+	/* fcipaq: low brightness for night time reading */
+	i = 29 - (29 * level)/ 255;
+ 
 	sdc25x16_set_dimming(sender, i);
+	pr_err("================%d.%d\n",i,level);
 	return 0;
 }
 
@@ -390,22 +514,76 @@ static
 int sdc25x16_cmd_panel_reset(
 		struct mdfld_dsi_config *dsi_config)
 {
+        struct mdfld_dsi_pkg_sender *sender =
+                mdfld_dsi_get_pkg_sender(dsi_config);
+
 	int ret = 0;
 
 	msleep(30);
-	if (vdd_1_8v_gpio == 0) {
-		vdd_1_8v_gpio = 155;
-		ret = gpio_request(vdd_1_8v_gpio, "vdd_1_8v_gpio");
-		if (ret) {
-			DRM_ERROR("Faild to request vdd_1_8v gpio\n");
-			return -EINVAL;
-		}
-	}
-	gpio_direction_output(vdd_1_8v_gpio, 0);
-	gpio_set_value_cansleep(vdd_1_8v_gpio, 0);
-	usleep_range(2000, 2500);
-	gpio_set_value_cansleep(vdd_1_8v_gpio, 1);
-	msleep(800);
+
+	PSB_DEBUG_ENTRY("\n");
+
+        if (vdd_1_8v_gpio == 0) {
+                vdd_1_8v_gpio = 45;
+                ret = gpio_request(vdd_1_8v_gpio, "vdd_1_8v_gpio");
+                if (ret) {
+                        DRM_ERROR("Faild to request vdd_1_8v gpio\n");
+                        return -EINVAL;
+                }
+                ret = gpio_direction_output(vdd_1_8v_gpio, 0);
+                if (ret) {
+                        DRM_ERROR("Failed to set output direction for vdd_1_8v__gpio\n");
+                        return -EINVAL;
+                }
+        }
+
+	if (bias_en_gpio == 0) {
+                bias_en_gpio = 189;
+                ret = gpio_request(bias_en_gpio, "bias_enable");
+                if (ret) {
+                        DRM_ERROR("Failed to request bias_enable gpio\n");
+                        return -EINVAL;
+                }
+                ret = gpio_direction_output(bias_en_gpio, 0);
+                if (ret) {
+                        DRM_ERROR("Failed to set output direction for bias_en_gpio\n");
+                        return -EINVAL;
+                }
+        }
+
+        if (tcon_rdy_gpio == 0) {
+                tcon_rdy_gpio = 190;
+                ret = gpio_request(tcon_rdy_gpio, "tcon_rdy_gpio");
+                if (ret) {
+                        DRM_ERROR("Faild to request tcon_rdy_gpio\n");
+                        return -EINVAL;
+                }
+                ret = gpio_direction_input(tcon_rdy_gpio);
+                if (ret) {
+                        DRM_ERROR("Failed to set input direction for tcon_rdy_gpio\n");
+                        return -EINVAL;
+                }
+        }
+
+        gpio_direction_output(bias_en_gpio, 0);
+        gpio_direction_output(vdd_1_8v_gpio, 0);
+        gpio_set_value_cansleep(bias_en_gpio, 0);
+        gpio_set_value_cansleep(vdd_1_8v_gpio, 0);
+        msleep(15);
+        vdd3_power_ctrl(true);
+        msleep(10);
+        gpio_set_value_cansleep(bias_en_gpio, 1);
+        msleep(10);
+        gpio_set_value_cansleep(vdd_1_8v_gpio, 1);
+        msleep(10);
+
+        /* wait for tcon_rdy_gpio signal: L->H */
+        if (tcon_rdy_gpio) {
+                while (!gpio_get_value(tcon_rdy_gpio)) {
+                        ;
+                }
+        }
+	
 	return 0;
 }
 
@@ -419,11 +597,23 @@ int sdc25x16_cmd_exit_deep_standby(
 	if (bFirst) bFirst = false;
 	else {
 		msleep(30);
-		gpio_direction_output(vdd_1_8v_gpio, 0);
+                vdd3_power_ctrl(true);
+                msleep(10);
+                gpio_set_value_cansleep(bias_en_gpio, 0);
+    		usleep_range(2000, 2500);
+                gpio_set_value_cansleep(bias_en_gpio, 1);
+                msleep(10);
 		gpio_set_value_cansleep(vdd_1_8v_gpio, 0);
 		usleep_range(2000, 2500);
 		gpio_set_value_cansleep(vdd_1_8v_gpio, 1);
 		usleep_range(2000, 2500);
+
+                /* wait for tcon_rdy_gpio signal: L->H */
+                if (tcon_rdy_gpio) {
+                        while (!gpio_get_value(tcon_rdy_gpio)) {
+                                ;
+                        }
+                }
 	}
 	return 0;
 }
@@ -439,13 +629,13 @@ struct drm_display_mode *sdc25x16_cmd_get_config_mode(void)
 	if (!mode)
 		return NULL;
 
-	mode->hdisplay = 2560;
+	mode->hdisplay = WIDTH;
 
 	mode->hsync_start = mode->hdisplay + 48;
 	mode->hsync_end = mode->hsync_start + 32;
 	mode->htotal = mode->hsync_end + 80;
 
-	mode->vdisplay = 1600;
+	mode->vdisplay = HEIGHT;
 	mode->vsync_start = mode->vdisplay + 3;
 	mode->vsync_end = mode->vsync_start + 33;
 	mode->vtotal = mode->vsync_end + 10;
@@ -454,6 +644,9 @@ struct drm_display_mode *sdc25x16_cmd_get_config_mode(void)
 	mode->vrefresh = 60;
 	mode->clock =  mode->vrefresh * mode->vtotal * mode->htotal / 1000;
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
+
+	mode->hdisplay = WIDTH - PIXEL_SHIFT_MAX_X;
+	mode->vdisplay = HEIGHT - PIXEL_SHIFT_MAX_Y;
 
 	drm_mode_set_name(mode);
 	drm_mode_set_crtcinfo(mode, 0);
@@ -468,8 +661,8 @@ void sdc25x16_cmd_get_panel_info(int pipe,
 	PSB_DEBUG_ENTRY("\n");
 
 	if (pipe == 0) {
-		pi->width_mm = 130;
-		pi->height_mm = 181;
+		pi->width_mm = 224;
+		pi->height_mm = 140;
 	}
 }
 
@@ -495,6 +688,7 @@ void sdc25x16_cmd_init(struct drm_device *dev,
 			sdc25x16_cmd_set_brightness;
 	p_funcs->exit_deep_standby =
 				sdc25x16_cmd_exit_deep_standby;
-
+	p_funcs->enable_pixel_shift = sdc25x16_cmd_enable_pixel_shift;
+	drm_psb_te_timer_delay = DEFAULT_PANEL_DELAY;
 }
 

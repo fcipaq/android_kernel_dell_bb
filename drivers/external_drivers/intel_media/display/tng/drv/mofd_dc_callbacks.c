@@ -40,6 +40,13 @@
 
 #define KEEP_UNUSED_CODE 0
 
+static bool sprite_x_rev = false;
+static bool sprite_y_rev = false;
+static u32 primary_offset_x;
+static u32 primary_offset_y;
+static u32 primary_width;
+static u32 primary_height;
+
 #if KEEP_UNUSED_CODE
 static int FindCurPipe(struct drm_device *dev)
 {
@@ -240,15 +247,41 @@ void DCCBFlipSprite(struct drm_device *dev,
 	struct drm_psb_private *dev_priv;
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
+	struct drm_display_mode *fixed_mode = NULL;
 	u32 reg_offset = 0x3000;
+	u32 reg_val_pos;
+	u32 reg_val_size;
+	u32 ovadd_reg = OV_OVADD;
+	u32 ovadd;
+
+	int tmp_hdisplay;
+	int tmp_vdisplay;
 
 	if (!dev || !ctx)
 		return;
 
 	dev_priv = (struct drm_psb_private *)dev->dev_private;
 
+	DRM_INFO("DCCBFlipSprite: AMOLED wear leveling needs to be fixed.\n");
+//	WARN_ON(1);
+
 	user_mode_start(dev_priv);
 
+	switch (get_panel_type(dev, 0)) {
+	case SDC_25x16_CMD:
+		tmp_hdisplay = 2560;
+		tmp_vdisplay = 1600;
+		break;
+	case SDC_16x25_CMD:
+		tmp_hdisplay = 1600;
+		tmp_vdisplay = 2560;
+		break;
+	default:
+		tmp_hdisplay = fixed_mode->hdisplay;
+		tmp_vdisplay = fixed_mode->vdisplay;
+		break;
+	}
+ 
 	if (ctx->index == 1) {
 		reg_offset = 0x4000;
 	} else if (ctx->index == 2) {
@@ -259,7 +292,7 @@ void DCCBFlipSprite(struct drm_device *dev,
 		DRM_ERROR("%s: invalid index\n", __func__);
 	}
 
-	/* asign sprite to pipe */
+	/* assign sprite to pipe */
 	ctx->cntr &= ~DISPPLANE_SEL_PIPE_MASK;
 
 	if (ctx->pipe == 1)
@@ -272,12 +305,135 @@ void DCCBFlipSprite(struct drm_device *dev,
 		dsi_config = dev_priv->dsi_configs[1];
 	}
 
-	if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
-		PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+	if (dsi_config)
+	    fixed_mode = dsi_config->fixed_mode;
+	ovadd = PSB_RVDC32(ovadd_reg);
 
-	if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
-		PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
-		PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+                u32 sprite_offset_x;
+                u32 sprite_offset_y;
+                u32 sprite_width;
+                u32 sprite_height;
+		u32 x, y, w, h;
+
+                reg_val_pos = ctx->pos;
+                x = sprite_offset_x = reg_val_pos & 0x00000fff;
+                y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                reg_val_size = ctx->size;
+                w = sprite_width = reg_val_size & 0x00000fff;
+                h = sprite_height = (reg_val_size >> 16) & 0x00000fff;
+
+		if (!sprite_x_rev) {
+                        sprite_offset_x += dev_priv->amoled_shift.curr_x;
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) != tmp_hdisplay)
+                                                            && ((y + h + 1) == tmp_vdisplay)))
+                                            ;
+                                    else
+				            sprite_width -= dev_priv->amoled_shift.curr_x;
+				 }
+				 else
+				     sprite_width -= dev_priv->amoled_shift.curr_x;
+			}	
+                }
+                else {
+                        sprite_offset_x += (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) != tmp_hdisplay)
+                                                            && ((y + h + 1) == tmp_vdisplay)))
+                                            ;
+                                    else
+					    sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+				 }
+				 else
+				     sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			}
+                }
+
+                if (!sprite_y_rev) {
+                        sprite_offset_y += dev_priv->amoled_shift.curr_y;
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) == tmp_hdisplay)
+                                                            && ((y + h + 1) != tmp_vdisplay)))
+                                            ;
+                                    else
+					    sprite_height -= dev_priv->amoled_shift.curr_y;
+				 }
+				 else
+				     sprite_height -= dev_priv->amoled_shift.curr_y;
+			}
+                }
+                else {
+			sprite_offset_y += (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) == tmp_hdisplay)
+                                                            && ((y + h + 1) != tmp_vdisplay)))
+                                            ;
+                                    else
+					    sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+				 }
+				 else
+				     sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			}
+         	}
+
+                if (dev_priv->amoled_shift.curr_x == dev_priv->amoled_shift.max_x)
+                {
+                        dev_priv->amoled_shift.curr_x = 0;
+                        sprite_x_rev = !sprite_x_rev;
+                }
+
+		if (dev_priv->amoled_shift.curr_y == dev_priv->amoled_shift.max_y)
+                {
+                        dev_priv->amoled_shift.curr_y = 0;
+                        sprite_y_rev = !sprite_y_rev;
+                }
+
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION)) {
+			if (ovadd == 0x0)
+                        	reg_val_pos = (reg_val_pos & 0xf000f000) | sprite_offset_x | (sprite_offset_y << 16);
+			else 
+                        	reg_val_pos = (reg_val_pos & 0xf000f000) | x | (y << 16);
+			PSB_WVDC32(reg_val_pos, DSPAPOS + reg_offset);
+                }
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+			if (fixed_mode) {
+                        	if ((sprite_offset_x + sprite_width + 1) > tmp_hdisplay)
+					sprite_width = (tmp_hdisplay - 1) - sprite_offset_x;
+
+                        	if ((sprite_offset_y + sprite_height + 1) > tmp_vdisplay)
+					sprite_height = (tmp_vdisplay -1) - sprite_offset_y;
+			}
+
+			if (ovadd == 0x0) 
+                        	reg_val_size = (reg_val_size & 0xf000f000) | sprite_width | (sprite_height << 16);
+			else
+                        	reg_val_size = (reg_val_size & 0xf000f000) | w | (h << 16);
+                        PSB_WVDC32(reg_val_size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
+	} 
+	else {
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
+			PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+                        PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONSTALPHA)) {
@@ -285,11 +441,11 @@ void DCCBFlipSprite(struct drm_device *dev,
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONTROL)){
-		if(drm_psb_set_gamma_success)
+                if(drm_psb_set_gamma_success)
 			PSB_WVDC32(ctx->cntr | DISPPLANE_GAMMA_ENABLE, DSPACNTR + reg_offset);
-		else
-			PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
-    }
+                else
+                        PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
+        }
 
 	if ((ctx->update_mask & SPRITE_UPDATE_SURFACE)) {
 		PSB_WVDC32(ctx->linoff, DSPALINOFF + reg_offset);
@@ -299,8 +455,14 @@ void DCCBFlipSprite(struct drm_device *dev,
 
 	if (dsi_config) {
 		dsi_ctx = &dsi_config->dsi_hw_context;
-		dsi_ctx->sprite_dsppos = ctx->pos;
-		dsi_ctx->sprite_dspsize = ctx->size;
+		if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+			dsi_ctx->sprite_dsppos = reg_val_pos;
+			dsi_ctx->sprite_dspsize = reg_val_size;
+		}
+		else {
+			dsi_ctx->sprite_dsppos = ctx->pos;
+			dsi_ctx->sprite_dspsize = ctx->size;
+		}
 		dsi_ctx->sprite_dspstride = ctx->stride;
 		dsi_ctx->sprite_dspcntr = ctx->cntr | ((PSB_RVDC32(DSPACNTR + reg_offset) & DISPPLANE_GAMMA_ENABLE));
 		dsi_ctx->sprite_dsplinoff = ctx->linoff;
@@ -314,8 +476,12 @@ void DCCBFlipPrimary(struct drm_device *dev,
 	struct drm_psb_private *dev_priv;
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
+	struct drm_display_mode *fixed_mode = NULL;
 	u32 reg_offset;
 	int pipe;
+	u32 reg_val_pos;
+	u32 reg_val_size;
+	
 
 	if (!dev || !ctx)
 		return;
@@ -338,12 +504,76 @@ void DCCBFlipPrimary(struct drm_device *dev,
 	} else
 		return;
 
-	if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
-		PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+	if (dsi_config)
+	    fixed_mode = dsi_config->fixed_mode;
+	
+	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+                u32 sprite_offset_x;
+                u32 sprite_offset_y;
+                u32 sprite_width;
+                u32 sprite_height;
 
-	if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
-		PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
-		PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+		int tmp_hdisplay;
+		int tmp_vdisplay;
+
+		switch (get_panel_type(dev, 0)) {
+			case SDC_25x16_CMD:
+				tmp_hdisplay = 2560;
+				tmp_vdisplay = 1600;
+				break;
+			case SDC_16x25_CMD:
+				tmp_hdisplay = 1600;
+				tmp_vdisplay = 2560;
+				break;
+			default:
+				DRM_ERROR("Unknown panel, AMOLED wearleveling may fail.\n");
+				break;
+		}
+
+                reg_val_pos = ctx->pos;
+                primary_offset_x = sprite_offset_x = reg_val_pos & 0x00000fff;
+                primary_offset_y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                reg_val_size = ctx->size;
+                
+		sprite_width = reg_val_size & 0x00000fff;
+                sprite_height = (reg_val_size >> 16) & 0x00000fff;
+ 
+                primary_width = tmp_hdisplay;
+                primary_height = tmp_vdisplay;
+
+                sprite_offset_x = dev_priv->amoled_shift.curr_x;
+                sprite_offset_y = dev_priv->amoled_shift.curr_y;
+
+		dev_priv->amoled_shift.flip_done = 1;
+
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION)) {
+			reg_val_pos = (reg_val_pos & 0xf000f000) | sprite_offset_x | (sprite_offset_y << 16);
+			PSB_WVDC32(reg_val_pos, DSPAPOS + reg_offset);
+                }
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+			if (fixed_mode) {
+                        	if ((sprite_offset_x + sprite_width + 1) > tmp_hdisplay)
+					sprite_width = (tmp_hdisplay - 1) - sprite_offset_x;
+
+                        	if ((sprite_offset_y + sprite_height + 1) > tmp_vdisplay)
+					sprite_height = (tmp_vdisplay -1) - sprite_offset_y;
+			}
+
+                        reg_val_size  = (reg_val_size & 0xf000f000) | sprite_width | (sprite_height << 16);
+                        PSB_WVDC32(reg_val_size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
+//		DRM_INFO("B fcipaq, amoled, flipprimary offsetx: %lu, offsety: %lu, height: %d, width: %d\n", sprite_offset_x, sprite_offset_y, sprite_height, sprite_width);
+	} 
+	else {
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
+			PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+                        PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONSTALPHA)) {
@@ -351,11 +581,11 @@ void DCCBFlipPrimary(struct drm_device *dev,
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONTROL)){
-		if(drm_psb_set_gamma_success)
-			PSB_WVDC32(ctx->cntr | DISPPLANE_GAMMA_ENABLE, DSPACNTR + reg_offset);
-		else
-			PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
-    }
+                if(drm_psb_set_gamma_success)
+                        PSB_WVDC32(ctx->cntr | DISPPLANE_GAMMA_ENABLE, DSPACNTR + reg_offset);
+                else
+                        PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
+        }
 
 	if ((ctx->update_mask & SPRITE_UPDATE_SURFACE)) {
 		PSB_WVDC32(ctx->linoff, DSPALINOFF + reg_offset);
@@ -365,8 +595,14 @@ void DCCBFlipPrimary(struct drm_device *dev,
 
 	if (dsi_config) {
 		dsi_ctx = &dsi_config->dsi_hw_context;
-		dsi_ctx->dsppos = ctx->pos;
-		dsi_ctx->dspsize = ctx->size;
+		if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+			dsi_ctx->dsppos = reg_val_pos;
+			dsi_ctx->dspsize = reg_val_size;
+		}
+		else {
+			dsi_ctx->dsppos = ctx->pos;
+			dsi_ctx->dspsize = ctx->size;
+		}
 		dsi_ctx->dspstride = ctx->stride;
 		dsi_ctx->dspcntr = ctx->cntr | ((PSB_RVDC32(DSPACNTR + reg_offset) & DISPPLANE_GAMMA_ENABLE));
 		dsi_ctx->dsplinoff = ctx->linoff;

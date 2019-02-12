@@ -42,6 +42,62 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
+/* fcipaq: AMOLED wear leveling worker */
+#define AMOLED_SHIFT_TIMEOUT (1 * HZ)
+
+struct delayed_work wl_delayed_work;
+struct drm_device amoled_wl_dev;
+
+static void amoled_wearleveling_worker(struct work_struct *work)
+{
+
+	struct drm_device *dev = &amoled_wl_dev;
+	struct drm_psb_private *dev_priv =
+	    (struct drm_psb_private *)dev->dev_private;
+
+	int shift_y = 0;
+	
+	if (dev_priv->amoled_shift.flip_done == 0)
+		goto worker_end;
+
+	dev_priv->amoled_shift.flip_done = 0;
+
+	if (dev_priv->amoled_shift.dir_x == 0)	
+		if (dev_priv->amoled_shift.curr_x + 1 > dev_priv->amoled_shift.max_x)
+		{
+			dev_priv->amoled_shift.dir_x = 1;
+			shift_y = 1;
+		}
+		else
+			dev_priv->amoled_shift.curr_x++;
+	else
+		if (dev_priv->amoled_shift.curr_x == 0)
+		{
+			dev_priv->amoled_shift.dir_x = 0;
+			shift_y = 1;
+		}
+		else
+			dev_priv->amoled_shift.curr_x--;
+
+	if (shift_y)
+		if (dev_priv->amoled_shift.dir_y == 0)	
+			if (dev_priv->amoled_shift.curr_y + 1 > dev_priv->amoled_shift.max_y)
+				dev_priv->amoled_shift.dir_y = 1;
+			else
+				dev_priv->amoled_shift.curr_y++;
+		else
+			if (dev_priv->amoled_shift.curr_y == 0)
+				dev_priv->amoled_shift.dir_y = 0;
+			else
+				dev_priv->amoled_shift.curr_y--;
+
+ worker_end:
+
+	schedule_delayed_work(&wl_delayed_work, AMOLED_SHIFT_TIMEOUT);
+}
+
+/* fcipaq end */
+
 /* MDFLD_PLATFORM start */
 void mdfldWaitForPipeDisable(struct drm_device *dev, int pipe)
 {
@@ -1126,6 +1182,9 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 	int fb_depth;
 	int hdelay;
 
+	int tmp_hdisplay;
+	int tmp_vdisplay;
+
 	if (!crtc || !crtc->fb) {
 		DRM_ERROR("Invalid CRTC\n");
 		return -EINVAL;
@@ -1151,15 +1210,44 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 
 	ctx->vgacntr = 0x80000000;
 
+	/* fcipaq: Enable a resolution that is smaller than the actual        */
+	/* native resolution, so the picture can be shifted within a frame.   */
+	/* AMOLED wear leveling.					      */
+	if ((get_panel_type(dev, 0) == SDC_25x16_CMD) || (get_panel_type(dev, 0) == SDC_16x25_CMD)) {
+
+		switch (get_panel_type(dev, 0)) {
+		case SDC_25x16_CMD:
+			tmp_hdisplay = 2560;
+			tmp_vdisplay = 1600;
+			break;
+		case SDC_16x25_CMD:
+			tmp_hdisplay = 1600;
+			tmp_vdisplay = 2560;
+			break;
+		}
+
+		mode->crtc_hsync_start = tmp_hdisplay + 48;
+		mode->crtc_hsync_end = mode->crtc_hsync_start + 32;
+		mode->crtc_htotal = mode->crtc_hsync_end + 80;
+
+		mode->crtc_vsync_start = tmp_vdisplay + 3;
+		mode->crtc_vsync_end = mode->crtc_vsync_start + 33;
+		mode->crtc_vtotal = mode->crtc_vsync_end + 10;
+	} else
+	{
+		tmp_hdisplay = mode->crtc_hdisplay;
+		tmp_vdisplay = mode->crtc_vdisplay;
+	}
+
 	/*set up pipe timings */
 
-	ctx->htotal = (mode->crtc_hdisplay - 1) |
+	ctx->htotal = (tmp_hdisplay - 1) |
 	    ((mode->crtc_htotal - 1) << 16);
 	ctx->hblank = (mode->crtc_hblank_start - 1) |
 	    ((mode->crtc_hblank_end - 1) << 16);
 	ctx->hsync = (mode->crtc_hsync_start - 1) |
 	    ((mode->crtc_hsync_end - 1) << 16);
-	ctx->vtotal = (mode->crtc_vdisplay - 1) |
+	ctx->vtotal = (tmp_vdisplay - 1) |
 	    ((mode->crtc_vtotal - 1) << 16);
 	ctx->vblank = (mode->crtc_vblank_start - 1) |
 	    ((mode->crtc_vblank_end - 1) << 16);
@@ -1167,11 +1255,12 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 	    ((mode->crtc_vsync_end - 1) << 16);
 
 	/*pipe source */
-	ctx->pipesrc = ((mode->crtc_hdisplay - 1) << 16) |
-	    (mode->crtc_vdisplay - 1);
+	ctx->pipesrc = ((tmp_hdisplay - 1) << 16) |
+	    (tmp_vdisplay - 1);
 
 	/*setup dsp plane */
 	ctx->dsppos = 0;
+
 	/* PR2 panel has 200 pixel dummy clocks,
 	 * So the display timing should be 800x1024, and surface
 	 * is 608x1024(64 bits align), then the information between android
@@ -1240,6 +1329,15 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 	}
 
 	ctx->pipeconf |= ((hdelay - 1) << 27);
+
+	/* fcipaq: init AMOLED wear leveling worker */
+
+	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+
+		memcpy(&amoled_wl_dev, dev, sizeof(struct drm_device));
+		INIT_DELAYED_WORK(&wl_delayed_work, amoled_wearleveling_worker);
+		schedule_delayed_work(&wl_delayed_work, AMOLED_SHIFT_TIMEOUT);
+	}
 
 	mutex_unlock(&dsi_config->context_lock);
 	return 0;

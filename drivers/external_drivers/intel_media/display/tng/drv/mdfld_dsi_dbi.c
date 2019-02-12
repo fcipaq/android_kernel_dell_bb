@@ -1238,6 +1238,8 @@ struct mdfld_dsi_encoder *mdfld_dsi_dbi_init(struct drm_device *dev,
 		dev_priv ? (dev_priv->dbi_dsr_info) : NULL;
 #endif
 	int pipe;
+	int pixel_shift_max_x = 0;
+	int pixel_shift_max_y = 0;
 	int ret;
 
 	PSB_DEBUG_ENTRY("\n");
@@ -1370,6 +1372,13 @@ struct mdfld_dsi_encoder *mdfld_dsi_dbi_init(struct drm_device *dev,
 		dsr_info->dbi_output_num++;
 	}
 #endif
+
+	if (p_funcs && p_funcs->enable_pixel_shift) {
+                if (p_funcs->enable_pixel_shift(&pixel_shift_max_x, &pixel_shift_max_y)) {
+                        dev_priv->amoled_shift.max_x = pixel_shift_max_x;
+                        dev_priv->amoled_shift.max_y = pixel_shift_max_y;
+                }
+        }
 
 	PSB_DEBUG_ENTRY("successfully\n");
 

@@ -33,4 +33,6 @@
 
 void sdc25x16_cmd_init(struct drm_device *dev, struct panel_funcs *p_funcs);
 
+extern int panel_update_delay;
+
 #endif
