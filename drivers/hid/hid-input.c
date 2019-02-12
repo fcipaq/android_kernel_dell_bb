@@ -25,6 +25,8 @@
  * Vojtech Pavlik, Simunkova 1594, Prague 8, 182 00 Czech Republic
  */
 
+// TODO: fcipaq: KEY_102ND
+
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
@@ -317,9 +319,6 @@ static const struct hid_device_id hid_battery_quirks[] = {
 			       USB_DEVICE_ID_APPLE_ALU_WIRELESS_2011_ANSI),
 	  HID_BATTERY_QUIRK_PERCENT | HID_BATTERY_QUIRK_FEATURE },
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_APPLE,
-			       USB_DEVICE_ID_APPLE_ALU_WIRELESS_2011_ISO),
-	  HID_BATTERY_QUIRK_PERCENT | HID_BATTERY_QUIRK_FEATURE },
-	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_APPLE,
 		USB_DEVICE_ID_APPLE_ALU_WIRELESS_ANSI),
 	  HID_BATTERY_QUIRK_PERCENT | HID_BATTERY_QUIRK_FEATURE },
 	{}
@@ -363,11 +362,11 @@ static int hidinput_get_battery_property(struct power_supply *psy,
 					      dev->battery_report_type);
 
 		if (ret != 2) {
-			if (ret >= 0)
-				ret = -EINVAL;
+			ret = -ENODATA;
 			kfree(buf);
 			break;
 		}
+		ret = 0;
 
 		if (dev->battery_min < dev->battery_max &&
 		    buf[1] >= dev->battery_min &&
@@ -807,9 +806,14 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x196: map_key_clear(KEY_WWW);		break;
 		case 0x199: map_key_clear(KEY_CHAT);		break;
 		case 0x19c: map_key_clear(KEY_LOGOFF);		break;
-		case 0x19e: map_key_clear(KEY_COFFEE);		break;
-		case 0x19f: map_key_clear(KEY_CONTROLPANEL);		break;
-		case 0x1a2: map_key_clear(KEY_APPSELECT);		break;
+// fcipaq
+//		case 0x19e: map_key_clear(KEY_COFFEE);		break;
+		case 0x19e:
+			map_key_clear(KEY_102ND);		
+			dbg_hid("Remapping KEY_COFFEE to KEY_102ND \n");
+			break;
+		case 0x19f: map_key_clear(KEY_CONTROLPANEL);	break;
+		case 0x1a2: map_key_clear(KEY_APPSELECT);	break;
 		case 0x1a3: map_key_clear(KEY_NEXT);		break;
 		case 0x1a4: map_key_clear(KEY_PREVIOUS);	break;
 		case 0x1a6: map_key_clear(KEY_HELP);		break;
@@ -838,7 +842,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x221: map_key_clear(KEY_SEARCH);		break;
 		case 0x222: map_key_clear(KEY_GOTO);		break;
 		case 0x223: map_key_clear(KEY_HOMEPAGE);	break;
-		case 0x224: map_key_clear(KEY_BACK);		break;
+//		case 0x224: map_key_clear(KEY_BACK);		break;
+		case 0x224:
+			map_key_clear(KEY_ESC);
+			dbg_hid("Remapping KEY_BACK to KEY_ESC.\n");
+			break;
 		case 0x225: map_key_clear(KEY_FORWARD);		break;
 		case 0x226: map_key_clear(KEY_STOP);		break;
 		case 0x227: map_key_clear(KEY_REFRESH);		break;
@@ -1375,9 +1383,8 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 				 * UGCI) cram a lot of unrelated inputs into the
 				 * same interface. */
 				hidinput->report = report;
-				if (drv->input_configured &&
-				    drv->input_configured(hid, hidinput))
-					goto out_cleanup;
+				if (drv->input_configured)
+					drv->input_configured(hid, hidinput);
 				if (input_register_device(hidinput->input))
 					goto out_cleanup;
 				hidinput = NULL;
@@ -1398,9 +1405,8 @@ int hidinput_connect(struct hid_device *hid, unsigned int force)
 	}
 
 	if (hidinput) {
-		if (drv->input_configured &&
-		    drv->input_configured(hid, hidinput))
-			goto out_cleanup;
+		if (drv->input_configured)
+			drv->input_configured(hid, hidinput);
 		if (input_register_device(hidinput->input))
 			goto out_cleanup;
 	}

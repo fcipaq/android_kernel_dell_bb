@@ -327,12 +327,29 @@ config HID_LOGITECH
 config HID_LOGITECH_DJ
 	tristate "Logitech Unifying receivers full support"
 	depends on HID_LOGITECH
+	select HID_LOGITECH_HIDPP
+	default m
 	---help---
 	Say Y if you want support for Logitech Unifying receivers and devices.
 	Unifying receivers are capable of pairing up to 6 Logitech compliant
 	devices to the same receiver. Without this driver it will be handled by
 	generic USB_HID driver and all incoming events will be multiplexed
 	into a single mouse and a single keyboard device.
+
+config HID_LOGITECH_HIDPP
+	tristate "Support for Logitech Vendor Specific HID commands"
+	---help---
+	This module allows sending vendor specific commands to Logitech
+	devices
+
+config HID_LOGITECH_WTP
+	tristate "Logitech Unifying Wireless Touchpad full multitouch support"
+	depends on HID_LOGITECH_DJ
+	select HID_LOGITECH_HIDPP
+	---help---
+	Say Y if you want full multitouch support for the Logitech Unifying Wireless
+	Touchpad. Information of up to 4 fingers is transmitted to the kernel which
+	enables complex gestures to be recognized.
 
 config LOGITECH_FF
 	bool "Logitech force feedback support"
@@ -352,14 +369,12 @@ config LOGITECH_FF
 	  force feedback.
 
 config LOGIRUMBLEPAD2_FF
-	bool "Logitech force feedback support (variant 2)"
+	bool "Logitech RumblePad/Rumblepad 2 force feedback support"
 	depends on HID_LOGITECH
 	select INPUT_FF_MEMLESS
 	help
-	  Say Y here if you want to enable force feedback support for:
-	  - Logitech RumblePad
-	  - Logitech Rumblepad 2
-	  - Logitech Formula Vibration Feedback Wheel
+	  Say Y here if you want to enable force feedback support for Logitech
+	  RumblePad and Rumblepad 2 devices.
 
 config LOGIG940_FF
 	bool "Logitech Flight System G940 force feedback support"
@@ -438,11 +453,9 @@ config HID_MULTITOUCH
 	  - Pixcir dual touch panels
 	  - Quanta panels
 	  - eGalax dual-touch panels, including the Joojoo and Wetab tablets
-	  - SiS multitouch panels
 	  - Stantum multitouch panels
 	  - Touch International Panels
 	  - Unitec Panels
-	  - Wistron optical touch panels
 	  - XAT optical touch panels
 	  - Xiroku optical touch panels
 	  - Zytronic touch panels
@@ -558,6 +571,18 @@ config HID_PICOLCD_CIR
 	---help---
 	  Provide access to PicoLCD's CIR interface via remote control (LIRC).
 
+config HID_PLANTRONICS
+	tristate "Plantronics USB HID Driver"
+	default !EXPERT
+	depends on HID
+	---help---
+	  Provides HID support for Plantronics USB audio devices.
+	  Correctly maps vendor unique volume up/down HID usages to
+	  KEY_VOLUMEUP and KEY_VOLUMEDOWN events and prevents core mapping
+	  of other vendor unique HID usages to random mouse events.
+
+	  Say M here if you may ever plug in a Plantronics USB audio device.
+
 config HID_PRIMAX
 	tristate "Primax non-fully HID-compliant devices"
 	depends on HID
@@ -573,6 +598,13 @@ config HID_PS3REMOTE
 	Harmony Adapter for PS3, which connect over Bluetooth.
 
 	Support for the 6-axis controllers is provided by HID_SONY.
+
+config HID_QUICKSTEP
+	tristate "ChromeOS Touch Latency Measurement Device -- Quickstep"
+	depends on USB_HID
+	---help---
+	This module is the driver for the ChromeOS Touch Latency Measurement
+	Device known as Quickstep.
 
 config HID_ROCCAT
 	tristate "Roccat device support"
@@ -622,6 +654,14 @@ config HID_SUNPLUS
 	depends on HID
 	---help---
 	Support for Sunplus wireless desktop.
+
+config HID_RMI
+	tristate "Synaptics RMI4 device support"
+	depends on HID
+	---help---
+	Support for Synaptics RMI4 touchpads.
+	Say Y here if you have a Synaptics RMI4 touchpads over i2c-hid or usbhid
+	and want support for its special functionalities.
 
 config HID_GREENASIA
 	tristate "GreenAsia (Product ID 0x12) game controller support"

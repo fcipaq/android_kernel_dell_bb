@@ -250,6 +250,13 @@ struct devs_id __initconst device_ids[] = {
 	{"max17050", SFI_DEV_TYPE_I2C, 1, &max17042_platform_data, NULL},
 	{"bq24192", SFI_DEV_TYPE_I2C, 1, &bq24192_platform_data},
 	{"bq24261_charger", SFI_DEV_TYPE_I2C, 1, &bq24261_platform_data, NULL},
+#ifdef CONFIG_BQ24261_CHARGER_EP
+	/* fcipaq */
+	/* enable EXPERIMENTAL support for EP keyboard */
+	{"bq24261_ep", SFI_DEV_TYPE_I2C, 1, &no_platform_data, NULL},
+//	{"bq24261_ep", SFI_DEV_TYPE_I2C, 1, &bq24261_platform_data, NULL},
+//	{"max17050_ep", SFI_DEV_TYPE_I2C, 1, &max17042_platform_data, NULL},
+#endif
 	{"pn544", SFI_DEV_TYPE_I2C, 0, &pn544_platform_data, NULL},
 	{"fdp", SFI_DEV_TYPE_I2C, 0, &fdp_platform_data, NULL},
 	{"l3gd20", SFI_DEV_TYPE_I2C, 0, &l3g4200d_platform_data, NULL},
