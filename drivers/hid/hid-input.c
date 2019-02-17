@@ -806,11 +806,10 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x196: map_key_clear(KEY_WWW);		break;
 		case 0x199: map_key_clear(KEY_CHAT);		break;
 		case 0x19c: map_key_clear(KEY_LOGOFF);		break;
-// fcipaq
 //		case 0x19e: map_key_clear(KEY_COFFEE);		break;
 		case 0x19e:
 			map_key_clear(KEY_102ND);		
-			dbg_hid("Remapping KEY_COFFEE to KEY_102ND \n");
+			dbg_hid("EP keyboard: Remapping KEY_COFFEE to KEY_102ND \n");
 			break;
 		case 0x19f: map_key_clear(KEY_CONTROLPANEL);	break;
 		case 0x1a2: map_key_clear(KEY_APPSELECT);	break;
@@ -841,11 +840,15 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x21f: map_key_clear(KEY_FIND);		break;
 		case 0x221: map_key_clear(KEY_SEARCH);		break;
 		case 0x222: map_key_clear(KEY_GOTO);		break;
-		case 0x223: map_key_clear(KEY_HOMEPAGE);	break;
+//		case 0x223: map_key_clear(KEY_HOMEPAGE);	break;
+		case 0x223:
+			map_key_clear(KEY_LEFTMETA);		
+			dbg_hid("EP keyboard: Remapping KEY_HOMEPAGE to KEY_LEFTMETA \n");
+			break;
 //		case 0x224: map_key_clear(KEY_BACK);		break;
 		case 0x224:
 			map_key_clear(KEY_ESC);
-			dbg_hid("Remapping KEY_BACK to KEY_ESC.\n");
+			dbg_hid("EP keyboard: Remapping KEY_BACK to KEY_ESC.\n");
 			break;
 		case 0x225: map_key_clear(KEY_FORWARD);		break;
 		case 0x226: map_key_clear(KEY_STOP);		break;
