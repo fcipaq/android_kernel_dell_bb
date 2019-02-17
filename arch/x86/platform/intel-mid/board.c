@@ -272,7 +272,7 @@ struct devs_id __initconst device_ids[] = {
 	{"btns_mcu_bl", SFI_DEV_TYPE_I2C, 0, &kl03_hinge_platform_data, NULL},
 	{"ak9916", SFI_DEV_TYPE_I2C, 0, &no_platform_data, NULL},
 	{"mpu6515", SFI_DEV_TYPE_I2C, 0, &no_platform_data, NULL},
-    {"fusb302", SFI_DEV_TYPE_I2C, 0, &no_platform_data, NULL},
+	{"fusb302", SFI_DEV_TYPE_I2C, 0, &no_platform_data, NULL},
 #ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP5
 	{CYTTSP5_I2C_NAME, SFI_DEV_TYPE_I2C, 0, &cyttsp5_platform_data, NULL},
 #endif
