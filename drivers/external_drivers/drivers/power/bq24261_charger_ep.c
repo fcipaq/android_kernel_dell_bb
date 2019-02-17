@@ -175,9 +175,9 @@
 
 /* fcipaq move me to header file */
 int is_second_ic(struct i2c_client *client);
+int ic2_init_complete = 0;
 struct bq24261_charger *chip_ic2;
 /* fcipaq end */
-
 
 u16 bq24261_sfty_tmr[][2] = {
 	{0, BQ24261_SAFETY_TIMER_DISABLED}
@@ -1450,8 +1450,6 @@ static void bq24261_wdt_reset_worker(struct work_struct *work)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset\n", ret);
-//	else
-//		dev_info(&chip->client->dev, "WDT reset\n");
 
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
@@ -1460,23 +1458,21 @@ static void bq24261_wdt_boost_ic2(struct bq24261_charger *chip, int val)
 {
 	int ret;
 	
-	if (val == 1)
-	{
-		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, BQ24261_ENABLE_BOOST);
+	if (!ic2_init_complete) {
+		dev_err(&chip->client->dev, "Error enabling booster: IC #2 is uninitialized.\n");
+		return;
+	}
 
-		if (ret)
-			dev_err(&chip->client->dev, "Error (%d) in boostmode on\n", ret);
-		else
-			dev_info(&chip->client->dev, "boostmode on\n");
-	} else
-	{
+	if (val == 1)
+		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, BQ24261_ENABLE_BOOST);
+	else
 		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, ~BQ24261_ENABLE_BOOST);
 
-		if (ret)
-			dev_err(&chip->client->dev, "Error (%d) in boostmode off\n", ret);
-		else
-			dev_info(&chip->client->dev, "boostmode off\n");
-	}
+	if (ret)
+		dev_err(&chip->client->dev, "Error (%d) in setting boostmode to %d\n", ret, val);
+//	else
+//		dev_info(&chip->client->dev, "boostmode: %d\n", val);
+
 }
 
 static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
@@ -1490,10 +1486,8 @@ static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset of IC #2\n", ret);
-//	else
-//		dev_info(&chip->client->dev, "WDT reset of IC #2\n");
 
-	bq24261_wdt_boost_ic2(chip, 1);
+//	bq24261_wdt_boost_ic2(chip, 1);
 
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
@@ -1989,6 +1983,8 @@ static ssize_t dock_print_state(struct switch_dev *sdev, char *buf)
 /* This function is platform specific.						       */
 int is_second_ic(struct i2c_client *client)
 {
+
+//	return (strcmp("2-006b", dev_name(&client->dev)) == 0) ? 1 : 0;
 	if (strcmp("2-006b", dev_name(&client->dev)) == 0)
 		return 1;
 	else
@@ -2021,6 +2017,8 @@ static int bq24261_probe(struct i2c_client *client,
 		chip->pdata = client->dev.platform_data;
 
 		chip_ic2 = chip;
+
+		ic2_init_complete = 1;
 
 		bq24261_read_modify_reg(chip->client,
 					BQ24261_STAT_CTRL0_ADDR,
@@ -2222,14 +2220,15 @@ static int bq24261_probe(struct i2c_client *client,
 static int bq24261_remove(struct i2c_client *client)
 {
 	/* fcipaq: TODO This routine should probably also be run for the
-	 * 2nd IC, but as this only occurs on shutdown, I don't care...
+	 * 2nd IC, but as this only occurs on shutdown, it's not urgent...
 	 */
 	struct bq24261_charger *chip = i2c_get_clientdata(client);
 
 	/* fcipaq: power down keyboard supply */
-	cancel_delayed_work_sync(&chip_ic2->wdt_work);
-	bq24261_wdt_boost_ic2(chip_ic2, 0);
-	/* fcipaq end */
+	if (ic2_init_complete) {
+		cancel_delayed_work_sync(&chip_ic2->wdt_work);
+		bq24261_wdt_boost_ic2(chip_ic2, 0);
+	}
 
 	if (client->irq)
 		free_irq(client->irq, chip);
@@ -2259,11 +2258,14 @@ static int bq24261_suspend(struct device *dev)
 
 	if (((chip->revision & BQ24261_REV_MASK) == BQ24261_REV) ||
 			chip->pdata->is_wdt_kick_needed) {
+
 		if (chip->boost_mode)
 			cancel_delayed_work_sync(&chip->wdt_work);
-			/* fcipaq */
+
+		/* fcipaq: power down keyboard supply */
+		if (ic2_init_complete)
 			cancel_delayed_work_sync(&chip_ic2->wdt_work);
-			/* fcipaq end */
+
 	}
 	dev_dbg(&chip->client->dev, "bq24261 suspend\n");
 	return 0;
@@ -2277,10 +2279,11 @@ static int bq24261_resume(struct device *dev)
 			chip->pdata->is_wdt_kick_needed) {
 		if (chip->boost_mode)
 			bq24261_enable_boost_mode(chip, 1);
-		/* fcipaq */
-		bq24261_wdt_boost_ic2(chip_ic2, 1);
-		schedule_delayed_work(&chip_ic2->wdt_work, WDT_RESET_DELAY);
-		/* fcipaq end */
+		/* fcipaq: power up keyboard supply */
+		if (ic2_init_complete) {
+			bq24261_wdt_boost_ic2(chip_ic2, 1);
+			schedule_delayed_work(&chip_ic2->wdt_work, WDT_RESET_DELAY);
+		}
 	}
 
 	dev_dbg(&chip->client->dev, "bq24261 resume\n");
@@ -2327,9 +2330,10 @@ static void bq24261_shutdown(struct i2c_client *client)
 	dev_info(&client->dev,"%s called\n", __func__);
 
 	/* fcipaq: power down keyboard supply */
-	cancel_delayed_work_sync(&chip_ic2->wdt_work);
-	bq24261_wdt_boost_ic2(chip_ic2, 0);
-	/* fcipaq end */
+	if (ic2_init_complete) {
+		cancel_delayed_work_sync(&chip_ic2->wdt_work);
+		bq24261_wdt_boost_ic2(chip_ic2, 0);
+	}
 
 	ret =  bq24261_read_modify_reg(client, BQ24261_STAT_CTRL0_ADDR,
                                    BQ24261_TMR_RST_MASK, BQ24261_TMR_RST);
