@@ -43,7 +43,7 @@
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 /* fcipaq: AMOLED wear leveling worker */
-#define AMOLED_SHIFT_TIMEOUT (1 * HZ)
+#define AMOLED_SHIFT_TIMEOUT (60 * HZ)
 
 struct delayed_work wl_delayed_work;
 struct drm_device amoled_wl_dev;
