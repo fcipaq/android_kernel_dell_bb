@@ -48,6 +48,8 @@
 struct delayed_work wl_delayed_work;
 struct drm_device amoled_wl_dev;
 
+extern bool psb_zoom;
+
 static void amoled_wearleveling_worker(struct work_struct *work)
 {
 
@@ -57,12 +59,12 @@ static void amoled_wearleveling_worker(struct work_struct *work)
 
 	int shift_y = 0;
 	
-	if (dev_priv->amoled_shift.flip_done == 0)
+	if ((dev_priv->amoled_shift.flip_done == 0) || psb_zoom)
 		goto worker_end;
 
 	dev_priv->amoled_shift.flip_done = 0;
 
-	if (dev_priv->amoled_shift.dir_x == 0)	
+	if (dev_priv->amoled_shift.dir_x == 0) {	
 		if (dev_priv->amoled_shift.curr_x + 1 > dev_priv->amoled_shift.max_x)
 		{
 			dev_priv->amoled_shift.dir_x = 1;
@@ -70,7 +72,7 @@ static void amoled_wearleveling_worker(struct work_struct *work)
 		}
 		else
 			dev_priv->amoled_shift.curr_x++;
-	else
+	} else {
 		if (dev_priv->amoled_shift.curr_x == 0)
 		{
 			dev_priv->amoled_shift.dir_x = 0;
@@ -78,18 +80,21 @@ static void amoled_wearleveling_worker(struct work_struct *work)
 		}
 		else
 			dev_priv->amoled_shift.curr_x--;
+	}
 
-	if (shift_y)
-		if (dev_priv->amoled_shift.dir_y == 0)	
+	if (shift_y) {
+		if (dev_priv->amoled_shift.dir_y == 0) {
 			if (dev_priv->amoled_shift.curr_y + 1 > dev_priv->amoled_shift.max_y)
 				dev_priv->amoled_shift.dir_y = 1;
 			else
 				dev_priv->amoled_shift.curr_y++;
-		else
+		} else {
 			if (dev_priv->amoled_shift.curr_y == 0)
 				dev_priv->amoled_shift.dir_y = 0;
 			else
 				dev_priv->amoled_shift.curr_y--;
+		}
+	}
 
  worker_end:
 
@@ -1223,6 +1228,8 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 		case SDC_16x25_CMD:
 			tmp_hdisplay = 1600;
 			tmp_vdisplay = 2560;
+			break;
+		default:
 			break;
 		}
 

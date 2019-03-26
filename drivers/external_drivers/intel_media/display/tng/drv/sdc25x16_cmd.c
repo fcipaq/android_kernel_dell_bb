@@ -34,11 +34,8 @@
 #define WIDTH 2560
 #define HEIGHT 1600
 
-#define PIXEL_SHIFT_MAX_X       32//64
-#define PIXEL_SHIFT_MAX_Y       16//32
-
-#define PIXEL_SHIFT_INITIAL_X       0
-#define PIXEL_SHIFT_INITIAL_Y       1
+#define PIXEL_SHIFT_MAX_X       32
+#define PIXEL_SHIFT_MAX_Y       16
 
 /* Set the panel update delay to 8 ms */
 #define DEFAULT_PANEL_DELAY 8000
@@ -53,31 +50,6 @@ static u8 sdc_column_addr[] = {
 			0x2a, 0x00, 0x00, 0x04, 0xff};
 static u8 sdc_page_addr[] = {
 			0x2b, 0x00, 0x00, 0x06, 0x3f};
-
-#if 0 // keep unused code
-static	u8 sdc_set_300nit[34] = { 0x83,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x00,
-								0x80, 0x80,
-								0x00,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x00,
-								0x80, 0x80,
-								0x00,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x80,
-								0x80, 0x00,
-								0x80, 0x80,
-								0x00};
-static	u8 sdc_set_AID[] = { 0x85, 0x06, 0x00 };
-static	u8 sdc_300_ELVSS[] = { 0xbb, 0x19};
-static	u8 sdc_set_ACL_off[] = { 0xbb, 0x10};
-#endif
 
 static	u8 sdc_set_ACL_on[] = { 0xbb, 0x12};
 
@@ -125,7 +97,6 @@ static u8 sdc_brightness_list[num_brightness][5] = {
 			{0x1b, 0x91, 0x01, 0x1f, 0x1f},
 			{0x1c, 0x96, 0x01, 0x1f, 0x1f},
 			{0x1f, 0x1f, 0x1f, 0x1f, 0x1f} // off
-			/* Don't forget to change num_brightness */
 };
 
 static
@@ -481,7 +452,6 @@ int sdc25x16_cmd_set_brightness(
 
 	sdc25x16_set_dimming(sender, i);
 
-//	pr_err("================%d.%d\n",i,level);
 	return 0;
 }
 
@@ -489,11 +459,6 @@ static
 int sdc25x16_cmd_panel_reset(
 		struct mdfld_dsi_config *dsi_config)
 {
-#if 0
-        struct mdfld_dsi_pkg_sender *sender =
-                mdfld_dsi_get_pkg_sender(dsi_config);
-#endif
-
 	int ret = 0;
 
 	msleep(30);

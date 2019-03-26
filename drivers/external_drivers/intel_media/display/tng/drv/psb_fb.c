@@ -44,6 +44,8 @@
 #include "mdfld_dsi_output.h"
 #include "mdfld_output.h"
 
+bool psb_zoom = false;
+
 static void psb_user_framebuffer_destroy(struct drm_framebuffer *fb);
 static int psb_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 					      struct drm_file *file_priv,
@@ -300,6 +302,73 @@ static int fb_blank_void(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
+#define FBIO_PSB_SET_HIRES	_IOWR('F', 0x42, struct fb_var_screeninfo)
+#define FBIO_PSB_SET_LOWRES      _IOWR('F', 0x43, struct fb_var_screeninfo)
+#define FBIO_PSB_TOGGLE_RES      _IOWR('F', 0x44, struct fb_var_screeninfo)
+#define FBIO_PSB_SHIFT_X      _IOWR('F', 0x45, struct fb_var_screeninfo)
+#define FBIO_PSB_SHIFT_Y      _IOWR('F', 0x46, struct fb_var_screeninfo)
+
+static int psbfb_set_res(struct fb_info *info, struct psb_fbdev *fbdev, int cmd, unsigned long arg)
+{
+	struct drm_device *dev = fbdev->psb_fb_helper.dev;
+	struct drm_psb_private *dev_priv =
+	    (struct drm_psb_private *)dev->dev_private;
+
+	struct mdfld_dsi_encoder *dsi_encoder =
+		MDFLD_DSI_ENCODER_WITH_DRM_ENABLE(dev_priv->encoder0);
+	struct mdfld_dsi_config *dsi_config =
+		mdfld_dsi_encoder_get_config(dsi_encoder);
+	struct drm_display_mode *fixed_mode;
+
+	if (!dsi_config) {
+		DRM_ERROR("Failed to get encoder config\n");
+		return -EINVAL;
+	}
+
+	fixed_mode = dsi_config->fixed_mode;
+
+	switch(cmd) {
+		case FBIO_PSB_SET_HIRES:
+			psb_zoom = false;
+			break;
+		case FBIO_PSB_SET_LOWRES:
+			psb_zoom = true;
+			break;
+		case FBIO_PSB_TOGGLE_RES:
+			// psb_zoom = (psb_zoom == true) ? false : true;			
+			if (psb_zoom)
+				psb_zoom = false;
+			else
+				psb_zoom = true;
+			break;
+		default:
+			return -ENOTTY;
+	}
+
+	return 0;
+
+}
+
+static int psb_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
+{
+	struct psb_fbdev *fbdev = info->par;
+	int ret = 0;
+
+	switch(cmd) {
+		case FBIO_PSB_TOGGLE_RES:
+		case FBIO_PSB_SET_HIRES:
+		case FBIO_PSB_SET_LOWRES:
+		case FBIO_PSB_SHIFT_X:
+		case FBIO_PSB_SHIFT_Y:
+			ret = psbfb_set_res(info, fbdev, cmd, arg);
+			break;
+		default:
+			return -ENOTTY;
+	}
+
+	return ret;
+}
+
 static struct fb_ops psbfb_ops = {
 	.owner = THIS_MODULE,
 	.fb_check_var = drm_fb_helper_check_var,
@@ -310,6 +379,10 @@ static struct fb_ops psbfb_ops = {
 	.fb_copyarea = cfb_copyarea,
 	.fb_imageblit = cfb_imageblit,
 	.fb_mmap = psbfb_mmap,
+	.fb_ioctl = psb_fb_ioctl,
+#ifdef CONFIG_COMPAT
+	.fb_compat_ioctl = psb_fb_ioctl,
+#endif
 };
 
 static struct drm_framebuffer *psb_framebuffer_create(struct drm_device *dev,
@@ -518,7 +591,7 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 	info->fix.smem_len = size;
 	info->screen_base = (char *)pg->vram_addr;
 	info->screen_size = size;
-	//memset(info->screen_base, 0xf0, size);
+	memset(info->screen_base, 0x00, size);
 
 	drm_fb_helper_fill_fix(info, fb->pitches[0], fb->depth);
 

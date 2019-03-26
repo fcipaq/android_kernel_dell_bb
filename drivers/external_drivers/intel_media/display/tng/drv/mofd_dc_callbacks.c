@@ -47,6 +47,10 @@ static u32 primary_offset_y;
 static u32 primary_width;
 static u32 primary_height;
 
+static bool DCCBFlipSprite_WARNON = false;
+
+extern bool psb_zoom;
+
 #if KEEP_UNUSED_CODE
 static int FindCurPipe(struct drm_device *dev)
 {
@@ -262,8 +266,11 @@ void DCCBFlipSprite(struct drm_device *dev,
 
 	dev_priv = (struct drm_psb_private *)dev->dev_private;
 
-	DRM_INFO("DCCBFlipSprite: AMOLED wear leveling needs to be fixed.\n");
-//	WARN_ON(1);
+	if (!DCCBFlipSprite_WARNON) {
+		DCCBFlipSprite_WARNON = true;
+		DRM_INFO("DCCBFlipSprite: AMOLED wear leveling needs to be fixed.\n");
+		WARN_ON(1);
+	}
 
 	user_mode_start(dev_priv);
 
@@ -541,8 +548,13 @@ void DCCBFlipPrimary(struct drm_device *dev,
                 primary_width = tmp_hdisplay;
                 primary_height = tmp_vdisplay;
 
-                sprite_offset_x = dev_priv->amoled_shift.curr_x;
-                sprite_offset_y = dev_priv->amoled_shift.curr_y;
+		if (psb_zoom) {
+		        sprite_offset_x = 0;
+		        sprite_offset_y = 0;
+		} else {
+		        sprite_offset_x = dev_priv->amoled_shift.curr_x;
+		        sprite_offset_y = dev_priv->amoled_shift.curr_y;
+		}
 
 		dev_priv->amoled_shift.flip_done = 1;
 
@@ -586,6 +598,14 @@ void DCCBFlipPrimary(struct drm_device *dev,
                 else
                         PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
         }
+
+	/* enable/disable double scan */
+	if (psb_zoom) {
+		ctx->cntr |= (0x1 << 20);
+		PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
+	} else {
+		ctx->cntr &= ~(1UL << 20);
+	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_SURFACE)) {
 		PSB_WVDC32(ctx->linoff, DSPALINOFF + reg_offset);
