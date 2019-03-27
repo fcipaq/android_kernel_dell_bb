@@ -46,6 +46,8 @@
 
 bool psb_zoom = false;
 
+extern struct drm_device amoled_wl_dev;
+
 static void psb_user_framebuffer_destroy(struct drm_framebuffer *fb);
 static int psb_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 					      struct drm_file *file_priv,
@@ -520,6 +522,10 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 		mdfld_dsi_encoder_get_config(dsi_encoder);
 	struct drm_display_mode *fixed_mode;
 
+	char *copy_src;
+	char *copy_dst;
+	int i;
+
 	if (!dsi_config) {
 		DRM_ERROR("Failed to get encoder config\n");
 		return -EINVAL;
@@ -591,7 +597,17 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 	info->fix.smem_len = size;
 	info->screen_base = (char *)pg->vram_addr;
 	info->screen_size = size;
-	memset(info->screen_base, 0x00, size);
+
+	copy_src = info->screen_base;
+	copy_dst = info->screen_base;
+
+	for (i = 1; i < mode_cmd.height; i++)
+	{
+		copy_src += ALIGN((mode_cmd.width + dev_priv->amoled_shift.max_x) * (sizes->surface_bpp >> 3), 64);
+		copy_dst += ALIGN(mode_cmd.width * (sizes->surface_bpp >> 3), 64);
+
+		memcpy(copy_dst, copy_src, ALIGN(mode_cmd.width * (sizes->surface_bpp >> 3), 64));
+	}
 
 	drm_fb_helper_fill_fix(info, fb->pitches[0], fb->depth);
 
