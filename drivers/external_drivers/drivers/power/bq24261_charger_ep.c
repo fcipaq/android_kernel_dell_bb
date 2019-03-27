@@ -173,11 +173,12 @@
 /* No of times retry on -EAGAIN or -ETIMEDOUT error */
 #define NR_RETRY_CNT    3
 
-/* fcipaq move me to header file */
+// 2nd charger IC (keyboard power supply, EP only)
 int is_second_ic(struct i2c_client *client);
 int ic2_init_complete = 0;
 struct bq24261_charger *chip_ic2;
-/* fcipaq end */
+int ep_kbd_pwr_state = 0;
+static void bq24261_wdt_boost_ic2(struct bq24261_charger *chip, int val);
 
 u16 bq24261_sfty_tmr[][2] = {
 	{0, BQ24261_SAFETY_TIMER_DISABLED}
@@ -556,6 +557,66 @@ static const struct file_operations bq24261_dbg_fops = {
 	.release = single_release
 };
 
+/* 2nd charger IC (keyboard power supply, EP only) */
+static int ep_kbd_pwr_show(struct seq_file *s, void *unused)
+{
+
+	switch (ep_kbd_pwr_state) {
+	    case 1:
+		    seq_printf(s, "1\n");
+		    break;
+	    case 0:
+		    seq_printf(s, "0\n");
+		    break;
+	    default:
+		    seq_printf(s, "UNKNOWN, this is a BUG %08x\n", ep_kbd_pwr_state);
+	}
+
+	return 0;
+}
+
+static int ep_kbd_pwr_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ep_kbd_pwr_show, inode->i_private);
+}
+
+static ssize_t ep_kbd_pwr_write(struct file *file,
+		const char __user *ubuf, size_t count, loff_t *ppos)
+{
+	u32			mode = 2;
+	char			buf[32];
+
+	if (copy_from_user(&buf, ubuf, min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
+
+	if (!strncmp(buf, "1", 1))
+		mode = 1;
+
+	if (!strncmp(buf, "0", 1))
+		mode = 0;
+
+	if (!((mode == 0) || (mode == 1)))
+	return -EFAULT;
+
+	ep_kbd_pwr_state = mode;     
+
+	if (ep_kbd_pwr_state) {
+		bq24261_wdt_boost_ic2(chip_ic2, 1);
+	} else {
+		bq24261_wdt_boost_ic2(chip_ic2, 0);
+	}
+
+	return count;
+}
+
+static const struct file_operations ep_kbd_pwr_fops = {
+	.open			= ep_kbd_pwr_open,
+	.write			= ep_kbd_pwr_write,
+	.read			= seq_read,
+	.llseek			= seq_lseek,
+	.release		= single_release,
+};
+
 static void bq24261_debugfs_init(void)
 {
 	struct dentry *fentry;
@@ -588,6 +649,16 @@ static void bq24261_debugfs_init(void)
 		if (fentry == NULL)
 			goto debugfs_err_exit;
 	}
+
+	/* 2nd charger IC (keyboard power supply, EP only) */
+	fentry = debugfs_create_file("ep_kbd_pwr", S_IRUGO | S_IWUSR,
+					bq24261_dbgfs_dir,
+					&ep_kbd_pwr_state,
+					&ep_kbd_pwr_fops);
+
+	if (fentry == NULL)
+		goto debugfs_err_exit;
+
 	dev_err(&bq24261_client->dev, "Debugfs created successfully!!\n");
 	return;
 
@@ -1487,7 +1558,11 @@ static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset of IC #2\n", ret);
 
-//	bq24261_wdt_boost_ic2(chip, 1);
+	if (ep_kbd_pwr_state) {
+		bq24261_wdt_boost_ic2(chip, 1);
+	} else {
+		bq24261_wdt_boost_ic2(chip, 0);
+	}
 
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
@@ -2020,11 +2095,6 @@ static int bq24261_probe(struct i2c_client *client,
 
 		ic2_init_complete = 1;
 
-		bq24261_read_modify_reg(chip->client,
-					BQ24261_STAT_CTRL0_ADDR,
-					BQ24261_BOOST_MASK,
-					BQ24261_ENABLE_BOOST);
-
 		INIT_DELAYED_WORK(&chip->wdt_work,
 					bq24261_wdt_reset_worker_ic2);
 
@@ -2263,8 +2333,10 @@ static int bq24261_suspend(struct device *dev)
 			cancel_delayed_work_sync(&chip->wdt_work);
 
 		/* fcipaq: power down keyboard supply */
-		if (ic2_init_complete)
+		if (ic2_init_complete) {
 			cancel_delayed_work_sync(&chip_ic2->wdt_work);
+			bq24261_wdt_boost_ic2(chip_ic2, 0);
+		}
 
 	}
 	dev_dbg(&chip->client->dev, "bq24261 suspend\n");
@@ -2281,7 +2353,8 @@ static int bq24261_resume(struct device *dev)
 			bq24261_enable_boost_mode(chip, 1);
 		/* fcipaq: power up keyboard supply */
 		if (ic2_init_complete) {
-			bq24261_wdt_boost_ic2(chip_ic2, 1);
+			if (ep_kbd_pwr_state)
+				bq24261_wdt_boost_ic2(chip_ic2, 1);
 			schedule_delayed_work(&chip_ic2->wdt_work, WDT_RESET_DELAY);
 		}
 	}
