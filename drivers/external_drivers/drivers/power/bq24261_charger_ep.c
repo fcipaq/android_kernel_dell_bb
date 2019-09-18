@@ -173,7 +173,7 @@
 /* No of times retry on -EAGAIN or -ETIMEDOUT error */
 #define NR_RETRY_CNT    3
 
-// 2nd charger IC (keyboard power supply, EP only)
+/* 2nd charger IC (keyboard power supply, EP only) */
 int is_second_ic(struct i2c_client *client);
 int ic2_init_complete = 0;
 struct bq24261_charger *chip_ic2;
@@ -598,12 +598,9 @@ static ssize_t ep_kbd_pwr_write(struct file *file,
 	if (!((mode == 0) || (mode == 1)))
 	return -EFAULT;
 
-	ep_kbd_pwr_state = mode;     
-
-	if (ep_kbd_pwr_state) {
-		bq24261_wdt_boost_ic2(chip_ic2, 1);
-	} else {
-		bq24261_wdt_boost_ic2(chip_ic2, 0);
+	if (ic2_init_complete) {
+		ep_kbd_pwr_state = mode;     
+		bq24261_wdt_boost_ic2(chip_ic2, ep_kbd_pwr_state);
 	}
 
 	return count;
@@ -1541,8 +1538,6 @@ static void bq24261_wdt_boost_ic2(struct bq24261_charger *chip, int val)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in setting boostmode to %d\n", ret, val);
-//	else
-//		dev_info(&chip->client->dev, "boostmode: %d\n", val);
 
 }
 
@@ -1557,12 +1552,6 @@ static void bq24261_wdt_reset_worker_ic2(struct work_struct *work)
 
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in WDT reset of IC #2\n", ret);
-
-	if (ep_kbd_pwr_state) {
-		bq24261_wdt_boost_ic2(chip, 1);
-	} else {
-		bq24261_wdt_boost_ic2(chip, 0);
-	}
 
 	schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 }
@@ -2052,10 +2041,10 @@ static ssize_t dock_print_state(struct switch_dev *sdev, char *buf)
 		return -EINVAL;
 }
 
-/* Dell Venue 7040 (aka Eaglespeak) has two BQ24261 ICs, as it features two batteries  */
-/* The attachable keyboard's power supply is connected to the second IC's VBUS booster */
-/* This function checks, if the current IC is the second one.          		       */
-/* This function is platform specific.						       */
+/* Dell Venue 7040 (aka Eaglespeak) has two BQ24261 ICs, as it features two batteries
+*  The attachable keyboard's power supply is connected to the second IC's VBUS booster
+*  This function checks, if the current IC is the second one.
+*/
 int is_second_ic(struct i2c_client *client)
 {
 
@@ -2077,7 +2066,7 @@ static int bq24261_probe(struct i2c_client *client,
 	
 	adapter = to_i2c_adapter(client->dev.parent);
 
-	/* fcipaq */
+	/* EP second BQ24261 IC */
 	if (is_second_ic(client))
 	{
 		chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
@@ -2100,7 +2089,7 @@ static int bq24261_probe(struct i2c_client *client,
 
 		schedule_delayed_work(&chip->wdt_work, WDT_RESET_DELAY);
 	} else
-	/* fcipaq end */
+	/* EP second BQ24261 IC end */
 	{
 		if (!client->dev.platform_data) {
 			dev_err(&client->dev, "platform data is null");
@@ -2294,7 +2283,7 @@ static int bq24261_remove(struct i2c_client *client)
 	 */
 	struct bq24261_charger *chip = i2c_get_clientdata(client);
 
-	/* fcipaq: power down keyboard supply */
+	/* Power down EP keyboard supply */
 	if (ic2_init_complete) {
 		cancel_delayed_work_sync(&chip_ic2->wdt_work);
 		bq24261_wdt_boost_ic2(chip_ic2, 0);
@@ -2332,7 +2321,7 @@ static int bq24261_suspend(struct device *dev)
 		if (chip->boost_mode)
 			cancel_delayed_work_sync(&chip->wdt_work);
 
-		/* fcipaq: power down keyboard supply */
+		/* Power down EP keyboard supply */
 		if (ic2_init_complete) {
 			cancel_delayed_work_sync(&chip_ic2->wdt_work);
 			bq24261_wdt_boost_ic2(chip_ic2, 0);
@@ -2351,7 +2340,7 @@ static int bq24261_resume(struct device *dev)
 			chip->pdata->is_wdt_kick_needed) {
 		if (chip->boost_mode)
 			bq24261_enable_boost_mode(chip, 1);
-		/* fcipaq: power up keyboard supply */
+		/* Power up EP keyboard supply */
 		if (ic2_init_complete) {
 			if (ep_kbd_pwr_state)
 				bq24261_wdt_boost_ic2(chip_ic2, 1);
@@ -2402,7 +2391,7 @@ static void bq24261_shutdown(struct i2c_client *client)
 
 	dev_info(&client->dev,"%s called\n", __func__);
 
-	/* fcipaq: power down keyboard supply */
+	/* Power down EP keyboard supply */
 	if (ic2_init_complete) {
 		cancel_delayed_work_sync(&chip_ic2->wdt_work);
 		bq24261_wdt_boost_ic2(chip_ic2, 0);
