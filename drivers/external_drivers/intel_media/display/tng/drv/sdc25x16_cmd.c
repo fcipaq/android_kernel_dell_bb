@@ -448,7 +448,7 @@ int sdc25x16_cmd_set_brightness(
 		return -EINVAL;
 	}
 
-	i = (num_brightness - 1) - ((num_brightness - 1) * level)/ 255;
+	i = (num_brightness - 1) - ((num_brightness - 1) * level)/ 100;
 
 	sdc25x16_set_dimming(sender, i);
 
