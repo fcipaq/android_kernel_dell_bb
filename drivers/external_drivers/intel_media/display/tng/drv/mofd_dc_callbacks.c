@@ -47,8 +47,6 @@ static u32 primary_offset_y;
 static u32 primary_width;
 static u32 primary_height;
 
-static bool DCCBFlipSprite_WARNON = false;
-
 extern bool psb_zoom;
 
 #if KEEP_UNUSED_CODE
@@ -265,12 +263,6 @@ void DCCBFlipSprite(struct drm_device *dev,
 		return;
 
 	dev_priv = (struct drm_psb_private *)dev->dev_private;
-
-	if (!DCCBFlipSprite_WARNON) {
-		DCCBFlipSprite_WARNON = true;
-		DRM_INFO("DCCBFlipSprite: AMOLED wear leveling needs to be fixed.\n");
-		WARN_ON(1);
-	}
 
 	user_mode_start(dev_priv);
 
