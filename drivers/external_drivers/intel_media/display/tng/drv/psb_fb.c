@@ -598,6 +598,9 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 	info->screen_base = (char *)pg->vram_addr;
 	info->screen_size = size;
 
+	// copy framebuffer content to smaller framebuffer (because of AMOLED wear
+	// leveling. This is done to preserve the boot logo.
+
 	copy_src = info->screen_base;
 	copy_dst = info->screen_base;
 
