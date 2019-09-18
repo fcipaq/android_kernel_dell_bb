@@ -77,7 +77,7 @@
 //debug only
 #include <linux/printk.h>
 
-int host_mode_without_rid_get_state = 0;
+int host_mode_without_rid_get_state = 0; // 0 = off on boot, 1 = on on boot
 
 int is_forced_host_mode()
 {
