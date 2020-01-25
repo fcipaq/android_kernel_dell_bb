@@ -270,9 +270,9 @@ bool is_permitted(const u8 *uuid, int cmd_id)
 		if (element->cmd_id == cmd_id) {
 			rule_exists = true;
 			/* if we have a rule for this command check the perms */
-			if (uid_eq(current_euid(), element->uid) ||
-			    gid_eq(current_egid(), element->gid) ||
-			    groups_search(groups_info, element->gid))
+			if (uid_eq(current_euid(), KUIDT_INIT(element->uid)) ||
+			    gid_eq(current_egid(), KGIDT_INIT(element->gid)) ||
+			    groups_search(groups_info, KGIDT_INIT(element->gid)))
 				return true;
 		}
 	}
