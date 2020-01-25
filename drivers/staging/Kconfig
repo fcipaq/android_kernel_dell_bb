@@ -142,4 +142,14 @@ source "drivers/staging/npk/Kconfig"
 
 source "drivers/staging/sventx/Kconfig"
 
+menuconfig CONFIG_DRM_INTEL_MID
+        bool "Enable support to intel media drivers"
+        default y
+        help
+          Enable support to external intel media drivers.
+
+if CONFIG_DRM_INTEL_MID
+	source "drivers/staging/imgtec/Kconfig"
+endif
+
 endif # STAGING

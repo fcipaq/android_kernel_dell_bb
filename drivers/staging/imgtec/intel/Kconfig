@@ -1,0 +1,66 @@
+config MOOREFIELD
+	bool
+
+config VIDEO_MRFLD
+	bool
+
+config VIDEO_MRFLD_EC
+	bool
+
+config DRM_MRFLD
+	bool
+	select MOOREFIELD
+	select VIDEO_MRFLD
+	select VIDEO_MRFLD_EC
+
+config CONFIG_AMOLED_SUPPORT
+    bool
+
+config SLICE_HEADER_PARSING
+	bool
+
+config SUPPORT_HDMI
+	bool "Support HDMI"
+
+config DRM_INTEL_MID_FAKE
+	bool
+	select FB_CFB_COPYAREA
+	select FB_CFB_FILLRECT
+	select FB_CFB_IMAGEBLIT
+	select DRM_KMS_HELPER
+	select GENERIC_ALLOCATOR
+	select DRM_TTM
+	select SLICE_HEADER_PARSING
+	select DRM_MRFLD
+#	select SUPPORT_HDMI
+
+menuconfig DRM_INTEL_MID
+	bool "Intel MID platform graphics support"
+	depends on POWERVR_ROGUE
+	depends on X86_INTEL_MID
+	depends on PCI
+	select DRM_INTEL_MID_FAKE
+
+config SUPPORT_MIPI
+	bool "Enable MIPI interface"
+
+config MDFD_DUAL_MIPI
+	bool "Support two MIPI lines"
+	depends on SUPPORT_MIPI
+
+config MID_DSI_DSR
+	bool "Support DSR (display self refresh)"
+	depends on SUPPORT_MIPI
+
+config AMOLED_SUPPORT
+	bool "Enable AMOLED burn-in protection"
+	depends on MOOREFIELD
+	help
+	  Shift the image on the screen by a small amount of pixels
+	  to prevent image burn in on AMOLED displays.
+	  Only for SDC 16x25 and SDC 25x16 on Dell Venue 7840/7040
+	  (aka. Intel Blackburn/Eaglespeak)
+
+source "drivers/staging/imgtec/intel/dfrgx/Kconfig"
+
+source "drivers/staging/imgtec/intel/hdmi_audio/Kconfig"

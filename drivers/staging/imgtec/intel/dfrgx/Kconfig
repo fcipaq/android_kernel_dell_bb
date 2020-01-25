@@ -1,0 +1,13 @@
+config GFX_RGX_DEVFREQ
+	tristate "DVFS support for PowerVR Rogue"
+	depends on DRM_INTEL_MID
+	depends on PM_DEVFREQ
+	select DEVFREQ_GOV_SIMPLE_ONDEMAND
+	select DEVFREQ_GOV_PERFORMANCE
+	select DEVFREQ_GOV_POWERSAVE
+	help
+	  This adds the DEVFREQ driver for the Imagination Technologies
+	  PowerVR graphics technology for the Intel MID platform family.
+	  This driver helps control GPU clock speed in order to provide
+	  high performance on demand and power savings when not busy or
+	  when thermal conditions suggest.

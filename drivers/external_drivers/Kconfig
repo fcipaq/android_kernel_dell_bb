@@ -21,17 +21,6 @@ if EXTERNAL_MISC_DRIVERS
 source "drivers/external_drivers/drivers/Kconfig"
 endif
 
-menuconfig EXTERNAL_INTEL_MEDIA
-	bool "Enable support to intel media drivers"
-	depends on EXTERNAL_DRIVERS
-	default y
-	help
-	  Enable support to external intel media drivers.
-
-if EXTERNAL_INTEL_MEDIA
-source "drivers/external_drivers/intel_media/Kconfig"
-endif
-
 menuconfig EXTERNAL_CAMERA
         bool "Enable support to Intel camera drivers"
         depends on EXTERNAL_DRIVERS
