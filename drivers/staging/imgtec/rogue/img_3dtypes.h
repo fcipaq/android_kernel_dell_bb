@@ -44,8 +44,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __IMG_3DTYPES_H__
 #define __IMG_3DTYPES_H__
 
-#include <powervr/buffer_attribs.h>
-
 /**
  * Comparison functions
  * This comparison function is defined as:
@@ -85,6 +83,19 @@ typedef enum _IMG_STENCILOP_
 	IMG_STENCILOP_DECR,		/**< Decrement stencil entry, 
 								 wrapping if necessary */
 } IMG_STENCILOP;
+
+/**
+ * Memory layout enumeration.
+ * Defines how pixels are laid out within a surface.
+ */
+typedef enum _IMG_MEMLAYOUT_
+{
+	IMG_MEMLAYOUT_STRIDED,			/**< Resource is strided, one row at a time */
+    IMG_MEMLAYOUT_TWIDDLED,			/**< Resource is 2D twiddled, classic style */
+    IMG_MEMLAYOUT_3DTWIDDLED,       /**< Resource is 3D twiddled, classic style */
+	IMG_MEMLAYOUT_TILED,			/**< Resource is tiled, tiling config specified elsewhere. */
+	IMG_MEMLAYOUT_PAGETILED,		/**< Resource is pagetiled */
+} IMG_MEMLAYOUT;
 
 /**
  * Alpha blending allows colours and textures on one surface
@@ -206,24 +217,19 @@ typedef enum _IMG_CULLMODE_
 	IMG_CULLMODE_BACKFACING,	/**< Back facing triangles */
 } IMG_CULLMODE;
 
-
-/*! ************************************************************************//**
-@brief          Specifies the MSAA resolve operation.
-*/ /**************************************************************************/
-typedef enum _IMG_RESOLVE_OP_
+/**
+ * Rotation clockwise
+ */
+typedef enum _IMG_ROTATION_
 {
-	IMG_RESOLVE_BLEND   = 0,          /*!< box filter on the samples */
-	IMG_RESOLVE_MIN     = 1,          /*!< minimum of the samples */
-	IMG_RESOLVE_MAX     = 2,          /*!< maximum of the samples */
-	IMG_RESOLVE_SAMPLE0 = 3,          /*!< choose sample 0 */
-	IMG_RESOLVE_SAMPLE1 = 4,          /*!< choose sample 1 */
-	IMG_RESOLVE_SAMPLE2 = 5,          /*!< choose sample 2 */
-	IMG_RESOLVE_SAMPLE3 = 6,          /*!< choose sample 3 */
-	IMG_RESOLVE_SAMPLE4 = 7,          /*!< choose sample 4 */
-	IMG_RESOLVE_SAMPLE5 = 8,          /*!< choose sample 5 */
-	IMG_RESOLVE_SAMPLE6 = 9,          /*!< choose sample 6 */
-	IMG_RESOLVE_SAMPLE7 = 10,         /*!< choose sample 7 */
-} IMG_RESOLVE_OP;
+	IMG_ROTATION_0DEG = 0,
+	IMG_ROTATION_90DEG = 1,
+	IMG_ROTATION_180DEG = 2,
+	IMG_ROTATION_270DEG = 3,
+	IMG_ROTATION_FLIP_Y = 4,
+
+	IMG_ROTATION_BAD = 255,
+} IMG_ROTATION;
 
 
 #endif /* __IMG_3DTYPES_H__ */

@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for srvcore
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for srvcore
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for srvcore
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,13 +45,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_SRVCORE_BRIDGE_H
 #define COMMON_SRVCORE_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "pvrsrv_device_types.h"
-#include "cache_ops.h"
+#include "cache_external.h"
 
 
 #define PVRSRV_BRIDGE_SRVCORE_CMD_FIRST			0
@@ -66,9 +64,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_SRVCORE_DUMPDEBUGINFO			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+8
 #define PVRSRV_BRIDGE_SRVCORE_GETDEVCLOCKSPEED			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+9
 #define PVRSRV_BRIDGE_SRVCORE_HWOPTIMEOUT			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+10
-#define PVRSRV_BRIDGE_SRVCORE_ALIGNMENTCHECK			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+11
-#define PVRSRV_BRIDGE_SRVCORE_GETDEVICESTATUS			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+12
-#define PVRSRV_BRIDGE_SRVCORE_EVENTOBJECTWAITTIMEOUT			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+13
+#define PVRSRV_BRIDGE_SRVCORE_KICKDEVICES			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+11
+#define PVRSRV_BRIDGE_SRVCORE_RESETHWRLOGS			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+12
+#define PVRSRV_BRIDGE_SRVCORE_SOFTRESET			PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+13
 #define PVRSRV_BRIDGE_SRVCORE_CMD_LAST			(PVRSRV_BRIDGE_SRVCORE_CMD_FIRST+13)
 
 
@@ -89,9 +87,7 @@ typedef struct PVRSRV_BRIDGE_IN_CONNECT_TAG
 typedef struct PVRSRV_BRIDGE_OUT_CONNECT_TAG
 {
 	IMG_UINT8 ui8KernelArch;
-	IMG_UINT32 ui32CapabilityFlags;
-	IMG_UINT32 ui32PVRBridges;
-	IMG_UINT32 ui32RGXBridges;
+	IMG_UINT32 ui32Log2PageSize;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_CONNECT;
 
@@ -271,57 +267,55 @@ typedef struct PVRSRV_BRIDGE_OUT_HWOPTIMEOUT_TAG
 
 
 /*******************************************
-            AlignmentCheck          
+            KickDevices          
  *******************************************/
 
-/* Bridge in structure for AlignmentCheck */
-typedef struct PVRSRV_BRIDGE_IN_ALIGNMENTCHECK_TAG
-{
-	IMG_UINT32 ui32AlignChecksSize;
-	IMG_UINT32 * pui32AlignChecks;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_ALIGNMENTCHECK;
-
-/* Bridge out structure for AlignmentCheck */
-typedef struct PVRSRV_BRIDGE_OUT_ALIGNMENTCHECK_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_ALIGNMENTCHECK;
-
-
-/*******************************************
-            GetDeviceStatus          
- *******************************************/
-
-/* Bridge in structure for GetDeviceStatus */
-typedef struct PVRSRV_BRIDGE_IN_GETDEVICESTATUS_TAG
+/* Bridge in structure for KickDevices */
+typedef struct PVRSRV_BRIDGE_IN_KICKDEVICES_TAG
 {
 	 IMG_UINT32 ui32EmptyStructPlaceholder;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_GETDEVICESTATUS;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_KICKDEVICES;
 
-/* Bridge out structure for GetDeviceStatus */
-typedef struct PVRSRV_BRIDGE_OUT_GETDEVICESTATUS_TAG
+/* Bridge out structure for KickDevices */
+typedef struct PVRSRV_BRIDGE_OUT_KICKDEVICES_TAG
 {
-	IMG_UINT32 ui32DeviceSatus;
 	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_GETDEVICESTATUS;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_KICKDEVICES;
 
 
 /*******************************************
-            EventObjectWaitTimeout          
+            ResetHWRLogs          
  *******************************************/
 
-/* Bridge in structure for EventObjectWaitTimeout */
-typedef struct PVRSRV_BRIDGE_IN_EVENTOBJECTWAITTIMEOUT_TAG
+/* Bridge in structure for ResetHWRLogs */
+typedef struct PVRSRV_BRIDGE_IN_RESETHWRLOGS_TAG
 {
-	IMG_HANDLE hOSEventKM;
-	IMG_UINT64 ui64uiTimeoutus;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_EVENTOBJECTWAITTIMEOUT;
+	 IMG_UINT32 ui32EmptyStructPlaceholder;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_RESETHWRLOGS;
 
-/* Bridge out structure for EventObjectWaitTimeout */
-typedef struct PVRSRV_BRIDGE_OUT_EVENTOBJECTWAITTIMEOUT_TAG
+/* Bridge out structure for ResetHWRLogs */
+typedef struct PVRSRV_BRIDGE_OUT_RESETHWRLOGS_TAG
 {
 	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_EVENTOBJECTWAITTIMEOUT;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_RESETHWRLOGS;
+
+
+/*******************************************
+            SoftReset          
+ *******************************************/
+
+/* Bridge in structure for SoftReset */
+typedef struct PVRSRV_BRIDGE_IN_SOFTRESET_TAG
+{
+	IMG_UINT64 ui64ResetValue1;
+	IMG_UINT64 ui64ResetValue2;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_SOFTRESET;
+
+/* Bridge out structure for SoftReset */
+typedef struct PVRSRV_BRIDGE_OUT_SOFTRESET_TAG
+{
+	PVRSRV_ERROR eError;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_SOFTRESET;
 
 
 #endif /* COMMON_SRVCORE_BRIDGE_H */

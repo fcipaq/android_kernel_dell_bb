@@ -49,7 +49,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "osfunc.h"
 #include "pdump_physmem.h"
 #include "pdump_km.h"
-#include "rgx_heaps.h"
+
 
 #if defined(DEBUG)
 IMG_UINT32 gPMRAllocFail = 0;
@@ -96,8 +96,6 @@ PVRSRV_ERROR DevPhysMemAlloc(PVRSRV_DEVICE_NODE	*psDevNode,
 								ui32MemSize,
 								ui32PageSize,
 								IMG_FALSE,
-								0,
-								IMG_FALSE,
 								phHandlePtr);
 	if(PVRSRV_OK != eError)
 	{
@@ -122,12 +120,10 @@ PVRSRV_ERROR DevPhysMemAlloc(PVRSRV_DEVICE_NODE	*psDevNode,
 		}
 
 		/*Fill the memory with given content */
-		/*NOTE: Wrong for the LMA + ARM64 combination, but this is unlikely */
-		OSCachedMemSet(pvCpuVAddr, u8Value, ui32MemSize);
+		OSMemSet(pvCpuVAddr, u8Value, ui32MemSize);
 
 		/*Map the page to the CPU VA space */
-		eError = psDevNode->pfnDevPxClean(psDevNode,
-		                                  psMemHandle,
+		eError = psDevNode->pfnDevPxClean(psMemHandle,
 		                                  0,
 		                                  ui32MemSize);
 		if(PVRSRV_OK != eError)
@@ -170,8 +166,8 @@ PVRSRV_ERROR DevPhysMemAlloc(PVRSRV_DEVICE_NODE	*psDevNode,
 										PDUMP_FLAGS_CONTINUOUS);
 			if(PVRSRV_OK != eError)
 			{
-				PDUMP_ERROR(eError, "Failed to write LDB statement to script file");
-				PVR_DPF((PVR_DBG_ERROR, "Failed to write LDB statement to script file, error %d", eError));
+				PDUMP_ERROR(eError, "Failed to write LDB statment to script file");
+				PVR_DPF((PVR_DBG_ERROR, "Failed to write LDB statment to script file, error %d", eError));
 			}
 
 		}
@@ -228,71 +224,68 @@ PhysmemNewRamBackedPMR(CONNECTION_DATA * psConnection,
                        IMG_UINT32 *pui32MappingTable,
                        IMG_UINT32 uiLog2PageSize,
                        PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                       IMG_UINT32 uiAnnotationLength,
-                       const IMG_CHAR *pszAnnotation,
                        PMR **ppsPMRPtr)
 {
 	PVRSRV_DEVICE_PHYS_HEAP ePhysHeapIdx;
-	PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE pfnCheckMemAllocSize =
-		psDevNode->psDevConfig->pfnCheckMemAllocSize;
+	PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE pfnCheckMemAllocSize = \
+										psDevNode->psDevConfig->pfnCheckMemAllocSize;
+
+#if defined(DEBUG)	
+	static IMG_UINT32 ui32AllocCount = 1;
+
+	if (ui32NumVirtChunks > 1)
+	{	/* We don't currently support sparse memory with non OS page sized heaps */
+		PVR_ASSERT(uiLog2PageSize == OSGetPageShift());
+	}
+#endif /* defined(DEBUG) */
+
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
-	PVR_UNREFERENCED_PARAMETER(uiAnnotationLength);
-
-	/* We don't currently support sparse memory with non OS page sized heaps */
-	if (ui32NumVirtChunks > 1 && (uiLog2PageSize != OSGetPageShift()))
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				"Requested page size for sparse 2^%u is not OS page size.",
-				uiLog2PageSize));
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	/* Protect against ridiculous page sizes */
-	if (uiLog2PageSize > RGX_HEAP_2MB_PAGE_SHIFT)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "Page size is too big: 2^%u.", uiLog2PageSize));
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
 
 	/* Lookup the requested physheap index to use for this PMR allocation */
-	if (PVRSRV_CHECK_FW_LOCAL(uiFlags))
-	{
-		ePhysHeapIdx = PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL;
-	}
-	else if (PVRSRV_CHECK_CPU_LOCAL(uiFlags))
-	{
-		ePhysHeapIdx = PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL;
-	}
-	else
-	{
-		ePhysHeapIdx = PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL;
-	}
+	ePhysHeapIdx = (uiFlags & PVRSRV_MEMALLOCFLAG_FW_LOCAL)  ? PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL  :
+				   (uiFlags & PVRSRV_MEMALLOCFLAG_CPU_LOCAL) ? PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL :
+						   	   	   	   	   	   	   	   	   	   PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL;
 
-	/* Fail if requesting coherency on one side but uncached on the other */
-	if ( (PVRSRV_CHECK_CPU_CACHE_COHERENT(uiFlags) &&
-	         (PVRSRV_CHECK_GPU_UNCACHED(uiFlags) || PVRSRV_CHECK_GPU_WRITE_COMBINE(uiFlags))) )
+	/********************************
+	 * Sanity check the cache flags *
+	 ********************************/
+	/* Check if we can honour cached cache-coherent allocations */
+	if ((PVRSRV_CPU_CACHE_MODE(uiFlags) == PVRSRV_MEMALLOCFLAG_CPU_CACHED_CACHE_COHERENT) &&
+		(!PVRSRVSystemHasCacheSnooping()))
 	{
-		PVR_DPF((PVR_DBG_ERROR, "Request for CPU coherency but specifying GPU uncached "
-				"Please use GPU cached flags for coherency."));
 		return PVRSRV_ERROR_UNSUPPORTED_CACHE_MODE;
 	}
 
-	if ( (PVRSRV_CHECK_GPU_CACHE_COHERENT(uiFlags) &&
-	         (PVRSRV_CHECK_CPU_UNCACHED(uiFlags) || PVRSRV_CHECK_CPU_WRITE_COMBINE(uiFlags))) )
+	/* Both or neither have to be cache-coherent */
+	if ((PVRSRV_CPU_CACHE_MODE(uiFlags) == PVRSRV_MEMALLOCFLAG_CPU_CACHE_COHERENT) ^
+		(PVRSRV_GPU_CACHE_MODE(uiFlags) == PVRSRV_MEMALLOCFLAG_GPU_CACHE_COHERENT))
 	{
-		PVR_DPF((PVR_DBG_ERROR, "Request for GPU coherency but specifying CPU uncached "
-				"Please use CPU cached flags for coherency."));
 		return PVRSRV_ERROR_UNSUPPORTED_CACHE_MODE;
 	}
+
+	if ((PVRSRV_CPU_CACHE_MODE(uiFlags) == PVRSRV_MEMALLOCFLAG_CPU_CACHED_CACHE_COHERENT) ^
+		(PVRSRV_GPU_CACHE_MODE(uiFlags) == PVRSRV_MEMALLOCFLAG_GPU_CACHED_CACHE_COHERENT))
+	{
+		return PVRSRV_ERROR_UNSUPPORTED_CACHE_MODE;
+	}
+
+
+    if (uiLog2PageSize > OSGetPageShift())
+    {
+    	/* If we do support it, this check must become a page size validation */
+    	PVR_DPF((PVR_DBG_ERROR, "PVRSRV currently does not support "
+    			"page sizes that are larger than OS page size. Requested 2^%u, OS 2^%u ",
+    			uiLog2PageSize,
+    			(IMG_UINT32) OSGetPageShift()));
+    	return PVRSRV_ERROR_INVALID_PARAMS;
+    }
 
 	/* Apply memory budgeting policy */
 	if (pfnCheckMemAllocSize)
 	{
-		IMG_UINT64 uiMemSize = (IMG_UINT64)uiChunkSize * ui32NumPhysChunks;
-		PVRSRV_ERROR eError;
-
-		eError = pfnCheckMemAllocSize(psDevNode->psDevConfig->hSysData, uiMemSize);
+		PVRSRV_ERROR eError = \
+						pfnCheckMemAllocSize(psDevNode, (IMG_UINT64)uiChunkSize*ui32NumPhysChunks);
 		if (eError != PVRSRV_OK)
 		{
 			return eError;
@@ -302,8 +295,6 @@ PhysmemNewRamBackedPMR(CONNECTION_DATA * psConnection,
 #if defined(DEBUG)
 	if (gPMRAllocFail > 0)
 	{
-		static IMG_UINT32 ui32AllocCount = 1;
-
 		if (ui32AllocCount < gPMRAllocFail)
 		{
 			ui32AllocCount++;
@@ -325,7 +316,6 @@ PhysmemNewRamBackedPMR(CONNECTION_DATA * psConnection,
 											pui32MappingTable,
 											uiLog2PageSize,
 											uiFlags,
-											pszAnnotation,
 											ppsPMRPtr);
 }
 
@@ -339,8 +329,6 @@ PhysmemNewRamBackedLockedPMR(CONNECTION_DATA * psConnection,
 							IMG_UINT32 *pui32MappingTable,
 							IMG_UINT32 uiLog2PageSize,
 							PVRSRV_MEMALLOCFLAGS_T uiFlags,
-							IMG_UINT32 uiAnnotationLength,
-							const IMG_CHAR *pszAnnotation,
 							PMR **ppsPMRPtr)
 {
 
@@ -354,13 +342,11 @@ PhysmemNewRamBackedLockedPMR(CONNECTION_DATA * psConnection,
 									pui32MappingTable,
 									uiLog2PageSize,
 									uiFlags,
-									uiAnnotationLength,
-									pszAnnotation,
 									ppsPMRPtr);
 
 	if (eError == PVRSRV_OK)
 	{
-		eError = PMRLockSysPhysAddresses(*ppsPMRPtr);
+		eError = PMRLockSysPhysAddresses(*ppsPMRPtr, uiLog2PageSize);
 	}
 
 	return eError;

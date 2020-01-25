@@ -48,9 +48,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvrsrv_error.h"
 #include "pmr.h"
 
-#define PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH 40
-#define PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH 60
-#define PHYSMEM_PDUMP_MEMSPNAME_SYMB_ADDR_MAX_LENGTH (PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH + PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH)
 
 typedef struct _PDUMP_PHYSMEM_INFO_T_ PDUMP_PHYSMEM_INFO_T;
 
@@ -63,17 +60,18 @@ PDumpMalloc(const IMG_CHAR *pszDevSpace,
                   minimum contiguity - i.e. smallest allowable
                   page-size. */
                IMG_DEVMEM_ALIGN_T uiAlign,
-               IMG_BOOL bInitialise,
-               IMG_UINT32 ui32InitValue,
                IMG_BOOL bForcePersistent,
                IMG_HANDLE *phHandlePtr);
 
+IMG_INTERNAL void
+PDumpPMRMallocPMR(const PMR *psPMR,
+                  IMG_DEVMEM_SIZE_T uiSize,
+                  IMG_DEVMEM_ALIGN_T uiBlockSize,
+                  IMG_BOOL bForcePersistent,
+                  IMG_HANDLE *phPDumpAllocInfoPtr);
+
 extern
 PVRSRV_ERROR PDumpFree(IMG_HANDLE hPDumpAllocationInfoHandle);
-
-IMG_INTERNAL void
-PDumpMakeStringValid(IMG_CHAR *pszString,
-                     IMG_UINT32 ui32StrLen);
 #else	/* PDUMP */
 
 #ifdef INLINE_IS_PRAGMA
@@ -84,8 +82,6 @@ PDumpMalloc(const IMG_CHAR *pszDevSpace,
                const IMG_CHAR *pszSymbolicAddress,
                IMG_UINT64 ui64Size,
                IMG_DEVMEM_ALIGN_T uiAlign,
-               IMG_BOOL bInitialise,
-               IMG_UINT32 ui32InitValue,
                IMG_BOOL bForcePersistent,
                IMG_HANDLE *phHandlePtr)
 {
@@ -93,14 +89,29 @@ PDumpMalloc(const IMG_CHAR *pszDevSpace,
 	PVR_UNREFERENCED_PARAMETER(pszSymbolicAddress);
 	PVR_UNREFERENCED_PARAMETER(ui64Size);
 	PVR_UNREFERENCED_PARAMETER(uiAlign);
-	PVR_UNREFERENCED_PARAMETER(bInitialise);
-	PVR_UNREFERENCED_PARAMETER(ui32InitValue);
 	PVR_UNREFERENCED_PARAMETER(bForcePersistent);
 	PVR_UNREFERENCED_PARAMETER(phHandlePtr);
 	PVR_UNREFERENCED_PARAMETER(bForcePersistent);
 	return PVRSRV_OK;
 }
 
+static INLINE void
+PDumpPMRMallocPMR(const PMR *psPMR,
+                  IMG_DEVMEM_SIZE_T uiSize,
+                  IMG_DEVMEM_ALIGN_T uiBlockSize,
+                  IMG_BOOL bForcePersistent,
+                  IMG_HANDLE *phPDumpAllocInfoPtr)
+{
+	PVR_UNREFERENCED_PARAMETER(psPMR);
+	PVR_UNREFERENCED_PARAMETER(uiSize);
+	PVR_UNREFERENCED_PARAMETER(uiBlockSize);
+	PVR_UNREFERENCED_PARAMETER(bForcePersistent);
+	PVR_UNREFERENCED_PARAMETER(phPDumpAllocInfoPtr);
+}
+
+#ifdef INLINE_IS_PRAGMA
+#pragma inline(PVRSRVSyncPrimPDumpPolKM)
+#endif
 static INLINE PVRSRV_ERROR
 PDumpFree(IMG_HANDLE hPDumpAllocationInfoHandle)
 {
@@ -110,17 +121,15 @@ PDumpFree(IMG_HANDLE hPDumpAllocationInfoHandle)
 #endif	/* PDUMP */
 
 #define PMR_DEFAULT_PREFIX "PMR"
-#define PMR_SYMBOLICADDR_FMTSPEC "%s%llu_%llu_%s"
-#define PMR_MEMSPACE_FMTSPEC "%s"
-#define PMR_MEMSPACE_CACHE_COHERENT_FMTSPEC "CC_%s"
+#define PMR_SYMBOLICADDR_FMTSPEC "%s%llu"
 
 #if defined(PDUMP)
-#define PDUMP_PHYSMEM_MALLOC_OSPAGES(pszPDumpMemDevName, ui32SerialNum, ui32Size, ui32Align, bInitialise, ui32InitValue, phHandlePtr) \
-    PDumpMalloc(pszPDumpMemDevName, PMR_OSALLOCPAGES_PREFIX, ui32SerialNum, ui32Size, ui32Align, bInitialise, ui32InitValue, phHandlePtr)
+#define PDUMP_PHYSMEM_MALLOC_OSPAGES(pszPDumpMemDevName, ui32SerialNum, ui32Size, ui32Align, phHandlePtr) \
+    PDumpMalloc(pszPDumpMemDevName, PMR_OSALLOCPAGES_PREFIX, ui32SerialNum, ui32Size, ui32Align, phHandlePtr)
 #define PDUMP_PHYSMEM_FREE_OSPAGES(hHandle) \
     PDumpFree(hHandle)
 #else
-#define PDUMP_PHYSMEM_MALLOC_OSPAGES(pszPDumpMemDevName, ui32SerialNum, ui32Size, ui32Align, bInitialise, ui32InitValue, phHandlePtr) \
+#define PDUMP_PHYSMEM_MALLOC_OSPAGES(pszPDumpMemDevName, ui32SerialNum, ui32Size, ui32Align, phHandlePtr) \
     ((void)(*phHandlePtr=NULL))
 #define PDUMP_PHYSMEM_FREE_OSPAGES(hHandle) \
     ((void)(0))

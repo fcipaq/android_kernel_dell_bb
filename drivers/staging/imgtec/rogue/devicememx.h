@@ -62,7 +62,7 @@ DevmemXAllocPhysical(DEVMEM_CONTEXT *psCtx,
                     IMG_UINT32 uiNumPages,
                     IMG_UINT32 uiLog2PageSize,
                     DEVMEM_FLAGS_T uiFlags,
-                    const IMG_CHAR *pszText,
+                    const IMG_PCHAR pszText,
                     DEVMEMX_PHYSDESC **ppsPhysDesc);
 
 /* DevmemXReleasePhysical()
@@ -82,7 +82,7 @@ PVRSRV_ERROR
 DevmemXAllocVirtual(DEVMEM_HEAP* hHeap,
                    IMG_UINT32 uiNumPages,
                    DEVMEM_FLAGS_T uiFlags,
-                   const IMG_CHAR *pszText,
+                   const IMG_PCHAR pszText,
                    DEVMEMX_VIRTDESC **ppsVirtDesc,
                    IMG_DEV_VIRTADDR *psVirtAddr);
 
@@ -141,7 +141,8 @@ DevmemXUnmapPhysicalToCPU(DEVMEMX_PHYSDESC *psMemAllocPhys);
  */
 
 PVRSRV_ERROR
-DevmemXCreateDevmemMemDesc(DEVMEMX_VIRTDESC *psVirtDesc,
+DevmemXCreateDevmemMemDesc(DEVMEMX_PHYSDESC *psPhysDesc,
+                            DEVMEMX_VIRTDESC *psVirtDesc,
                             DEVMEM_MEMDESC **ppsMemDesc);
 
 /* DevmemXFreeDevmemMemDesc()
@@ -154,23 +155,5 @@ DevmemXCreateDevmemMemDesc(DEVMEMX_VIRTDESC *psVirtDesc,
  */
 PVRSRV_ERROR
 DevmemXFreeDevmemMemDesc(DEVMEM_MEMDESC *psMemDesc);
-
-PVRSRV_ERROR
-_DevmemXFlagCompatibilityCheck(IMG_UINT32 uiPhysFlags,
-                              IMG_UINT32 uiVirtFlags);
-
-PVRSRV_ERROR
-_DevmemXPhysDescAlloc(DEVMEMX_PHYSDESC **ppsPhysDesc);
-
-void
-_DevmemXPhysDescInit(DEVMEMX_PHYSDESC *psPhysDesc,
-                    IMG_HANDLE hPMR,
-                    IMG_UINT32 uiNumPages,
-                    IMG_UINT32 uiLog2PageSize,
-                    PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                    IMG_HANDLE hBridge);
-
-void
-_DevmemXPhysDescFree(DEVMEMX_PHYSDESC *psPhysDesc);
 
 #endif /* DEVICEMEMX_H */

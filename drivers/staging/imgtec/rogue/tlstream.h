@@ -103,9 +103,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * it chooses. */
 #define TL_FLAG_NO_SIGNAL_ON_COMMIT    (1U<<9)
 
-/*! Defer allocation of stream's shared memory until first open. */
-#define TL_FLAG_ALLOCATE_ON_FIRST_OPEN (1U<<10)
-
 /*! Structure used to pass internal TL stream sizes information to users.*/
 typedef struct _TL_STREAM_INFO_
 {
@@ -130,25 +127,6 @@ typedef PVRSRV_ERROR (*TL_STREAM_SOURCECB)(IMG_HANDLE hStream,
 		IMG_UINT32 ui32ReqOp, IMG_UINT32* ui32Resp, void* pvUser);
 
 typedef void (*TL_STREAM_ONREADEROPENCB)(void *pvArg);
-
-/*************************************************************************/ /*!
- @Function      TLAllocSharedMem
- @Description   Allocates shared memory for the stream.
- @Input         phStream    Stream handle.
- @Return        eError      Internal services call returned eError error
-                            number.
- @Return        PVRSRV_OK
-*/ /**************************************************************************/
-PVRSRV_ERROR
-TLAllocSharedMemIfNull(IMG_HANDLE hStream);
-
-/*************************************************************************/ /*!
- @Function      TLFreeSharedMem
- @Description   Frees stream's shared memory.
- @Input         phStream    Stream handle.
-*/ /**************************************************************************/
-void
-TLFreeSharedMem(IMG_HANDLE hStream);
 
 /*************************************************************************/ /*!
  @Function      TLStreamCreate

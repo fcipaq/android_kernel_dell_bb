@@ -49,22 +49,16 @@ extern "C" {
 #endif
 
 #include "pvrsrv_error.h"
+#include "common_cachegeneric_bridge.h"
+
 #if defined(SUPPORT_DISPLAY_CLASS)
 #include "common_dc_bridge.h"
-#  if defined(SUPPORT_DCPLAT_BRIDGE)
-#    include "common_dcplat_bridge.h"
-#  endif
 #endif
 #include "common_mm_bridge.h"
 #if defined(SUPPORT_MMPLAT_BRIDGE)
 #include "common_mmplat_bridge.h"
 #endif
-#if defined(SUPPORT_WRAP_EXTMEM)
-#include "common_mmextmem_bridge.h"
-#endif
-#if !defined(EXCLUDE_CMM_BRIDGE)
 #include "common_cmm_bridge.h"
-#endif
 #if defined(LINUX)
 #include "common_dmabuf_bridge.h"
 #endif
@@ -73,7 +67,6 @@ extern "C" {
 #include "common_pdumpctrl_bridge.h"
 #include "common_pdumpmm_bridge.h"
 #endif
-#include "common_cache_bridge.h"
 #include "common_srvcore_bridge.h"
 #include "common_sync_bridge.h"
 #if defined(SUPPORT_SERVER_SYNC)
@@ -87,15 +80,13 @@ extern "C" {
 #if defined(SUPPORT_SECURE_EXPORT)
 #include "common_smm_bridge.h"
 #endif
-#if !defined(EXCLUDE_HTBUFFER_BRIDGE)
 #include "common_htbuffer_bridge.h"
-#endif
 #include "common_pvrtl_bridge.h"
 #if defined(PVR_RI_DEBUG)
 #include "common_ri_bridge.h"
 #endif
 
-#if defined(SUPPORT_VALIDATION_BRIDGE)
+#if defined(SUPPORT_VALIDATION)
 #include "common_validation_bridge.h"
 #endif
 
@@ -103,12 +94,8 @@ extern "C" {
 #include "common_tutils_bridge.h"
 #endif
 
-#if defined(SUPPORT_DEVICEMEMHISTORY_BRIDGE)
+#if defined(SUPPORT_PAGE_FAULT_DEBUG)
 #include "common_devicememhistory_bridge.h"
-#endif
-
-#if defined(SUPPORT_SYNCTRACKING_BRIDGE)
-#include "common_synctracking_bridge.h"
 #endif
 
 /* 
@@ -132,7 +119,6 @@ extern "C" {
  * the feature is not enabled (each bridge group retains its own ioctl number).
  */
 
-#define PVRSRV_BRIDGE_FIRST                                     0UL
 
 /*	 0:	Default handler */
 #define PVRSRV_BRIDGE_DEFAULT					0UL
@@ -195,13 +181,8 @@ extern "C" {
 
 /*   8: Context Memory Management functions */
 #define PVRSRV_BRIDGE_CMM      				8UL
-#if !defined(EXCLUDE_CMM_BRIDGE)
 #define PVRSRV_BRIDGE_CMM_DISPATCH_FIRST	(PVRSRV_BRIDGE_MMPLAT_DISPATCH_LAST + 1)
 #define PVRSRV_BRIDGE_CMM_DISPATCH_LAST		(PVRSRV_BRIDGE_CMM_DISPATCH_FIRST + PVRSRV_BRIDGE_CMM_CMD_LAST)
-#else
-#define PVRSRV_BRIDGE_CMM_DISPATCH_FIRST 0
-#define PVRSRV_BRIDGE_CMM_DISPATCH_LAST	 (PVRSRV_BRIDGE_MMPLAT_DISPATCH_LAST)
-#endif
 
 /*   9: PDUMP Memory Management functions */
 #define PVRSRV_BRIDGE_PDUMPMM      			9UL
@@ -243,19 +224,19 @@ extern "C" {
 #define PVRSRV_BRIDGE_DC_DISPATCH_LAST		(PVRSRV_BRIDGE_DMABUF_DISPATCH_LAST)
 #endif
 
-/*  13: Cache interface functions */
-#define PVRSRV_BRIDGE_CACHE					13UL
-#define PVRSRV_BRIDGE_CACHE_DISPATCH_FIRST (PVRSRV_BRIDGE_DC_DISPATCH_LAST + 1)
-#define PVRSRV_BRIDGE_CACHE_DISPATCH_LAST  (PVRSRV_BRIDGE_CACHE_DISPATCH_FIRST + PVRSRV_BRIDGE_CACHE_CMD_LAST)
+/*  13: Generic cache interface functions*/
+#define PVRSRV_BRIDGE_CACHEGENERIC			13UL
+#define PVRSRV_BRIDGE_CACHEGENERIC_DISPATCH_FIRST (PVRSRV_BRIDGE_DC_DISPATCH_LAST + 1)
+#define PVRSRV_BRIDGE_CACHEGENERIC_DISPATCH_LAST  (PVRSRV_BRIDGE_CACHEGENERIC_DISPATCH_FIRST + PVRSRV_BRIDGE_CACHEGENERIC_CMD_LAST)
 
 /*  14: Secure Memory Management functions*/
 #define PVRSRV_BRIDGE_SMM					14UL
 #if defined(SUPPORT_SECURE_EXPORT)
-#define PVRSRV_BRIDGE_SMM_DISPATCH_FIRST    (PVRSRV_BRIDGE_CACHE_DISPATCH_LAST + 1)
+#define PVRSRV_BRIDGE_SMM_DISPATCH_FIRST   (PVRSRV_BRIDGE_CACHEGENERIC_DISPATCH_LAST + 1)
 #define PVRSRV_BRIDGE_SMM_DISPATCH_LAST  	(PVRSRV_BRIDGE_SMM_DISPATCH_FIRST + PVRSRV_BRIDGE_SMM_CMD_LAST)
 #else
 #define PVRSRV_BRIDGE_SMM_DISPATCH_FIRST   0
-#define PVRSRV_BRIDGE_SMM_DISPATCH_LAST  	(PVRSRV_BRIDGE_CACHE_DISPATCH_LAST)
+#define PVRSRV_BRIDGE_SMM_DISPATCH_LAST  	(PVRSRV_BRIDGE_CACHEGENERIC_DISPATCH_LAST)
 #endif
 
 /*  15: Transport Layer interface functions */
@@ -275,7 +256,7 @@ extern "C" {
 
 /*  17: Validation interface functions */
 #define PVRSRV_BRIDGE_VALIDATION				17UL
-#if defined(SUPPORT_VALIDATION_BRIDGE)
+#if defined(SUPPORT_VALIDATION)
 #define PVRSRV_BRIDGE_VALIDATION_DISPATCH_FIRST (PVRSRV_BRIDGE_RI_DISPATCH_LAST + 1)
 #define PVRSRV_BRIDGE_VALIDATION_DISPATCH_LAST  (PVRSRV_BRIDGE_VALIDATION_DISPATCH_FIRST + PVRSRV_BRIDGE_VALIDATION_CMD_LAST)
 #else
@@ -295,7 +276,7 @@ extern "C" {
 
 /*  19: DevMem history interface functions */
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY		19UL
-#if defined(SUPPORT_DEVICEMEMHISTORY_BRIDGE)
+#if defined(SUPPORT_PAGE_FAULT_DEBUG)
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DISPATCH_FIRST (PVRSRV_BRIDGE_TUTILS_DISPATCH_LAST + 1)
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DISPATCH_LAST  (PVRSRV_BRIDGE_DEVICEMEMHISTORY_DISPATCH_FIRST + PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_LAST)
 #else
@@ -305,124 +286,17 @@ extern "C" {
 
 /*  20: Host Trace Buffer interface functions */
 #define PVRSRV_BRIDGE_HTBUFFER                 20UL
-#if !defined(EXCLUDE_HTBUFFER_BRIDGE)
 #define PVRSRV_BRIDGE_HTBUFFER_DISPATCH_FIRST  (PVRSRV_BRIDGE_DEVICEMEMHISTORY_DISPATCH_LAST + 1)
 #define PVRSRV_BRIDGE_HTBUFFER_DISPATCH_LAST   (PVRSRV_BRIDGE_HTBUFFER_DISPATCH_FIRST + PVRSRV_BRIDGE_HTBUFFER_CMD_LAST)
-#else
-#define PVRSRV_BRIDGE_HTBUFFER_DISPATCH_FIRST 0
-#define PVRSRV_BRIDGE_HTBUFFER_DISPATCH_LAST  (PVRSRV_BRIDGE_DEVICEMEMHISTORY_DISPATCH_LAST)
-#endif
-
-/*  21: Non-Linux Display functions */
-#define PVRSRV_BRIDGE_DCPLAT          		21UL
-#if defined(SUPPORT_DISPLAY_CLASS) && defined (SUPPORT_DCPLAT_BRIDGE)
-#define PVRSRV_BRIDGE_DCPLAT_DISPATCH_FIRST	(PVRSRV_BRIDGE_HTBUFFER_DISPATCH_LAST + 1)
-#define PVRSRV_BRIDGE_DCPLAT_DISPATCH_LAST	(PVRSRV_BRIDGE_DCPLAT_DISPATCH_FIRST + PVRSRV_BRIDGE_DCPLAT_CMD_LAST)
-#else
-#define PVRSRV_BRIDGE_DCPLAT_DISPATCH_FIRST 0
-#define PVRSRV_BRIDGE_DCPLAT_DISPATCH_LAST	(PVRSRV_BRIDGE_HTBUFFER_DISPATCH_LAST)
-#endif
-
-/*  22: Extmem functions */
-#define PVRSRV_BRIDGE_MMEXTMEM				   22UL
-#if defined(SUPPORT_WRAP_EXTMEM)
-#define PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_FIRST (PVRSRV_BRIDGE_DCPLAT_DISPATCH_LAST + 1)
-#define PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_LAST  (PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_FIRST + PVRSRV_BRIDGE_MMEXTMEM_CMD_LAST)
-#else
-#define PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_FIRST 0
-#define PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_LAST (PVRSRV_BRIDGE_DCPLAT_DISPATCH_LAST)
-#endif
-
-/*  23: Sync tracking functions */
-#define PVRSRV_BRIDGE_SYNCTRACKING				   23UL
-#if defined(SUPPORT_SYNCTRACKING_BRIDGE)
-#define PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_FIRST (PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_LAST + 1)
-#define PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_LAST  (PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_FIRST + PVRSRV_BRIDGE_SYNCTRACKING_CMD_LAST)
-#else
-#define PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_FIRST 0
-#define PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_LAST (PVRSRV_BRIDGE_MMEXTMEM_DISPATCH_LAST)
-#endif
 
 /* NB PVRSRV_BRIDGE_LAST below must be the last bridge group defined above (PVRSRV_BRIDGE_FEATURE) */
-#define PVRSRV_BRIDGE_LAST       			(PVRSRV_BRIDGE_SYNCTRACKING)
+#define PVRSRV_BRIDGE_LAST       			(PVRSRV_BRIDGE_HTBUFFER)
 /* NB PVRSRV_BRIDGE_DISPATCH LAST below must be the last dispatch entry defined above (PVRSRV_BRIDGE_FEATURE_DISPATCH_LAST) */
-#define PVRSRV_BRIDGE_DISPATCH_LAST			(PVRSRV_BRIDGE_SYNCTRACKING_DISPATCH_LAST)
+#define PVRSRV_BRIDGE_DISPATCH_LAST			(PVRSRV_BRIDGE_HTBUFFER_DISPATCH_LAST)
 
-/* bit mask representing the enabled PVR bridges */
-
-static const IMG_UINT32 gui32PVRBridges =
-	  (1U << (PVRSRV_BRIDGE_DEFAULT - PVRSRV_BRIDGE_FIRST))
-	| (1U << (PVRSRV_BRIDGE_SRVCORE - PVRSRV_BRIDGE_FIRST))
-	| (1U << (PVRSRV_BRIDGE_SYNC - PVRSRV_BRIDGE_FIRST))
-#if defined(SUPPORT_INSECURE_EXPORT) && defined(SUPPORT_SERVER_SYNC)
-	| (1U << (PVRSRV_BRIDGE_SYNCEXPORT - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_SECURE_EXPORT) && defined(SUPPORT_SERVER_SYNC)
-	| (1U << (PVRSRV_BRIDGE_SYNCSEXPORT - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(PDUMP)
-	| (1U << (PVRSRV_BRIDGE_PDUMPCTRL - PVRSRV_BRIDGE_FIRST))
-#endif
-	| (1U << (PVRSRV_BRIDGE_MM - PVRSRV_BRIDGE_FIRST))
-#if defined(SUPPORT_MMPLAT_BRIDGE)
-	| (1U << (PVRSRV_BRIDGE_MMPLAT - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_CMM)
-	| (1U << (PVRSRV_BRIDGE_CMM - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(PDUMP)
-	| (1U << (PVRSRV_BRIDGE_PDUMPMM - PVRSRV_BRIDGE_FIRST))
-	| (1U << (PVRSRV_BRIDGE_PDUMP - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(LINUX)
-	| (1U << (PVRSRV_BRIDGE_DMABUF - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_DISPLAY_CLASS)
-	| (1U << (PVRSRV_BRIDGE_DC - PVRSRV_BRIDGE_FIRST))
-#endif
-	| (1U << (PVRSRV_BRIDGE_CACHE - PVRSRV_BRIDGE_FIRST))
-#if defined(SUPPORT_SECURE_EXPORT)
-	| (1U << (PVRSRV_BRIDGE_SMM - PVRSRV_BRIDGE_FIRST))
-#endif
-	| (1U << (PVRSRV_BRIDGE_PVRTL - PVRSRV_BRIDGE_FIRST))
-#if defined(PVR_RI_DEBUG)
-	| (1U << (PVRSRV_BRIDGE_RI - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_VALIDATION)
-	| (1U << (PVRSRV_BRIDGE_VALIDATION - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(PVR_TESTING_UTILS)
-	| (1U << (PVRSRV_BRIDGE_TUTILS - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_DEVICEMEMHISTORY_BRIDGE)
-	| (1U << (PVRSRV_BRIDGE_DEVICEMEMHISTORY - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_HTBUFFER)
-	| (1U << (PVRSRV_BRIDGE_HTBUFFER - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_DISPLAY_CLASS) && defined (SUPPORT_DCPLAT_BRIDGE)
-	| (1U << (PVRSRV_BRIDGE_DCPLAT - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_WRAP_EXTMEM)
-	| (1U << (PVRSRV_BRIDGE_MMEXTMEM - PVRSRV_BRIDGE_FIRST))
-#endif
-#if defined(SUPPORT_SYNCTRACKING_BRIDGE)
-	| (1U << (PVRSRV_BRIDGE_SYNCTRACKING - PVRSRV_BRIDGE_FIRST))
-#endif
-	;
-
-/* bit field representing which PVR bridge groups may optionally not
- * be present in the server
- */
-#define PVR_BRIDGES_OPTIONAL \
-	( \
-		(1U << (PVRSRV_BRIDGE_RI - PVRSRV_BRIDGE_FIRST)) | \
-		(1U << (PVRSRV_BRIDGE_DEVICEMEMHISTORY - PVRSRV_BRIDGE_FIRST)) | \
-		(1U << (PVRSRV_BRIDGE_SYNCTRACKING - PVRSRV_BRIDGE_FIRST)) \
-	)
 
 /******************************************************************************
- * Generic bridge structures
+ * Generic bridge structures 
  *****************************************************************************/
 
 
@@ -439,6 +313,7 @@ typedef struct PVRSRV_BRIDGE_PACKAGE_TAG
 	void					*pvParamOut;			/*!< output data buffer */
 	IMG_UINT32				ui32OutBufferSize;		/*!< size of output data buffer */
 }PVRSRV_BRIDGE_PACKAGE;
+
 
 #if defined (__cplusplus)
 }

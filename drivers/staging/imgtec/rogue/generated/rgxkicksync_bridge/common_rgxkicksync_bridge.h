@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for rgxkicksync
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for rgxkicksync
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for rgxkicksync
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,13 +45,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_RGXKICKSYNC_BRIDGE_H
 #define COMMON_RGXKICKSYNC_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "rgx_bridge.h"
-#include <powervr/sync_external.h>
+#include "sync_external.h"
+#include "rgx_fwif_shared.h"
 
 
 #define PVRSRV_BRIDGE_RGXKICKSYNC_CMD_FIRST			0
@@ -104,7 +103,6 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXDESTROYKICKSYNCCONTEXT_TAG
 typedef struct PVRSRV_BRIDGE_IN_RGXKICKSYNC_TAG
 {
 	IMG_HANDLE hKickSyncContext;
-	IMG_UINT32 ui32ClientCacheOpSeqNum;
 	IMG_UINT32 ui32ClientFenceCount;
 	IMG_HANDLE * phFenceUFOSyncPrimBlock;
 	IMG_UINT32 * pui32FenceSyncOffset;
@@ -120,6 +118,7 @@ typedef struct PVRSRV_BRIDGE_IN_RGXKICKSYNC_TAG
 	IMG_INT32 i32TimelineFenceFD;
 	IMG_CHAR * puiUpdateFenceName;
 	IMG_UINT32 ui32ExtJobRef;
+	IMG_UINT32 ui32IntJobRef;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXKICKSYNC;
 
 /* Bridge out structure for RGXKickSync */

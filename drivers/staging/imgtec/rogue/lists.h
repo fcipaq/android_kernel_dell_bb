@@ -58,22 +58,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  ppsThis. In order to make a function available for a given type, it is required
  to use the funcion template macro that creates the actual code.
 
- There are 5 main types of functions:
- - INSERT	   : given a pointer to the head pointer of the list and a pointer
-                 to the node, inserts it as the new head.
- - INSERT TAIL : given a pointer to the head pointer of the list and a pointer
-                 to the node, inserts the node at the tail of the list.
- - REMOVE	   : given a pointer to a node, removes it from its list.
- - FOR EACH	   : apply a function over all the elements of a list.
- - ANY		   : apply a function over the elements of a list, until one of them
-                 return a non null value, and then returns it.
+ There are 4 main types of functions:
+ - INSERT	: given a pointer to the head pointer of the list and a pointer to
+ 			  the node, inserts it as the new head.
+ - REMOVE	: given a pointer to a node, removes it from its list.
+ - FOR EACH	: apply a function over all the elements of a list.
+ - ANY		: apply a function over the elements of a list, until one of them
+ 			  return a non null value, and then returns it.
 
  The two last functions can have a variable argument form, with allows to pass
  additional parameters to the callback function. In order to do this, the
  callback function must take two arguments, the first is the current node and
  the second is a list of variable arguments (va_list).
 
- The ANY functions have also another for which specifies the return type of the
+ The ANY functions have also another for wich specifies the return type of the
  callback function and the default value returned by the callback function.
 
 */
@@ -272,30 +270,6 @@ void List_##TYPE##_Insert(TYPE **ppsHead, TYPE *psNewNode)\
 }
 
 /*************************************************************************/ /*!
-@Function       List_##TYPE##_InsertTail
-@Description    Inserts a given node at the end of the list.
-@Input          psHead   The pointer to the pointer to the head node.
-@Input          psNode   The pointer to the node to be inserted.
-*/ /**************************************************************************/
-#define DECLARE_LIST_INSERT_TAIL(TYPE) \
-void List_##TYPE##_InsertTail(TYPE **ppsHead, TYPE *psNewNode)
-
-#define IMPLEMENT_LIST_INSERT_TAIL(TYPE) \
-void List_##TYPE##_InsertTail(TYPE **ppsHead, TYPE *psNewNode)\
-{\
-	TYPE *psTempNode = *ppsHead;\
-	if (psTempNode != NULL)\
-	{\
-		while (psTempNode->psNext)\
-			psTempNode = psTempNode->psNext;\
-		ppsHead = &psTempNode->psNext;\
-	}\
-	psNewNode->ppsThis = ppsHead;\
-	psNewNode->psNext = NULL;\
-	*ppsHead = psNewNode;\
-}
-
-/*************************************************************************/ /*!
 @Function       List_##TYPE##_Reverse
 @Description    Reverse a list in place
 @Input          ppsHead    The pointer to the pointer to the head node.
@@ -332,14 +306,18 @@ void List_##TYPE##_Reverse(TYPE **ppsHead)\
 
 
 DECLARE_LIST_ANY(PVRSRV_DEVICE_NODE);
-DECLARE_LIST_ANY_2(PVRSRV_DEVICE_NODE, IMG_BOOL, IMG_FALSE);
 DECLARE_LIST_ANY_2(PVRSRV_DEVICE_NODE, PVRSRV_ERROR, PVRSRV_OK);
 DECLARE_LIST_ANY_VA(PVRSRV_DEVICE_NODE);
 DECLARE_LIST_ANY_VA_2(PVRSRV_DEVICE_NODE, PVRSRV_ERROR, PVRSRV_OK);
 DECLARE_LIST_FOR_EACH(PVRSRV_DEVICE_NODE);
 DECLARE_LIST_FOR_EACH_VA(PVRSRV_DEVICE_NODE);
-DECLARE_LIST_INSERT_TAIL(PVRSRV_DEVICE_NODE);
+DECLARE_LIST_INSERT(PVRSRV_DEVICE_NODE);
 DECLARE_LIST_REMOVE(PVRSRV_DEVICE_NODE);
+
+DECLARE_LIST_ANY_VA(PVRSRV_POWER_DEV);
+DECLARE_LIST_ANY_VA_2(PVRSRV_POWER_DEV, PVRSRV_ERROR, PVRSRV_OK);
+DECLARE_LIST_INSERT(PVRSRV_POWER_DEV);
+DECLARE_LIST_REMOVE(PVRSRV_POWER_DEV);
 
 #undef DECLARE_LIST_ANY_2
 #undef DECLARE_LIST_ANY_VA
@@ -348,6 +326,9 @@ DECLARE_LIST_REMOVE(PVRSRV_DEVICE_NODE);
 #undef DECLARE_LIST_FOR_EACH_VA
 #undef DECLARE_LIST_INSERT
 #undef DECLARE_LIST_REMOVE
+
+void* MatchDeviceKM_AnyVaCb(PVRSRV_DEVICE_NODE* psDeviceNode, va_list va);
+void* MatchPowerDeviceIndex_AnyVaCb(PVRSRV_POWER_DEV *psPowerDev, va_list va);
 
 #endif
 

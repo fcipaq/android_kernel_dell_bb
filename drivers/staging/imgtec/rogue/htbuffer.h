@@ -91,7 +91,7 @@ extern "C" {
 
 */ /**************************************************************************/
 IMG_INTERNAL PVRSRV_ERROR
-HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, IMG_UINT32 SF, ...);
+HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, HTB_LOG_SFids SF, ...);
 
 
 /*************************************************************************/ /*!
@@ -106,7 +106,7 @@ HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, IMG_UI
 
 */ /**************************************************************************/
 IMG_INTERNAL PVRSRV_ERROR
-HTBLogSimple(IMG_HANDLE hSrvHandle, IMG_UINT32 SF, ...);
+HTBLogSimple(IMG_HANDLE hSrvHandle, HTB_LOG_SFids SF, ...);
 
 
 

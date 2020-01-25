@@ -207,7 +207,7 @@ IMG_BOOL ScriptDBGCalc(RGX_SCRIPT_BUILD *psScript,
 }
 
 
-#if defined(RGX_FEATURE_META) || defined(SUPPORT_KERNEL_SRVINIT)
+#if defined(RGX_FEATURE_META)
 IMG_BOOL ScriptWriteRGXRegPDUMPOnly(RGX_SCRIPT_BUILD *psScript,
                                     IMG_UINT32 ui32Offset,
                                     IMG_UINT32 ui32Value)
@@ -510,6 +510,7 @@ IMG_BOOL ScriptDBGReadMetaCoreReg(RGX_SCRIPT_BUILD *psScript,
 #endif /* RGX_FEATURE_META */
 
 
+#if defined(FIX_HW_BRN_44871)
 IMG_BOOL ScriptDBGString(RGX_SCRIPT_BUILD *psScript,
                          const IMG_CHAR *aszString)
 {
@@ -528,6 +529,114 @@ IMG_BOOL ScriptDBGString(RGX_SCRIPT_BUILD *psScript,
 
 	return IMG_FALSE;
 }
+#endif /* FIX_HW_BRN_44871 */
+
+
+#if defined(RGX_FEATURE_PERFBUS) && defined(SUPPORT_DEBUG_BUS_DUMP)
+/*!
+*******************************************************************************
+
+ @Function      ScriptWaitUs
+
+ @Description   Adds wait to the script
+
+ @Input         psScript
+
+ @Input         ui32WaitInUs
+
+ @Return        IMG_BOOL
+
+******************************************************************************/
+static IMG_BOOL ScriptWaitUs(RGX_SCRIPT_BUILD *psScript,
+                             IMG_UINT32 ui32WaitInUs)
+{
+	RGX_INIT_COMMAND *psComm = NextScriptCommand(psScript);
+
+	if (psComm != NULL)
+	{
+		psComm->sDBGWait.eOp = RGX_INIT_OP_DBG_WAIT;
+		psComm->sDBGWait.ui32WaitInUs = ui32WaitInUs;
+		return IMG_TRUE;
+	}
+
+	return IMG_FALSE;
+}
+
+
+IMG_BOOL ScriptDBGBusReadBlock(RGX_SCRIPT_BUILD *psScript,
+                               const IMG_CHAR *pszGroupName,
+                               IMG_UINT32 ui32BaseAddrOffset,
+                               IMG_UINT32 ui32GroupCount)
+{
+	IMG_UINT32 i;
+	IMG_CHAR szBlockOffset[100];
+
+#define REG_WRITE(R, V)      if (!ScriptWriteRGXReg(psScript, R, V)) return IMG_FALSE;
+#define DBG_READ(T, R, S)    if (!ScriptDBGReadRGXReg(psScript, T, R, S)) return IMG_FALSE;
+#define DBG_STRING(S)        if (!ScriptDBGString(psScript, S)) return IMG_FALSE;
+#define DBG_WAITUS(T)        if (!ScriptWaitUs(psScript, T)) return IMG_FALSE;
+#define DBG_BUS_READ(R, S) \
+	DBG_READ(RGX_INIT_OP_DBG_READ64_HW_REG, R, S); \
+	DBG_WAITUS(10);
+
+/* Workout the generic register offsets based on RGX_CR_TA_PERF */
+#define RGX_CR_N_PERF                0
+#define RGX_CR_N_PERF_SELECT0        (RGX_CR_TA_PERF_SELECT0 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_SELECT1        (RGX_CR_TA_PERF_SELECT1 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_SELECT2        (RGX_CR_TA_PERF_SELECT2 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_SELECT3        (RGX_CR_TA_PERF_SELECT3 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_SELECTED_BITS  (RGX_CR_TA_PERF_SELECTED_BITS - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_COUNTER_0      (RGX_CR_TA_PERF_COUNTER_0 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_COUNTER_1      (RGX_CR_TA_PERF_COUNTER_1 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_COUNTER_2      (RGX_CR_TA_PERF_COUNTER_2 - RGX_CR_TA_PERF)
+#define RGX_CR_N_PERF_COUNTER_3      (RGX_CR_TA_PERF_COUNTER_3 - RGX_CR_TA_PERF)
+
+	/*
+	 * Note:
+	 * Although we use RGX_CR_TA_* here the control registers are the
+	 * same for all the perf register banks, but there is no generic
+	 * RGX_CR_N_* register definition to use.
+	 */
+	
+	DBG_STRING(pszGroupName);
+
+	/* Enable debug bus */
+	REG_WRITE(ui32BaseAddrOffset + RGX_CR_N_PERF, RGX_CR_TA_PERF_CTRL_ENABLE_EN);
+
+	/*
+	 *Loop across all the groups in the block, reading the values 4 at a time
+	 */
+	for (i=0;i<ui32GroupCount;i+=4)
+	{
+		REG_WRITE(ui32BaseAddrOffset + RGX_CR_N_PERF_SELECT0,
+		          (i << RGX_CR_TA_PERF_SELECT0_GROUP_SELECT_SHIFT) |
+		           ~RGX_CR_TA_PERF_SELECT0_BIT_SELECT_CLRMSK);
+
+		REG_WRITE(ui32BaseAddrOffset + RGX_CR_N_PERF_SELECT1,
+		          ((i+1) << RGX_CR_TA_PERF_SELECT1_GROUP_SELECT_SHIFT) |
+		           ~RGX_CR_TA_PERF_SELECT1_BIT_SELECT_CLRMSK);
+		
+		REG_WRITE(ui32BaseAddrOffset + RGX_CR_N_PERF_SELECT2,
+		          ((i+2) << RGX_CR_TA_PERF_SELECT2_GROUP_SELECT_SHIFT) |
+		          ~RGX_CR_TA_PERF_SELECT2_BIT_SELECT_CLRMSK);
+		
+		REG_WRITE(ui32BaseAddrOffset + RGX_CR_N_PERF_SELECT3,
+		          ((i+3) << RGX_CR_TA_PERF_SELECT3_GROUP_SELECT_SHIFT) |
+		          ~RGX_CR_TA_PERF_SELECT3_BIT_SELECT_CLRMSK);
+
+		snprintf(szBlockOffset, sizeof(szBlockOffset), "BlockOffset 0x%08x", i);
+		DBG_BUS_READ(ui32BaseAddrOffset + RGX_CR_N_PERF_SELECTED_BITS, szBlockOffset);
+	}
+
+#undef REG_WRITE
+#undef DBG_READ
+#undef DBG_STRING
+#undef DBG_WAITUS
+#undef DBG_BUS_READ
+
+	return IMG_TRUE;
+}
+#endif /* RGX_FEATURE_PERFBUS && SUPPORT_DEBUG_BUS_DUMP */
 
 
 IMG_BOOL ScriptHalt(RGX_SCRIPT_BUILD *psScript)

@@ -71,7 +71,7 @@ static inline void _pvr_vfree(const void* pvAddr)
 			 * a whole number of pages, poison the minimum size known to have
 			 * been allocated.
 			 */
-			OSCachedMemSet((void*)pvAddr, OS_MEM_POISON_VALUE, PVR_LINUX_KMALLOC_ALLOCATION_THRESHOLD);
+			OSMemSet((void*)pvAddr, OS_MEM_POISON_VALUE, PVR_LINUX_KMALLOC_ALLOCATION_THRESHOLD);
 #endif
 			vfree(pvAddr);
 }
@@ -80,7 +80,7 @@ static inline void _pvr_kfree(const void* pvAddr)
 {
 #if defined(DEBUG)
 			/* Poison whole memory block */
-			OSCachedMemSet((void*)pvAddr, OS_MEM_POISON_VALUE, ksize(pvAddr));
+			OSMemSet((void*)pvAddr, OS_MEM_POISON_VALUE, ksize(pvAddr));
 #endif
 			kfree(pvAddr);
 }
@@ -118,11 +118,7 @@ IMG_INTERNAL void *OSAllocZMem(IMG_UINT32 ui32Size)
 	return pvRet;
 }
 
-/*
- * The parentheses around OSFreeMem prevent the macro in allocmem.h from
- * applying, as it would break the function's definition.
- */
-IMG_INTERNAL void (OSFreeMem)(void *pvMem)
+IMG_INTERNAL void OSFreeMem(void *pvMem)
 {
 	if (pvMem != NULL)
 	{
@@ -353,11 +349,7 @@ IMG_INTERNAL void *OSAllocZMem(IMG_UINT32 ui32Size)
 }
 #endif
 
-/*
- * The parentheses around OSFreeMem prevent the macro in allocmem.h from
- * applying, as it would break the function's definition.
- */
-IMG_INTERNAL void (OSFreeMem)(void *pvMem)
+IMG_INTERNAL void OSFreeMem(void *pvMem)
 {
 	if (pvMem != NULL)
 	{
@@ -365,10 +357,7 @@ IMG_INTERNAL void (OSFreeMem)(void *pvMem)
 		{
 #if !defined(PVR_DISABLE_KMALLOC_MEMSTATS)
 #if !defined(PVRSRV_ENABLE_MEMORY_STATS)
-			{
-				IMG_UINT32 *puiTemp = (IMG_UINT32*) (((IMG_BYTE*)pvMem) + (ksize(pvMem) - ALLOCMEM_MEMSTATS_PADDING));
-				PVRSRVStatsDecrMemKAllocStat(ksize(pvMem), *puiTemp);
-			}
+			PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_KMALLOC, ksize(pvMem));
 #else
 			PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_KMALLOC,
 			                                (IMG_UINT64)(uintptr_t) pvMem);
@@ -426,11 +415,7 @@ IMG_INTERNAL void *OSAllocZMemNoStats(IMG_UINT32 ui32Size)
 	return pvRet;
 }
 
-/*
- * The parentheses around OSFreeMemNoStats prevent the macro in allocmem.h from
- * applying, as it would break the function's definition.
- */
-IMG_INTERNAL void (OSFreeMemNoStats)(void *pvMem)
+IMG_INTERNAL void OSFreeMemNoStats(void *pvMem)
 {
 	if (pvMem != NULL)
 	{

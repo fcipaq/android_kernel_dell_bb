@@ -85,6 +85,14 @@ typedef IMG_UINT64 RA_LENGTH_T;
  */
 typedef IMG_UINT32 RA_FLAGS_T;
 
+struct _RA_SEGMENT_DETAILS_
+{
+	RA_LENGTH_T      uiSize;
+	IMG_CPU_PHYADDR sCpuPhyAddr;
+	IMG_HANDLE      hSegment;
+};
+typedef struct _RA_SEGMENT_DETAILS_ RA_SEGMENT_DETAILS;
+
 /**
  *  @Function   RA_Create
  *
@@ -105,11 +113,10 @@ RA_ARENA *
 RA_Create (IMG_CHAR *name,
            /* subsequent imports: */
            RA_LOG2QUANTUM_T uLog2Quantum,
-           IMG_UINT32 ui32LockClass,
-           PVRSRV_ERROR (*imp_alloc)(RA_PERARENA_HANDLE _h,
+		   IMG_UINT32 ui32LockClass,
+           IMG_BOOL (*imp_alloc)(RA_PERARENA_HANDLE _h,
                                  RA_LENGTH_T uSize,
                                  RA_FLAGS_T uFlags,
-                                 const IMG_CHAR *pszAnnotation,
                                  RA_BASE_T *pBase,
                                  RA_LENGTH_T *pActualSize,
                                  RA_PERISPAN_HANDLE *phPriv),
@@ -117,7 +124,7 @@ RA_Create (IMG_CHAR *name,
                                  RA_BASE_T,
                                  RA_PERISPAN_HANDLE),
            RA_PERARENA_HANDLE per_arena_handle,
-           IMG_BOOL bNoSplit);
+		   IMG_BOOL bNoSplit);
 
 /**
  *  @Function   RA_Delete
@@ -168,22 +175,20 @@ RA_Add (RA_ARENA *pArena,
  *          Use RA_NO_IMPORT_MULTIPLIER to import the exact size.
  *  @Output pActualSize - the actual_size of resource segment allocated,
  *          typcially rounded up by quantum.
- *  @Input  uImportFlags - flags influencing allocation policy.
+ *  @Input  uFlags - flags influencing allocation policy.
  *  @Input  uAlignment - the alignment constraint required for the
  *          allocated segment, use 0 if alignment not required.
- *  @Input  pszAnnotation - a string to describe the allocation
  *  @Output pBase - allocated base resource
  *  @Output phPriv - the user reference associated with allocated
  *          resource span.
- *  @Return PVRSRV_OK - success
+ *  @Return IMG_TRUE - success, IMG_FALSE - failure
  */
-PVRSRV_ERROR
+IMG_BOOL
 RA_Alloc (RA_ARENA *pArena, 
           RA_LENGTH_T uSize,
           IMG_UINT8 uImportMultiplier,
           RA_FLAGS_T uFlags,
           RA_LENGTH_T uAlignment,
-          const IMG_CHAR *pszAnnotation,
           RA_BASE_T *pBase,
           RA_LENGTH_T *pActualSize,
           RA_PERISPAN_HANDLE *phPriv);
@@ -195,7 +200,7 @@ RA_Alloc (RA_ARENA *pArena,
  *  
  *  @Input  pArena - the arena the segment was originally allocated from.
  *  @Input  base - the base of the resource span to free.
- *  @Input  bFreeBackingStore - Should backing store memory be freed?
+ *	@Input	bFreeBackingStore - Should backing store memory be freed?
  *
  *  @Return None
  */

@@ -46,7 +46,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "img_defs.h"
 #include "rgxdefs_km.h"
-#include "device_connection.h"
 
 #if defined (__cplusplus)
 extern "C" {
@@ -54,7 +53,7 @@ extern "C" {
 
 struct RGXFW;
 
-IMG_INTERNAL struct RGXFW *RGXLoadFirmware(SHARED_DEV_CONNECTION psDeviceNode, const IMG_CHAR *pszBVNCString, const IMG_CHAR *pszBVpNCString);
+IMG_INTERNAL struct RGXFW *RGXLoadFirmware(void);
 
 IMG_INTERNAL void RGXUnloadFirmware(struct RGXFW *psRGXFW);
 

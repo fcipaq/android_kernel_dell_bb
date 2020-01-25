@@ -60,10 +60,10 @@ extern "C" {
 
 
 /* String used in pvrdebug -h output */
-#define HTB_LOG_GROUPS_STRING_LIST   "ctrl,mmu,sync,main,brg"
+#define HTB_LOG_GROUPS_STRING_LIST   "ctrl,mmu,sync,main"
 
 /* Used in print statements to display log group state, one %s per group defined */
-#define HTB_LOG_ENABLED_GROUPS_LIST_PFSPEC  "%s%s%s%s%s"
+#define HTB_LOG_ENABLED_GROUPS_LIST_PFSPEC  "%s%s%s%s"
 
 /* Available log groups - Master template
  *
@@ -82,7 +82,6 @@ extern "C" {
 	X( HTB_GROUP_MMU,      MMU   )                        \
 	X( HTB_GROUP_SYNC,     SYNC  )                        \
 	X( HTB_GROUP_MAIN,     MAIN  )                        \
-	X( HTB_GROUP_BRG,      BRG  )                         \
 /* Debug group HTB_GROUP_DBG must always be last */       \
 	X( HTB_GROUP_DBG,      DBG   )
 
@@ -133,9 +132,6 @@ X( 5,  HTB_GROUP_MAIN,  HTB_SF_MAIN_KICK_SHG,           "Kick SHG: FWCtx %08X @ 
 X( 6,  HTB_GROUP_MAIN,  HTB_SF_MAIN_KICK_2D,            "Kick 2D: FWCtx %08X @ %d\n", 2) \
 X( 7,  HTB_GROUP_MAIN,  HTB_SF_MAIN_KICK_UNCOUNTED,     "Kick (uncounted) for all DMs\n", 0) \
 X( 8,  HTB_GROUP_MAIN,  HTB_SF_MAIN_FWCCB_CMD,          "FW CCB Cmd: %d\n", 1) \
-\
-X( 1,  HTB_GROUP_BRG,   HTB_SF_BRG_BRIDGE_CALL,         "Bridge call: start: %010u: bid %03d fid %d\n", 3) \
-X( 2,  HTB_GROUP_BRG,   HTB_SF_BRG_BRIDGE_CALL_ERR,     "Bridge call: start: %010u: bid %03d fid %d error %d\n", 4) \
 \
 X( 1,  HTB_GROUP_DBG,   HTB_SF_DBG_INTPAIR,             "0x%8.8x 0x%8.8x\n", 2) \
 \

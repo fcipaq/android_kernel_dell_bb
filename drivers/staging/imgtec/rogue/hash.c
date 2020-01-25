@@ -187,7 +187,6 @@ HASH_Key_Comp_Default (size_t uKeySize, void *pKey1, void *pKey2)
 @Input          pBucket       The bucket
 @Input          ppBucketTable The hash table
 @Input          uSize         The size of the hash table
-@Return         PVRSRV_ERROR
 */ /**************************************************************************/
 static void
 _ChainInsert (HASH_TABLE *pHash, BUCKET *pBucket, BUCKET **ppBucketTable, IMG_UINT32 uSize)
@@ -212,7 +211,6 @@ _ChainInsert (HASH_TABLE *pHash, BUCKET *pBucket, BUCKET **ppBucketTable, IMG_UI
 @Input          uOldSize     The size of the old hash table
 @Input          ppNewTable   The new hash table
 @Input          uNewSize     The size of the new hash table
-@Return         None
 */ /**************************************************************************/
 static void
 _Rehash (HASH_TABLE *pHash,
@@ -386,12 +384,6 @@ HASH_Delete (HASH_TABLE *pHash)
 			bDoCheck = IMG_FALSE;
 		}
 	}
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-	else
-	{
-		bDoCheck = IMG_FALSE;
-	}
-#endif
 #endif
 	if (pHash != NULL)
     {
@@ -403,20 +395,8 @@ HASH_Delete (HASH_TABLE *pHash)
 		}
 		if(pHash->uCount != 0)
 		{
-			IMG_UINT32 uiEntriesLeft = pHash->uCount;
-			IMG_UINT32 i;
-			PVR_DPF ((PVR_DBG_ERROR, "%s: Leak detected in hash table!", __func__));
-			PVR_DPF ((PVR_DBG_ERROR, "%s: Likely Cause: client drivers not freeing allocations before destroying devmemcontext", __func__));
-			PVR_DPF ((PVR_DBG_ERROR, "%s: Removing remaining %u hash entries.", __func__, uiEntriesLeft));
-
-			for (i = 0; i < uiEntriesLeft; i++)
-			{
-#if defined(__linux__) && defined(__KERNEL__)
-				OSFreeMemNoStats(pHash->ppBucketTable[i]);
-#else
-				OSFreeMem(pHash->ppBucketTable[i]);
-#endif
-			}
+			PVR_DPF ((PVR_DBG_ERROR, "HASH_Delete: leak detected in hash table!"));
+			PVR_DPF ((PVR_DBG_ERROR, "Likely Cause: client drivers not freeing alocations before destroying devmemcontext"));
 		}
 #if defined(__linux__) && defined(__KERNEL__)
 		OSFreeMemNoStats(pHash->ppBucketTable);
@@ -661,6 +641,7 @@ HASH_Iterate(HASH_TABLE *pHash, HASH_pfnCallback pfnCallback)
     }
     return PVRSRV_OK;
 }
+
 
 #ifdef HASH_TRACE
 /*************************************************************************/ /*!

@@ -45,31 +45,27 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "srvinit.h"
 #include "pvr_debug.h"
 #include "osfunc.h"
-#include "km_apphint_defs.h"
-#include "htbuffer_types.h"
-#include "htbuffer_init.h"
 
 #include "devicemem.h"
 #include "devicemem_pdump.h"
 
 #include "client_rgxinit_bridge.h"
-
+#include "rgx_fwif_km.h"
+#include "rgx_fwif_client.h"
+#include "rgx_fwif_alignchecks.h"
+#include "rgx_fwif_sig_km.h"
+#if !defined(SUPPORT_KERNEL_SRVINIT) && defined(PDUMP)
 #include "rgx_fwif_sig.h"
+#endif
 
 #include "rgx_compat_bvnc.h"
 
 #include "srvinit_osfunc.h"
-
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-#include "rgxdefs.h"
-#else
-#include "rgxdefs_km.h"
-#endif
-
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
 #include "virt_validation_defs.h"
 #endif
 
+#include "srvinit_param.h"
 #include "srvinit_pdump.h"
 
 #include "rgx_fwif_hwperf.h"
@@ -82,17 +78,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgxfwimageutils.h"
 
 #include "rgx_hwperf_km.h"
-#include "rgx_bvnc_defs_km.h"
-
 #if !defined(SUPPORT_KERNEL_SRVINIT)
 #include "rgx_hwperf.h"
-#include "rgx_fwif_km.h"
-#include "rgx_fwif_client.h"
-#include "rgx_fwif_alignchecks.h"
-#else
-#include "rgxdevice.h"
+/* Check server assumptions of certain HWPerf types which can not be used 
+ * directly in the KM server. */
+static_assert(RGXFW_HWPERF_L1_PADDING_DEFAULT>=RGX_HWPERF_V2_MAX_PACKET_SIZE,
+			  "RGXFW_HWPERF_L1_PADDING_DEFAULT overflows max HWPerf packet size");
 #endif
-static RGX_INIT_COMMAND asDbgCommands[RGX_MAX_DEBUG_COMMANDS];
 
 #if defined(SUPPORT_TRUSTED_DEVICE)
 #if !defined(SUPPORT_KERNEL_SRVINIT)
@@ -102,561 +94,85 @@ static RGX_INIT_COMMAND asDbgCommands[RGX_MAX_DEBUG_COMMANDS];
 #include "pvrsrv_device.h"
 #endif
 
+static RGX_INIT_COMMAND asDbgCommands[RGX_MAX_DEBUG_COMMANDS];
+static RGX_INIT_COMMAND asDbgBusCommands[RGX_MAX_DBGBUS_COMMANDS];
+static RGX_INIT_COMMAND asDeinitCommands[RGX_MAX_DEINIT_COMMANDS];
+
 
 #define	HW_PERF_FILTER_DEFAULT         0x00000000 /* Default to no HWPerf */
 #define HW_PERF_FILTER_DEFAULT_ALL_ON  0xFFFFFFFF /* All events */
 
+/* Services initialisation parameters */
+SrvInitParamInitBOOL(EnableSignatureChecks, RGXFW_SIG_CHECKS_ENABLED_DEFAULT);
+SrvInitParamInitUINT32(SignatureChecksBufSize, RGXFW_SIG_BUFFER_SIZE_DEFAULT);
+SrvInitParamInitBOOL(Enable2ndThread, IMG_FALSE);
+SrvInitParamInitUINT32(EnableFWContextSwitch, RGXFWIF_INICFG_CTXSWITCH_DM_ALL);
+SrvInitParamInitUINT32(FWContextSwitchProfile, 2); /* Default to maximum coverage */
+SrvInitParamInitUINT32(FirmwarePerf, FW_PERF_CONF_NONE);
+SrvInitParamInitBOOL(EnableHWPerf, IMG_FALSE);
+SrvInitParamInitUINT32(HWPerfFWBufSizeInKB, 0);	/* Default to server default */
+SrvInitParamInitUINT32(HWPerfFilter0, HW_PERF_FILTER_DEFAULT);
+SrvInitParamInitUINT32(HWPerfFilter1, HW_PERF_FILTER_DEFAULT);
+SrvInitParamInitBOOL(EnableHWPerfHost, IMG_FALSE);
+SrvInitParamInitUINT32(HWPerfHostFilter, HW_PERF_FILTER_DEFAULT);
+SrvInitParamInitBOOL(HWPerfDisableCustomCounterFilter, IMG_FALSE);
+SrvInitParamInitUINT32(EnableAPM, RGX_ACTIVEPM_DEFAULT);
+SrvInitParamInitUINT32(EnableRDPowerIsland, RGX_RD_POWER_ISLAND_DEFAULT);
+SrvInitParamInitUINT32(UseMETAT1, RGX_META_T1_OFF); /* Default to not using thread 1 */
+SrvInitParamInitBOOL(DustRequestInject, IMG_FALSE);
 
-#if defined(SUPPORT_KERNEL_SRVINIT) && defined(SUPPORT_VALIDATION)
-#include "pvrsrv_apphint.h"
+#if defined(HWR_DEFAULT_ENABLED)
+SrvInitParamInitBOOL(EnableHWR, IMG_TRUE);
+#else
+SrvInitParamInitBOOL(EnableHWR, IMG_FALSE);
 #endif
 
-#if defined(SUPPORT_KERNEL_SRVINIT) && defined(LINUX)
-#include "km_apphint.h"
-#include "os_srvinit_param.h"
+#if defined(DEBUG)
+SrvInitParamInitUINT32(HWRDebugDumpLimit, RGXFWIF_HWR_DEBUG_DUMP_ALL);
+SrvInitParamInitBOOL(CheckMList, IMG_TRUE);
 #else
-#include "srvinit_param.h"
-/*!
-*******************************************************************************
- * AppHint mnemonic data type helper tables
-******************************************************************************/
-/* apphint map of name vs. enable flag */
-static SRV_INIT_PARAM_UINT32_LOOKUP htb_loggroup_tbl[] = {
-#define X(a, b) { #b, HTB_LOG_GROUP_FLAG(a) },
-	HTB_LOG_SFGROUPLIST
-#undef X
-};
-/* apphint map of arg vs. OpMode */
-static SRV_INIT_PARAM_UINT32_LOOKUP htb_opmode_tbl[] = {
-	{ "droplatest", HTB_OPMODE_DROPLATEST},
-	{ "dropoldest", HTB_OPMODE_DROPOLDEST},
-	/* HTB should never be started in HTB_OPMODE_BLOCK
-	 * as this can lead to deadlocks
-	 */
-};
+SrvInitParamInitUINT32(HWRDebugDumpLimit, 1); /* dump only first HWR */
+SrvInitParamInitBOOL(CheckMList, IMG_FALSE);
+#endif
+SrvInitParamInitBOOL(ZeroFreelist, IMG_FALSE);
+SrvInitParamInitBOOL(DisableClockGating, IMG_FALSE);
+SrvInitParamInitBOOL(DisablePDP, IMG_FALSE);
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+SrvInitParamInitBOOL(EnableFTraceGPU, IMG_FALSE);
+#endif
+#if defined(HW_ERN_41805) || defined(HW_ERN_42606)
+SrvInitParamInitUINT32(TruncateMode, 0);
+#endif
+#if defined(HW_ERN_42290) && defined(RGX_FEATURE_TPU_FILTERING_MODE_CONTROL)
+SrvInitParamInitBOOL(NewFilteringMode, IMG_TRUE);
+#endif
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+SrvInitParamInitUINT32(JonesDisableMask, 0);
+#endif
+SrvInitParamInitBOOL(DisableFEDLogging, IMG_FALSE);
+SrvInitParamInitBOOL(EnableRTUBypass, IMG_FALSE);
+#if defined(DEBUG)
+SrvInitParamInitBOOL(AssertOutOfMemory, IMG_FALSE);
+#endif
+SrvInitParamInitBOOL(EnableCDMKillingRandMode, IMG_FALSE);
+SrvInitParamInitBOOL(DisableDMOverlap, IMG_FALSE);
 
-static SRV_INIT_PARAM_UINT32_LOOKUP fwt_logtype_tbl[] = {
+static SRV_INIT_PARAM_UINT32_LOOKUP asLogTypeTable[] = {
 	{ "trace", 2},
 	{ "tbi", 1},
 	{ "none", 0}
 };
+SrvInitParamInitUINT32List(FirmwareLogType, 0, asLogTypeTable); 
 
-static SRV_INIT_PARAM_UINT32_LOOKUP timecorr_clk_tbl[] = {
-	{ "mono", 0 },
-	{ "mono_raw", 1 },
-	{ "sched", 2 }
-};
+static SRV_INIT_PARAM_UINT32_LOOKUP asLogGroupTable[] = { RGXFWIF_LOG_GROUP_NAME_VALUE_MAP };
+SrvInitParamInitUINT32BitField(EnableLogGroup, 0, asLogGroupTable);
 
-static SRV_INIT_PARAM_UINT32_LOOKUP fwt_loggroup_tbl[] = { RGXFWIF_LOG_GROUP_NAME_VALUE_MAP };
-
-/*
- * Services AppHints initialisation
- */
-#define X(a, b, c, d, e) SrvInitParamInit ## b( a, d, e )
-APPHINT_LIST_ALL
-#undef X
-#endif /* SUPPORT_KERNEL_SRVINIT && LINUX */
-
-/*
- * Container for all the apphints used by this module
- */
-typedef struct _RGX_SRVINIT_APPHINTS_
-{
-	IMG_BOOL   bDustRequestInject;
-	IMG_BOOL   bEnableSignatureChecks;
-	IMG_UINT32 ui32SignatureChecksBufSize;
-
-#if defined(DEBUG)
-	IMG_BOOL   bAssertOnOutOfMem;
-	IMG_BOOL   bAssertOnHWRTrigger;
-#endif
-	IMG_BOOL   bCheckMlist;
-	IMG_BOOL   bDisableClockGating;
-	IMG_BOOL   bDisableDMOverlap;
-	IMG_BOOL   bDisableFEDLogging;
-	IMG_BOOL   bDisablePDP;
-	IMG_BOOL   bEnableCDMKillRand;
-	IMG_BOOL   bEnableFTrace;
-	IMG_BOOL   bEnableHWPerf;
-	IMG_BOOL   bEnableHWPerfHost;
-	IMG_BOOL   bEnableHWR;
-	IMG_BOOL   bEnableRTUBypass;
-	IMG_BOOL   bFilteringMode;
-	IMG_BOOL   bHWPerfDisableCustomCounterFilter;
-	IMG_BOOL   bZeroFreelist;
-	IMG_UINT32 ui32EnableFWContextSwitch;
-	IMG_UINT32 ui32FWContextSwitchProfile;
-	IMG_UINT32 ui32HWPerfFWBufSize;
-	IMG_UINT32 ui32HWPerfHostBufSize;
-	IMG_UINT32 ui32HWPerfFilter0;
-	IMG_UINT32 ui32HWPerfFilter1;
-	IMG_UINT32 ui32HWPerfHostFilter;
-	IMG_UINT32 ui32TimeCorrClock;
-	IMG_UINT32 ui32HWRDebugDumpLimit;
-	IMG_UINT32 ui32JonesDisableMask;
-	IMG_UINT32 ui32LogType;
-	IMG_UINT32 ui32TruncateMode;
-	FW_PERF_CONF eFirmwarePerf;
-	RGX_ACTIVEPM_CONF eRGXActivePMConf;
-	RGX_META_T1_CONF eUseMETAT1;
-	RGX_RD_POWER_ISLAND_CONF eRGXRDPowerIslandConf;
-
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-	IMG_UINT32 aui32OSidMin[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS];
-	IMG_UINT32 aui32OSidMax[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS];
-#endif
-	IMG_BOOL   bEnableTrustedDeviceAceConfig;
-} RGX_SRVINIT_APPHINTS;
-
-
-/*!
-*******************************************************************************
-
- @Function      GetApphints
-
- @Description   Read init time apphints and initialise internal variables
-
- @Input         psHints : Pointer to apphints container
-
- @Return        void
-
-******************************************************************************/
-static INLINE void GetApphints(RGX_SRVINIT_APPHINTS *psHints, IMG_UINT64 ui64ErnsBrns, IMG_UINT64 ui64Features)
-{
-	void *pvParamState = SrvInitParamOpen();
-	IMG_UINT32 ui32ParamTemp;
-	IMG_BOOL bS7TopInfra = IMG_FALSE, bE42290 = IMG_FALSE, bTPUFiltermodeCtrl = IMG_FALSE, \
-			bE41805 = IMG_FALSE, bE42606 = IMG_FALSE, bAXIACELite = IMG_FALSE;
-
-#if defined(PVRSRV_GPUVIRT_GUESTDRV)
-	PVR_UNREFERENCED_PARAMETER(bE41805);
-	PVR_UNREFERENCED_PARAMETER(bE42606);
-	PVR_UNREFERENCED_PARAMETER(bE42290);
-	PVR_UNREFERENCED_PARAMETER(bS7TopInfra);
-	PVR_UNREFERENCED_PARAMETER(bTPUFiltermodeCtrl);
-#endif
-
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	PVR_UNREFERENCED_PARAMETER(ui64ErnsBrns);
-	PVR_UNREFERENCED_PARAMETER(ui64Features);
-	PVR_UNREFERENCED_PARAMETER(bAXIACELite);
-#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
-	bS7TopInfra = IMG_TRUE;
-#endif
-#if defined(HW_ERN_42290)
-	bE42290 = IMG_TRUE;
-#endif
-#if defined(HW_ERN_41805)
-	bE41805 = IMG_TRUE;
-#endif
-#if defined(HW_ERN_42606)
-	bE42606 = IMG_TRUE;
-#endif
-#if defined(RGX_FEATURE_AXI_ACELITE)
-	bAXIACELite = IMG_TRUE;
-#endif
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These functionality is n/a to guest drivers */
 #else
-	if(ui64Features & RGX_FEATURE_S7_TOP_INFRASTRUCTURE_BIT_MASK)
-	{
-		bS7TopInfra = IMG_TRUE;
-	}
-
-	if(ui64Features & RGX_FEATURE_TPU_FILTERING_MODE_CONTROL_BIT_MASK)
-	{
-		bTPUFiltermodeCtrl = IMG_TRUE;
-	}
-
-	if(ui64ErnsBrns & HW_ERN_42290_BIT_MASK)
-	{
-		bE42290 = IMG_TRUE;
-	}
-
-	if(ui64ErnsBrns & HW_ERN_41805_BIT_MASK)
-	{
-		bE41805 = IMG_TRUE;
-	}
-
-	if(ui64ErnsBrns & HW_ERN_42606_BIT_MASK)
-	{
-		bE42606 = IMG_TRUE;
-	}
-
-	if(ui64Features & RGX_FEATURE_AXI_ACELITE_BIT_MASK)
-	{
-		bAXIACELite = IMG_TRUE;
-	}
-#endif
-	/*
-	 * KM AppHints not passed through the srvinit interface
-	 */
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	SrvInitParamUnreferenced(FWPoisonOnFreeValue);
-	SrvInitParamUnreferenced(EnableFWPoisonOnFree);
-	SrvInitParamUnreferenced(GeneralNon4KHeapPageSize);
-	SrvInitParamUnreferenced(WatchdogThreadWeight);
-	SrvInitParamUnreferenced(WatchdogThreadPriority);
-	SrvInitParamUnreferenced(CleanupThreadWeight);
-	SrvInitParamUnreferenced(CleanupThreadPriority);
-	SrvInitParamUnreferenced(RGXBVNC);
-#endif
-
-	/*
-	 * NB AppHints initialised to a default value via SrvInitParamInit* macros above
-	 */
-
-	SrvInitParamGetBOOL(pvParamState,     DustRequestInject, psHints->bDustRequestInject);
-	SrvInitParamGetBOOL(pvParamState,     EnableSignatureChecks, psHints->bEnableSignatureChecks);
-	SrvInitParamGetUINT32(pvParamState,   SignatureChecksBufSize, psHints->ui32SignatureChecksBufSize);
-
-#if defined(DEBUG)
-	SrvInitParamGetBOOL(pvParamState,    AssertOutOfMemory, psHints->bAssertOnOutOfMem);
-	SrvInitParamGetBOOL(pvParamState,    AssertOnHWRTrigger, psHints->bAssertOnHWRTrigger);
-#endif
-	SrvInitParamGetBOOL(pvParamState,    CheckMList, psHints->bCheckMlist);
-	SrvInitParamGetBOOL(pvParamState,    DisableClockGating, psHints->bDisableClockGating);
-	SrvInitParamGetBOOL(pvParamState,    DisableDMOverlap, psHints->bDisableDMOverlap);
-	SrvInitParamGetBOOL(pvParamState,    DisableFEDLogging, psHints->bDisableFEDLogging);
-	SrvInitParamGetUINT32(pvParamState,  EnableAPM, ui32ParamTemp);
-	psHints->eRGXActivePMConf = ui32ParamTemp;
-	SrvInitParamGetBOOL(pvParamState,    EnableCDMKillingRandMode, psHints->bEnableCDMKillRand);
-	SrvInitParamGetBOOL(pvParamState,    EnableFTraceGPU, psHints->bEnableFTrace);
-	SrvInitParamGetUINT32(pvParamState,  EnableFWContextSwitch, psHints->ui32EnableFWContextSwitch);
-	SrvInitParamGetBOOL(pvParamState,    EnableHWPerf, psHints->bEnableHWPerf);
-	SrvInitParamGetBOOL(pvParamState,    EnableHWPerfHost, psHints->bEnableHWPerfHost);
-	SrvInitParamGetBOOL(pvParamState,    EnableHWR, psHints->bEnableHWR);
-	SrvInitParamGetUINT32(pvParamState,  EnableRDPowerIsland, ui32ParamTemp);
-	psHints->eRGXRDPowerIslandConf = ui32ParamTemp;
-	SrvInitParamGetBOOL(pvParamState,    EnableRTUBypass, psHints->bEnableRTUBypass);
-	SrvInitParamGetUINT32(pvParamState,  FirmwarePerf, ui32ParamTemp);
-	psHints->eFirmwarePerf = ui32ParamTemp;
-	SrvInitParamGetUINT32(pvParamState,  FWContextSwitchProfile, psHints->ui32FWContextSwitchProfile);
-	SrvInitParamGetBOOL(pvParamState,    HWPerfDisableCustomCounterFilter, psHints->bHWPerfDisableCustomCounterFilter);
-	SrvInitParamGetUINT32(pvParamState,  HWPerfHostBufSizeInKB, psHints->ui32HWPerfHostBufSize);
-	SrvInitParamGetUINT32(pvParamState,  HWPerfFWBufSizeInKB, psHints->ui32HWPerfFWBufSize);
-#if defined(SUPPORT_KERNEL_SRVINIT) && defined(LINUX)
-	/* name changes */
-	{
-		IMG_UINT64 ui64Tmp;
-		SrvInitParamGetBOOL(pvParamState,    DisablePDumpPanic, psHints->bDisablePDP);
-		SrvInitParamGetUINT64(pvParamState,  HWPerfFWFilter, ui64Tmp);
-		psHints->ui32HWPerfFilter0 = (IMG_UINT32)(ui64Tmp & 0xffffffffllu);
-		psHints->ui32HWPerfFilter1 = (IMG_UINT32)((ui64Tmp >> 32) & 0xffffffffllu);
-	}
-#else
-	SrvInitParamGetBOOL(pvParamState,    DisablePDP, psHints->bDisablePDP);
-	SrvInitParamGetUINT32(pvParamState,  HWPerfFilter0, psHints->ui32HWPerfFilter0);
-	SrvInitParamGetUINT32(pvParamState,  HWPerfFilter1, psHints->ui32HWPerfFilter1);
-	SrvInitParamUnreferenced(DisablePDumpPanic);
-	SrvInitParamUnreferenced(HWPerfFWFilter);
-	SrvInitParamUnreferenced(RGXBVNC);
-#endif
-	SrvInitParamGetUINT32(pvParamState,  HWPerfHostFilter, psHints->ui32HWPerfHostFilter);
-	SrvInitParamGetUINT32List(pvParamState,  TimeCorrClock, psHints->ui32TimeCorrClock);
-	SrvInitParamGetUINT32(pvParamState,  HWRDebugDumpLimit, ui32ParamTemp);
-	psHints->ui32HWRDebugDumpLimit = MIN(ui32ParamTemp, RGXFWIF_HWR_DEBUG_DUMP_ALL);
-
-	if(bS7TopInfra)
-	{
-	#define RGX_CR_JONES_FIX_MT_ORDER_ISP_TE_CLRMSK	(0XFFFFFFCFU)
-	#define RGX_CR_JONES_FIX_MT_ORDER_ISP_EN	(0X00000020U)
-	#define RGX_CR_JONES_FIX_MT_ORDER_TE_EN		(0X00000010U)
-
-		SrvInitParamGetUINT32(pvParamState,  JonesDisableMask, ui32ParamTemp);
-		if (((ui32ParamTemp & ~RGX_CR_JONES_FIX_MT_ORDER_ISP_TE_CLRMSK) == RGX_CR_JONES_FIX_MT_ORDER_ISP_EN) ||
-			((ui32ParamTemp & ~RGX_CR_JONES_FIX_MT_ORDER_ISP_TE_CLRMSK) == RGX_CR_JONES_FIX_MT_ORDER_TE_EN))
-		{
-			ui32ParamTemp |= (RGX_CR_JONES_FIX_MT_ORDER_TE_EN |
-							  RGX_CR_JONES_FIX_MT_ORDER_ISP_EN);
-			PVR_DPF((PVR_DBG_WARNING, "Tile reordering mode requires both TE and ISP enabled. Forcing JonesDisableMask = %d",
-					ui32ParamTemp));
-		}
-		psHints->ui32JonesDisableMask = ui32ParamTemp;
-	}
-
-	if ( (bE42290) && (bTPUFiltermodeCtrl))
-	{
-		SrvInitParamGetBOOL(pvParamState,    NewFilteringMode, psHints->bFilteringMode);
-	}
-
-	if(bE41805 || bE42606)
-	{
-		SrvInitParamGetUINT32(pvParamState,  TruncateMode, psHints->ui32TruncateMode);
-	}
-#if defined(EMULATOR)
-	if(bAXIACELite)
-	{
-		SrvInitParamGetBOOL(pvParamState, EnableTrustedDeviceAceConfig, psHints->bEnableTrustedDeviceAceConfig);
-	}
-#else
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	SrvInitParamUnreferenced(EnableTrustedDeviceAceConfig);
-#endif
-#endif	
-
-	SrvInitParamGetUINT32(pvParamState,  UseMETAT1, ui32ParamTemp);
-	psHints->eUseMETAT1 = ui32ParamTemp & RGXFWIF_INICFG_METAT1_MASK;
-
-	SrvInitParamGetBOOL(pvParamState,    ZeroFreelist, psHints->bZeroFreelist);
-
-
-	/*
-	 * HWPerf filter apphints setup
-	 */
-	if (psHints->bEnableHWPerf)
-	{
-		if (psHints->ui32HWPerfFilter0 == 0 && psHints->ui32HWPerfFilter1 == 0)
-		{
-			psHints->ui32HWPerfFilter0 = HW_PERF_FILTER_DEFAULT_ALL_ON;
-			psHints->ui32HWPerfFilter1 = HW_PERF_FILTER_DEFAULT_ALL_ON;
-		}
-	}
-	else
-	{
-		if (psHints->ui32HWPerfFilter0 != 0 || psHints->ui32HWPerfFilter1 != 0)
-		{
-			psHints->bEnableHWPerf = IMG_TRUE;
-		}
-	}
-
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-	if (psHints->bEnableFTrace)
-	{
-		/* In case we have not set EnableHWPerf AppHint just request creation
-		 * of certain events we need for the FTrace i.e. only the Kick/Finish
-		 * HW events */
-		if (!psHints->bEnableHWPerf)
-		{
-			psHints->ui32HWPerfFilter0 = (IMG_UINT32) (RGX_HWPERF_EVENT_MASK_HW_KICKFINISH & 0xFFFFFFFF);
-			psHints->ui32HWPerfFilter1 = (IMG_UINT32) ((RGX_HWPERF_EVENT_MASK_HW_KICKFINISH & 0xFFFFFFFF00000000) >> 32);
-		}
-		else
-		{
-			psHints->ui32HWPerfFilter0 = HW_PERF_FILTER_DEFAULT_ALL_ON;
-			psHints->ui32HWPerfFilter1 = HW_PERF_FILTER_DEFAULT_ALL_ON;
-		}
-
-	}
-#endif
-	
-	if (psHints->bEnableHWPerfHost)
-	{
-		if (psHints->ui32HWPerfHostFilter == 0)
-		{
-			psHints->ui32HWPerfHostFilter = HW_PERF_FILTER_DEFAULT_ALL_ON;
-		}
-	}
-	else
-	{
-		if (psHints->ui32HWPerfHostFilter != 0)
-		{
-			psHints->bEnableHWPerfHost = IMG_TRUE;
-		}
-	}
-
-	/*
-	 * FW logs apphints
-	 */
-	{
-		IMG_UINT32 ui32LogType;
-		IMG_BOOL bFirmwareLogTypeConfigured, bAnyLogGroupConfigured;
-
-		SrvInitParamGetUINT32BitField(pvParamState, EnableLogGroup, ui32LogType);
-		bAnyLogGroupConfigured = ui32LogType ? IMG_TRUE : IMG_FALSE;
-		bFirmwareLogTypeConfigured = SrvInitParamGetUINT32List(pvParamState, FirmwareLogType, ui32ParamTemp);
-
-		if (bFirmwareLogTypeConfigured)
-		{
-			if (ui32ParamTemp == 2 /* TRACE */)
-			{
-				if (!bAnyLogGroupConfigured)
-				{
-					/* No groups configured - defaulting to MAIN group */
-					ui32LogType |= RGXFWIF_LOG_TYPE_GROUP_MAIN;
-				}
-				ui32LogType |= RGXFWIF_LOG_TYPE_TRACE;
-			}
-			else if (ui32ParamTemp == 1 /* TBI */)
-			{
-				if (!bAnyLogGroupConfigured)
-				{
-					/* No groups configured - defaulting to MAIN group */
-					ui32LogType |= RGXFWIF_LOG_TYPE_GROUP_MAIN;
-				}
-				ui32LogType &= ~RGXFWIF_LOG_TYPE_TRACE;
-			}
-			else if (ui32ParamTemp == 0 /* NONE */)
-			{
-				ui32LogType = RGXFWIF_LOG_TYPE_NONE;
-			}
-		}
-		else
-		{
-			/* No log type configured - defaulting to TRACE */
-			ui32LogType |= RGXFWIF_LOG_TYPE_TRACE;
-		}
-
-		psHints->ui32LogType = ui32LogType;
-	}
-
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-	/*
-	 * GPU virtualisation validation apphints
-	 */
-	{
-		IMG_UINT uiCounter, uiRegion;
-
-		PVR_DPF((PVR_DBG_MESSAGE,"\n[GPU Virtualization Validation]: Reading OSid limits\n"));
-
-		for (uiRegion = 0; uiRegion < GPUVIRT_VALIDATION_NUM_REGIONS; uiRegion++)
-		{
-			for (uiCounter = 0; uiCounter < GPUVIRT_VALIDATION_NUM_OS; uiCounter++)
-			{
-				IMG_CHAR   pszHintString[GPUVIRT_VALIDATION_MAX_STRING_LENGTH];
-				IMG_UINT32 ui32Default = 0;
-
-				snprintf(pszHintString, GPUVIRT_VALIDATION_MAX_STRING_LENGTH, "OSidRegion%dMin%d", uiRegion, uiCounter);
-				PVRSRVGetAppHint(pvParamState,
-				                 pszHintString,
-				                 IMG_UINT_TYPE,
-				                 &ui32Default,
-				                 &(psHints->aui32OSidMin[uiCounter][uiRegion]));
-
-				snprintf(pszHintString, GPUVIRT_VALIDATION_MAX_STRING_LENGTH, "OSidRegion%dMax%d", uiRegion, uiCounter);
-				PVRSRVGetAppHint(pvParamState,
-				                 pszHintString,
-				                 IMG_UINT_TYPE,
-				                 &ui32Default,
-				                 &(psHints->aui32OSidMax[uiCounter][uiRegion]));
-			}
-		}
-
-		for (uiCounter = 0; uiCounter < GPUVIRT_VALIDATION_NUM_OS; uiCounter++)
-		{
-			for (uiRegion = 0; uiRegion < GPUVIRT_VALIDATION_NUM_REGIONS; uiRegion++)
-			{
-				PVR_DPF((PVR_DBG_MESSAGE,
-				         "\n[GPU Virtualization Validation]: Region:%d, OSid:%d, Min:%u, Max:%u\n",
-				         uiRegion, uiCounter,
-				         psHints->aui32OSidMin[uiCounter][uiRegion],
-				         psHints->aui32OSidMax[uiCounter][uiRegion]));
-			}
-		}
-	}
-#endif /* defined(SUPPORT_GPUVIRT_VALIDATION) */
-
-
-	SrvInitParamClose(pvParamState);
-}
-
-
-/*!
-*******************************************************************************
-
- @Function      GetFWConfigFlags
-
- @Description   Initialise and return FW config flags
-
- @Input         psHints            : Apphints container
- @Input         pui32FWConfigFlags : Pointer to config flags
-
- @Return        void
-
-******************************************************************************/
-static INLINE void GetFWConfigFlags(RGX_SRVINIT_APPHINTS *psHints,
-                                    IMG_UINT32 *pui32FWConfigFlags)
-{
-	IMG_UINT32 ui32FWConfigFlags = 0;
-
-#if defined(DEBUG)
-	ui32FWConfigFlags |= psHints->bAssertOnOutOfMem ? RGXFWIF_INICFG_ASSERT_ON_OUTOFMEMORY : 0;
-	ui32FWConfigFlags |= psHints->bAssertOnHWRTrigger ? RGXFWIF_INICFG_ASSERT_ON_HWR_TRIGGER : 0;
-#endif
-	ui32FWConfigFlags |= psHints->bCheckMlist ? RGXFWIF_INICFG_CHECK_MLIST_EN : 0;
-	ui32FWConfigFlags |= psHints->bDisableClockGating ? RGXFWIF_INICFG_DISABLE_CLKGATING_EN : 0;
-	ui32FWConfigFlags |= psHints->bDisableDMOverlap ? RGXFWIF_INICFG_DISABLE_DM_OVERLAP : 0;
-	ui32FWConfigFlags |= psHints->bDisablePDP ? RGXFWIF_SRVCFG_DISABLE_PDP_EN : 0;
-	ui32FWConfigFlags |= psHints->bEnableCDMKillRand ? RGXFWIF_INICFG_CDM_KILL_MODE_RAND_EN : 0;
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-	/* Since FTrace GPU events depends on HWPerf, ensure it is enabled here */
-	ui32FWConfigFlags |= psHints->bEnableFTrace ? RGXFWIF_INICFG_HWPERF_EN : 0;
-#endif
-	ui32FWConfigFlags |= psHints->bEnableHWPerf ? RGXFWIF_INICFG_HWPERF_EN : 0;
-#if !defined(NO_HARDWARE)
-	ui32FWConfigFlags |= psHints->bEnableHWR ? RGXFWIF_INICFG_HWR_EN : 0;
-#endif
-	ui32FWConfigFlags |= psHints->bEnableRTUBypass ? RGXFWIF_INICFG_RTU_BYPASS_EN : 0;
-	ui32FWConfigFlags |= psHints->bHWPerfDisableCustomCounterFilter ? RGXFWIF_INICFG_HWP_DISABLE_FILTER : 0;
-	ui32FWConfigFlags |= (psHints->eFirmwarePerf == FW_PERF_CONF_CUSTOM_TIMER) ? RGXFWIF_INICFG_CUSTOM_PERF_TIMER_EN : 0;
-	ui32FWConfigFlags |= (psHints->eFirmwarePerf == FW_PERF_CONF_POLLS) ? RGXFWIF_INICFG_POLL_COUNTERS_EN : 0;
-	ui32FWConfigFlags |= psHints->eUseMETAT1 << RGXFWIF_INICFG_METAT1_SHIFT;
-	ui32FWConfigFlags |= psHints->ui32EnableFWContextSwitch & ~RGXFWIF_INICFG_CTXSWITCH_CLRMSK;
-	ui32FWConfigFlags |= (psHints->ui32FWContextSwitchProfile << RGXFWIF_INICFG_CTXSWITCH_PROFILE_SHIFT) & RGXFWIF_INICFG_CTXSWITCH_PROFILE_MASK;
-
-	*pui32FWConfigFlags = ui32FWConfigFlags;
-}
-
-
-/*!
-*******************************************************************************
-
- @Function      GetFilterFlags
-
- @Description   Initialise and return filter flags
-
- @Input         psHints : Apphints container
-
- @Return        Filter flags
-
-******************************************************************************/
-static INLINE IMG_UINT32 GetFilterFlags(RGX_SRVINIT_APPHINTS *psHints)
-{
-	IMG_UINT32 ui32FilterFlags = 0;
-
-	ui32FilterFlags |= psHints->bFilteringMode ? RGXFWIF_FILTCFG_NEW_FILTER_MODE : 0;
-	if (psHints->ui32TruncateMode == 2)
-	{
-		ui32FilterFlags |= RGXFWIF_FILTCFG_TRUNCATE_INT;
-	}
-	else if (psHints->ui32TruncateMode == 3)
-	{
-		ui32FilterFlags |= RGXFWIF_FILTCFG_TRUNCATE_HALF;
-	}
-
-	return ui32FilterFlags;
-}
-
-
-/*!
-*******************************************************************************
-
- @Function      GetDeviceFlags
-
- @Description   Initialise and return device flags
-
- @Input         psHints          : Apphints container
- @Input         pui32DeviceFlags : Pointer to device flags
-
- @Return        void
-
-******************************************************************************/
-static INLINE void GetDeviceFlags(RGX_SRVINIT_APPHINTS *psHints,
-                                  IMG_UINT32 *pui32DeviceFlags)
-{
-	IMG_UINT32 ui32DeviceFlags = 0;
-
-	ui32DeviceFlags |= psHints->bDustRequestInject? RGXKMIF_DEVICE_STATE_DUST_REQUEST_INJECT_EN : 0;
-
-	ui32DeviceFlags |= psHints->bZeroFreelist ? RGXKMIF_DEVICE_STATE_ZERO_FREELIST : 0;
-	ui32DeviceFlags |= psHints->bDisableFEDLogging ? RGXKMIF_DEVICE_STATE_DISABLE_DW_LOGGING_EN : 0;
-	ui32DeviceFlags |= psHints->bEnableHWPerfHost ? RGXKMIF_DEVICE_STATE_HWPERF_HOST_EN : 0;
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-	ui32DeviceFlags |= psHints->bEnableFTrace ? RGXKMIF_DEVICE_STATE_FTRACE_EN : 0;
-#endif
-
-	*pui32DeviceFlags = ui32DeviceFlags;
-}
-
-
+/************************************************************************
+* Private functions
+************************************************************************/
 /*!
 *******************************************************************************
 
@@ -669,230 +185,90 @@ static INLINE void GetDeviceFlags(RGX_SRVINIT_APPHINTS *psHints,
  @Return		IMG_BOOL True if it runs out of cmds when building the script
 
 ******************************************************************************/
-static IMG_BOOL PrepareDebugScript(RGX_SCRIPT_BUILD* psDbgInitScript,
-					IMG_BOOL bFirmwarePerf,
-					void *pvDeviceInfo)
+static IMG_BOOL PrepareDebugScript(RGX_SCRIPT_BUILD* psDbgInitScript, IMG_BOOL bFirmwarePerf)
 {
 #define DBG_READ(T, R, S)		if (!ScriptDBGReadRGXReg(psDbgInitScript, T, R, S)) return IMG_FALSE;
-#if defined(RGX_FEATURE_META) || defined(SUPPORT_KERNEL_SRVINIT)
 #define DBG_MSP_READ(R, S)		if (!ScriptDBGReadMetaRegThroughSP(psDbgInitScript, R, S)) return IMG_FALSE;
 #define DBG_MCR_READ(R, S)		if (!ScriptDBGReadMetaCoreReg(psDbgInitScript, R, S)) return IMG_FALSE;
-#else
-#define DBG_MSP_READ(R, S)
-#define DBG_MCR_READ(R, S)
-#endif
 #define DBG_CALC(R, S, T, U, V)	if (!ScriptDBGCalc(psDbgInitScript, R, S, T, U, V)) return IMG_FALSE;
+#if defined(FIX_HW_BRN_44871)
 #define DBG_STRING(S)			if (!ScriptDBGString(psDbgInitScript, S)) return IMG_FALSE;
+#endif
 #define DBG_READ32(R, S)				DBG_READ(RGX_INIT_OP_DBG_READ32_HW_REG, R, S)
 #define DBG_READ64(R, S)				DBG_READ(RGX_INIT_OP_DBG_READ64_HW_REG, R, S)
 #define DBG_CALC_TA_AND_3D(R, S, T, U)	DBG_CALC(RGX_INIT_OP_DBG_CALC, R, S, T, U)
-	IMG_BOOL	bS7Infra, bXTInfra, e44871, bRayTracing, e47025, bVIVTSlc, bMIPS, bPBVNC;
-	IMG_UINT32	ui32SLCBanks = 0, ui32Meta = 0;
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	PVR_UNREFERENCED_PARAMETER(pvDeviceInfo);
-#else
-	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *)pvDeviceInfo;
-#endif
+
+#if defined(RGX_FEATURE_MIPS)
 	PVR_UNREFERENCED_PARAMETER(bFirmwarePerf);
-	bS7Infra = bXTInfra = e44871 = bRayTracing = e47025 = bVIVTSlc = bMIPS = bPBVNC = IMG_FALSE;
-
-
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	#if defined(RGX_FEATURE_META)
-		ui32Meta = RGX_FEATURE_META;
-	#endif
-	#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
-		bS7Infra = IMG_TRUE;
-	#endif
-
-	#if defined(RGX_FEATURE_XT_TOP_INFRASTRUCTURE)
-		bXTInfra = IMG_TRUE;
-	#endif
-
-	#if	defined(FIX_HW_BRN_44871)
-		e44871 = IMG_TRUE;
-	#endif
-
-	#if	defined(HW_ERN_47025)
-		e47025 = IMG_TRUE;
-	#endif
-
-	#if defined(RGX_FEATURE_RAY_TRACING)
-		bRayTracing = IMG_TRUE;
-	#endif
-
-	#if defined(RGX_FEATURE_SLC_BANKS)
-		ui32SLCBanks = RGX_FEATURE_SLC_BANKS;
-	#endif
-
-	#if defined(RGX_FEATURE_SLC_VIVT)
-		bVIVTSlc = IMG_TRUE;
-	#endif
-
-	#if defined(RGX_FEATURE_MIPS)
-		bMIPS = IMG_TRUE;
-	#endif
-	#if defined(RGX_FEATURE_PBVNC_COREID_REG)
-		bPBVNC = IMG_TRUE;
-	#endif
-#else
-	do{
-		if(NULL == psDevInfo)
-			break;
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_PBVNC_COREID_REG_BIT_MASK)
-		{
-			bPBVNC = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui32META)
-		{
-			ui32Meta = psDevInfo->sDevFeatureCfg.ui32META;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_S7_TOP_INFRASTRUCTURE_BIT_MASK)
-		{
-			bS7Infra = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_XT_TOP_INFRASTRUCTURE_BIT_MASK)
-		{
-			bXTInfra = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_RAY_TRACING_BIT_MASK)
-		{
-			bRayTracing = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_SLC_VIVT_BIT_MASK)
-		{
-			bVIVTSlc = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_MIPS_BIT_MASK)
-		{
-			bMIPS = IMG_TRUE;
-		}
-
-
-		if(psDevInfo->sDevFeatureCfg.ui32SLCBanks)
-		{
-			ui32SLCBanks = psDevInfo->sDevFeatureCfg.ui32SLCBanks;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64ErnsBrns & FIX_HW_BRN_44871_BIT_MASK)
-		{
-			e44871 = IMG_TRUE;
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64ErnsBrns & HW_ERN_47025_POS)
-		{
-			e47025 = IMG_TRUE;
-		}
-
-	}while(0);
 #endif
 
-	if(bPBVNC)
-	{
-		DBG_READ64(RGX_CR_CORE_ID,							"CORE_ID                         ");
-	}else
-	{
-		DBG_READ32(RGX_CR_CORE_ID,							"CORE_ID                         ");
-	}
-
+	DBG_READ32(RGX_CR_CORE_ID,							"CORE_ID                         ");
 	DBG_READ32(RGX_CR_CORE_REVISION,					"CORE_REVISION                   ");
 	DBG_READ32(RGX_CR_DESIGNER_REV_FIELD1,				"DESIGNER_REV_FIELD1             ");
 	DBG_READ32(RGX_CR_DESIGNER_REV_FIELD2,				"DESIGNER_REV_FIELD2             ");
 	DBG_READ64(RGX_CR_CHANGESET_NUMBER,					"CHANGESET_NUMBER                ");
-	if(ui32Meta)
-	{
-		DBG_READ32(RGX_CR_META_SP_MSLVIRQSTATUS,			"META_SP_MSLVIRQSTATUS           ");
-	}
+#if defined(RGX_FEATURE_META)
+	DBG_READ32(RGX_CR_META_SP_MSLVIRQSTATUS,			"META_SP_MSLVIRQSTATUS           ");
+#endif
 	DBG_READ64(RGX_CR_CLK_CTRL,							"CLK_CTRL                        ");
 	DBG_READ64(RGX_CR_CLK_STATUS,						"CLK_STATUS                      ");
 	DBG_READ64(RGX_CR_CLK_CTRL2,						"CLK_CTRL2                       ");
 	DBG_READ64(RGX_CR_CLK_STATUS2,						"CLK_STATUS2                     ");
-	if (bS7Infra)
-	{
-		DBG_READ64(RGX_CR_CLK_XTPLUS_CTRL,					"CLK_XTPLUS_CTRL                 ");
-		DBG_READ64(RGX_CR_CLK_XTPLUS_STATUS,				"CLK_XTPLUS_STATUS               ");
-	}
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ64(RGX_CR_CLK_XTPLUS_CTRL,					"CLK_XTPLUS_CTRL                 ");
+	DBG_READ64(RGX_CR_CLK_XTPLUS_STATUS,				"CLK_XTPLUS_STATUS               ");
+#endif /* RGX_FEATURE_S7_TOP_INFRASTRUCTURE */
 	DBG_READ32(RGX_CR_EVENT_STATUS,						"EVENT_STATUS                    ");
-	DBG_READ64(RGX_CR_TIMER,							"TIMER                           ");
-	if (bS7Infra)
-	{
-		DBG_READ64(RGX_CR_MMU_FAULT_STATUS,					"MMU_FAULT_STATUS                ");
-		DBG_READ64(RGX_CR_MMU_FAULT_STATUS_META,			"MMU_FAULT_STATUS_META           ");
-	}
-	else
-	{
-		DBG_READ32(RGX_CR_BIF_FAULT_BANK0_MMU_STATUS,		"BIF_FAULT_BANK0_MMU_STATUS      ");
-		DBG_READ64(RGX_CR_BIF_FAULT_BANK0_REQ_STATUS,		"BIF_FAULT_BANK0_REQ_STATUS      ");
-		DBG_READ32(RGX_CR_BIF_FAULT_BANK1_MMU_STATUS,		"BIF_FAULT_BANK1_MMU_STATUS      ");
-		DBG_READ64(RGX_CR_BIF_FAULT_BANK1_REQ_STATUS,		"BIF_FAULT_BANK1_REQ_STATUS      ");
-	}
-
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ64(RGX_CR_MMU_FAULT_STATUS,					"MMU_FAULT_STATUS                ");
+	DBG_READ64(RGX_CR_MMU_FAULT_STATUS_META,			"MMU_FAULT_STATUS_META           ");
+#else
+	DBG_READ32(RGX_CR_BIF_FAULT_BANK0_MMU_STATUS,		"BIF_FAULT_BANK0_MMU_STATUS      ");
+	DBG_READ64(RGX_CR_BIF_FAULT_BANK0_REQ_STATUS,		"BIF_FAULT_BANK0_REQ_STATUS      ");
+	DBG_READ32(RGX_CR_BIF_FAULT_BANK1_MMU_STATUS,		"BIF_FAULT_BANK1_MMU_STATUS      ");
+	DBG_READ64(RGX_CR_BIF_FAULT_BANK1_REQ_STATUS,		"BIF_FAULT_BANK1_REQ_STATUS      ");
+#endif	
 	DBG_READ32(RGX_CR_BIF_MMU_STATUS,					"BIF_MMU_STATUS                  ");
 	DBG_READ32(RGX_CR_BIF_MMU_ENTRY,					"BIF_MMU_ENTRY                   ");
 	DBG_READ64(RGX_CR_BIF_MMU_ENTRY_STATUS,				"BIF_MMU_ENTRY_STATUS            ");
-	if (bS7Infra)
-	{
-		DBG_READ32(RGX_CR_BIF_JONES_OUTSTANDING_READ,		"BIF_JONES_OUTSTANDING_READ      ");
-		DBG_READ32(RGX_CR_BIF_BLACKPEARL_OUTSTANDING_READ,	"BIF_BLACKPEARL_OUTSTANDING_READ ");
-		DBG_READ32(RGX_CR_BIF_DUST_OUTSTANDING_READ,		"BIF_DUST_OUTSTANDING_READ       ");
-	}else
-	{
-
-		if (!bXTInfra)
-		{
-			DBG_READ32(RGX_CR_BIF_STATUS_MMU,					"BIF_STATUS_MMU                  ");
-			DBG_READ32(RGX_CR_BIF_READS_EXT_STATUS,				"BIF_READS_EXT_STATUS            ");
-			DBG_READ32(RGX_CR_BIF_READS_INT_STATUS,				"BIF_READS_INT_STATUS            ");
-		}
-		DBG_READ32(RGX_CR_BIFPM_STATUS_MMU,					"BIFPM_STATUS_MMU                ");
-		DBG_READ32(RGX_CR_BIFPM_READS_EXT_STATUS,			"BIFPM_READS_EXT_STATUS          ");
-		DBG_READ32(RGX_CR_BIFPM_READS_INT_STATUS,			"BIFPM_READS_INT_STATUS          ");
-	}
-
-	if(e44871)
-	{
-		DBG_STRING("Warning: BRN44871 is present");
-	}
-
-	if(e47025)
-	{
-		DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS0,			"CDM_CONTEXT_LOAD_PDS0           ");
-		DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS1,			"CDM_CONTEXT_LOAD_PDS1           ");
-	}
-
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ32(RGX_CR_BIF_JONES_OUTSTANDING_READ,		"BIF_JONES_OUTSTANDING_READ      ");
+	DBG_READ32(RGX_CR_BIF_BLACKPEARL_OUTSTANDING_READ,	"BIF_BLACKPEARL_OUTSTANDING_READ ");
+	DBG_READ32(RGX_CR_BIF_DUST_OUTSTANDING_READ,		"BIF_DUST_OUTSTANDING_READ       ");
+#else
+#if !defined(RGX_FEATURE_XT_TOP_INFRASTRUCTURE)
+	DBG_READ32(RGX_CR_BIF_STATUS_MMU,					"BIF_STATUS_MMU                  ");
+	DBG_READ32(RGX_CR_BIF_READS_EXT_STATUS,				"BIF_READS_EXT_STATUS            ");
+	DBG_READ32(RGX_CR_BIF_READS_INT_STATUS,				"BIF_READS_INT_STATUS            ");
+#endif
+	DBG_READ32(RGX_CR_BIFPM_STATUS_MMU,					"BIFPM_STATUS_MMU                ");
+	DBG_READ32(RGX_CR_BIFPM_READS_EXT_STATUS,			"BIFPM_READS_EXT_STATUS          ");
+	DBG_READ32(RGX_CR_BIFPM_READS_INT_STATUS,			"BIFPM_READS_INT_STATUS          ");
+#endif
+#if defined(FIX_HW_BRN_44871)
+	DBG_STRING("Warning: BRN44871 is present");
+#endif
 	DBG_READ32(RGX_CR_SLC_STATUS0,						"SLC_STATUS0                     ");
 	DBG_READ64(RGX_CR_SLC_STATUS1,						"SLC_STATUS1                     ");
+	DBG_READ64(RGX_CR_SLC_STATUS2,						"SLC_STATUS2                     ");
 
-	if (ui32SLCBanks)
-	{
-		DBG_READ64(RGX_CR_SLC_STATUS2,						"SLC_STATUS2                     ");
-	}
-
-	if (bVIVTSlc)
-	{
-		DBG_READ64(RGX_CR_CONTEXT_MAPPING0,					"CONTEXT_MAPPING0                ");
-		DBG_READ64(RGX_CR_CONTEXT_MAPPING1,					"CONTEXT_MAPPING1                ");
-		DBG_READ64(RGX_CR_CONTEXT_MAPPING2,					"CONTEXT_MAPPING2                ");
-		DBG_READ64(RGX_CR_CONTEXT_MAPPING3,					"CONTEXT_MAPPING3                ");
-		DBG_READ64(RGX_CR_CONTEXT_MAPPING4,					"CONTEXT_MAPPING4                ");
-	}else{
-		DBG_READ64(RGX_CR_BIF_CAT_BASE_INDEX,				"BIF_CAT_BASE_INDEX              ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE0,					"BIF_CAT_BASE0                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE1,					"BIF_CAT_BASE1                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE2,					"BIF_CAT_BASE2                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE3,					"BIF_CAT_BASE3                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE4,					"BIF_CAT_BASE4                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE5,					"BIF_CAT_BASE5                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE6,					"BIF_CAT_BASE6                   ");
-		DBG_READ64(RGX_CR_BIF_CAT_BASE7,					"BIF_CAT_BASE7                   ");
-	}
+#if defined(RGX_FEATURE_SLC_VIVT)
+	DBG_READ64(RGX_CR_CONTEXT_MAPPING0,					"CONTEXT_MAPPING0                ");
+	DBG_READ64(RGX_CR_CONTEXT_MAPPING1,					"CONTEXT_MAPPING1                ");
+	DBG_READ64(RGX_CR_CONTEXT_MAPPING2,					"CONTEXT_MAPPING2                ");
+	DBG_READ64(RGX_CR_CONTEXT_MAPPING3,					"CONTEXT_MAPPING3                ");
+	DBG_READ64(RGX_CR_CONTEXT_MAPPING4,					"CONTEXT_MAPPING4                ");
+#else
+	DBG_READ64(RGX_CR_BIF_CAT_BASE_INDEX,				"BIF_CAT_BASE_INDEX              ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE0,					"BIF_CAT_BASE0                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE1,					"BIF_CAT_BASE1                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE2,					"BIF_CAT_BASE2                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE3,					"BIF_CAT_BASE3                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE4,					"BIF_CAT_BASE4                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE5,					"BIF_CAT_BASE5                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE6,					"BIF_CAT_BASE6                   ");
+	DBG_READ64(RGX_CR_BIF_CAT_BASE7,					"BIF_CAT_BASE7                   ");
+#endif
 
 	DBG_READ32(RGX_CR_BIF_CTRL_INVAL,					"BIF_CTRL_INVAL                  ");
 	DBG_READ32(RGX_CR_BIF_CTRL,							"BIF_CTRL                        ");
@@ -932,6 +308,47 @@ static IMG_BOOL PrepareDebugScript(RGX_SCRIPT_BUILD* psDbgInitScript,
 
 	DBG_READ32(RGX_CR_ISP_CTL,							"ISP_CTL                         ");
 	DBG_READ32(RGX_CR_ISP_STATUS,						"ISP_STATUS                      ");
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ32(RGX_CR_ISP_STORE0,						"ISP_STORE0                      ");
+	DBG_READ32(RGX_CR_ISP_STORE1,						"ISP_STORE1                      ");
+	DBG_READ32(RGX_CR_ISP_STORE2,						"ISP_STORE2                      ");
+	#if (RGX_FEATURE_NUM_ISP_IPP_PIPES > 3)
+	DBG_READ32(RGX_CR_ISP_STORE3,						"ISP_STORE3                      ");
+	DBG_READ32(RGX_CR_ISP_STORE4,						"ISP_STORE4                      ");
+	DBG_READ32(RGX_CR_ISP_STORE5,						"ISP_STORE5                      ");
+	#endif
+	#if (RGX_FEATURE_NUM_ISP_IPP_PIPES > 6)
+	DBG_READ32(RGX_CR_ISP_STORE6,						"ISP_STORE6                      ");
+	DBG_READ32(RGX_CR_ISP_STORE7,						"ISP_STORE7                      ");
+	#endif
+	DBG_READ32(RGX_CR_ISP_RESUME0,						"ISP_RESUME0                     ");
+	DBG_READ32(RGX_CR_ISP_RESUME1,						"ISP_RESUME1                     ");
+	DBG_READ32(RGX_CR_ISP_RESUME2,						"ISP_RESUME2                     ");
+	#if (RGX_FEATURE_NUM_ISP_IPP_PIPES > 3)
+	DBG_READ32(RGX_CR_ISP_RESUME3,						"ISP_RESUME3                     ");
+	DBG_READ32(RGX_CR_ISP_RESUME4,						"ISP_RESUME4                     ");
+	DBG_READ32(RGX_CR_ISP_RESUME5,						"ISP_RESUME5                     ");
+	#endif
+	#if (RGX_FEATURE_NUM_ISP_IPP_PIPES > 6)
+	DBG_READ32(RGX_CR_ISP_RESUME6,						"ISP_RESUME6                     ");
+	DBG_READ32(RGX_CR_ISP_RESUME7,						"ISP_RESUME7                     ");
+	#endif
+#else
+	{
+		IMG_UINT	uiPipe;
+		IMG_CHAR	pszLabel[64]; /* larger than necessary in case alignment changes */
+		for (uiPipe = 0; uiPipe < RGX_FEATURE_NUM_ISP_IPP_PIPES; uiPipe++)
+		{
+			OSSNPrintf(pszLabel, sizeof(pszLabel),		"ISP_XTP_STORE%02d                 ", uiPipe);
+			DBG_READ32(RGX_CR_ISP_XTP_STORE0 + 0x8*uiPipe, pszLabel);
+		}
+		for (uiPipe = 0; uiPipe < RGX_FEATURE_NUM_ISP_IPP_PIPES; uiPipe++)
+		{
+			OSSNPrintf(pszLabel, sizeof(pszLabel),		"ISP_XTP_RESUME%02d                ", uiPipe);
+			DBG_READ32(RGX_CR_ISP_XTP_RESUME0 + 0x8*uiPipe, pszLabel);
+		}
+	}
+#endif /* RGX_FEATURE_S7_TOP_INFRASTRUCTURE */
 	DBG_READ32(RGX_CR_MTS_INTCTX,						"MTS_INTCTX                      ");
 	DBG_READ32(RGX_CR_MTS_BGCTX,						"MTS_BGCTX                       ");
 	DBG_READ32(RGX_CR_MTS_BGCTX_COUNTED_SCHEDULE,		"MTS_BGCTX_COUNTED_SCHEDULE      ");
@@ -943,714 +360,315 @@ static IMG_BOOL PrepareDebugScript(RGX_SCRIPT_BUILD* psDbgInitScript,
 	DBG_READ64(RGX_CR_CDM_CONTEXT_PDS1,					"CDM_CONTEXT_PDS1                ");
 	DBG_READ64(RGX_CR_CDM_TERMINATE_PDS,				"CDM_TERMINATE_PDS               ");
 	DBG_READ64(RGX_CR_CDM_TERMINATE_PDS1,				"CDM_TERMINATE_PDS1              ");
-
-	if(e47025)
-	{
-		DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS0,			"CDM_CONTEXT_LOAD_PDS0           ");
-		DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS1,			"CDM_CONTEXT_LOAD_PDS1           ");
-	}
-
-	if(bRayTracing)
-	{
-#if defined(RGX_FEATURE_RAY_TRACING) || defined(SUPPORT_KERNEL_SRVINIT)
-		DBG_READ32(DPX_CR_BIF_MMU_STATUS,					"DPX_CR_BIF_MMU_STATUS           ");
-		DBG_READ64(DPX_CR_BIF_FAULT_BANK_MMU_STATUS,		"DPX_CR_BIF_FAULT_BANK_MMU_STATUS");
-		DBG_READ64(DPX_CR_BIF_FAULT_BANK_REQ_STATUS,		"DPX_CR_BIF_FAULT_BANK_REQ_STATUS");
-
-		DBG_READ64(RGX_CR_RPM_SHF_FPL,						"RGX_CR_RPM_SHF_FPL	             ");
-		DBG_READ32(RGX_CR_RPM_SHF_FPL_READ,					"RGX_CR_RPM_SHF_FPL_READ         ");
-		DBG_READ32(RGX_CR_RPM_SHF_FPL_WRITE,				"RGX_CR_RPM_SHF_FPL_WRITE        ");
-		DBG_READ64(RGX_CR_RPM_SHG_FPL,   					"RGX_CR_RPM_SHG_FPL	             ");
-		DBG_READ32(RGX_CR_RPM_SHG_FPL_READ,					"RGX_CR_RPM_SHG_FPL_READ         ");
-		DBG_READ32(RGX_CR_RPM_SHG_FPL_WRITE,				"RGX_CR_RPM_SHG_FPL_WRITE        ");
+#if defined(HW_ERN_47025)
+	DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS0,			"CDM_CONTEXT_LOAD_PDS0           ");
+	DBG_READ64(RGX_CR_CDM_CONTEXT_LOAD_PDS1,			"CDM_CONTEXT_LOAD_PDS1           ");
 #endif
-	}
+	
+#if defined(RGX_FEATURE_RAY_TRACING)
+	DBG_READ32(DPX_CR_BIF_MMU_STATUS,					"DPX_CR_BIF_MMU_STATUS           ");
+	DBG_READ64(DPX_CR_BIF_FAULT_BANK_MMU_STATUS,		"DPX_CR_BIF_FAULT_BANK_MMU_STATUS");
+	DBG_READ64(DPX_CR_BIF_FAULT_BANK_REQ_STATUS,		"DPX_CR_BIF_FAULT_BANK_REQ_STATUS");
 
-	if (bS7Infra)
-	{
-		DBG_READ32(RGX_CR_JONES_IDLE,						"JONES_IDLE                      ");
-	}
-
+	DBG_READ64(RGX_CR_RPM_SHF_FPL,						"RGX_CR_RPM_SHF_FPL	             ");
+	DBG_READ32(RGX_CR_RPM_SHF_FPL_READ,					"RGX_CR_RPM_SHF_FPL_READ         ");
+	DBG_READ32(RGX_CR_RPM_SHF_FPL_WRITE,				"RGX_CR_RPM_SHF_FPL_WRITE        ");
+	DBG_READ64(RGX_CR_RPM_SHG_FPL,   					"RGX_CR_RPM_SHG_FPL	             ");
+	DBG_READ32(RGX_CR_RPM_SHG_FPL_READ,					"RGX_CR_RPM_SHG_FPL_READ         ");
+	DBG_READ32(RGX_CR_RPM_SHG_FPL_WRITE,				"RGX_CR_RPM_SHG_FPL_WRITE        ");
+#endif
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ32(RGX_CR_JONES_IDLE,						"JONES_IDLE                      ");
+#endif
 	DBG_READ32(RGX_CR_SIDEKICK_IDLE,					"SIDEKICK_IDLE                   ");
-	if (!bS7Infra)
-	{
-		DBG_READ32(RGX_CR_SLC_IDLE,							"SLC_IDLE                        ");
-	}else
-	{
-		DBG_READ32(RGX_CR_SLC3_IDLE,						"SLC3_IDLE                       ");
-		DBG_READ64(RGX_CR_SLC3_STATUS,						"SLC3_STATUS                     ");
-		DBG_READ32(RGX_CR_SLC3_FAULT_STOP_STATUS,			"SLC3_FAULT_STOP_STATUS          ");
-	}
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	DBG_READ32(RGX_CR_SLC_IDLE,							"SLC_IDLE                        ");
+#else
+	DBG_READ32(RGX_CR_SLC3_IDLE,						"SLC3_IDLE                       ");
+	DBG_READ64(RGX_CR_SLC3_STATUS,						"SLC3_STATUS                     ");
+	DBG_READ32(RGX_CR_SLC3_FAULT_STOP_STATUS,			"SLC3_FAULT_STOP_STATUS          ");
+#endif
+#if defined(RGX_FEATURE_META)
+	DBG_MSP_READ(META_CR_T0ENABLE_OFFSET,				"T0 TXENABLE                     ");
+	DBG_MSP_READ(META_CR_T0STATUS_OFFSET,				"T0 TXSTATUS                     ");
+	DBG_MSP_READ(META_CR_T0DEFR_OFFSET,					"T0 TXDEFR                       ");
+	DBG_MCR_READ(META_CR_THR0_PC,						"T0 PC                           ");
+	DBG_MCR_READ(META_CR_THR0_PCX,						"T0 PCX                          ");
+	DBG_MCR_READ(META_CR_THR0_SP,						"T0 SP                           ");
 
-	if (ui32Meta)
-	{
-		DBG_MSP_READ(META_CR_T0ENABLE_OFFSET,				"T0 TXENABLE                     ");
-		DBG_MSP_READ(META_CR_T0STATUS_OFFSET,				"T0 TXSTATUS                     ");
-		DBG_MSP_READ(META_CR_T0DEFR_OFFSET,					"T0 TXDEFR                       ");
-		DBG_MCR_READ(META_CR_THR0_PC,						"T0 PC                           ");
-		DBG_MCR_READ(META_CR_THR0_PCX,						"T0 PCX                          ");
-		DBG_MCR_READ(META_CR_THR0_SP,						"T0 SP                           ");
-	}
-
-	if ((ui32Meta == MTP218) || (ui32Meta == MTP219))
-	{
-		DBG_MSP_READ(META_CR_T1ENABLE_OFFSET,				"T1 TXENABLE                     ");
-		DBG_MSP_READ(META_CR_T1STATUS_OFFSET,				"T1 TXSTATUS                     ");
-		DBG_MSP_READ(META_CR_T1DEFR_OFFSET,					"T1 TXDEFR                       ");
-		DBG_MCR_READ(META_CR_THR1_PC,						"T1 PC                           ");
-		DBG_MCR_READ(META_CR_THR1_PCX,						"T1 PCX                          ");
-		DBG_MCR_READ(META_CR_THR1_SP,						"T1 SP                           ");
-	}
+#if (RGX_FEATURE_META == MTP218) || (RGX_FEATURE_META == MTP219)
+	DBG_MSP_READ(META_CR_T1ENABLE_OFFSET,				"T1 TXENABLE                     ");
+	DBG_MSP_READ(META_CR_T1STATUS_OFFSET,				"T1 TXSTATUS                     ");
+	DBG_MSP_READ(META_CR_T1DEFR_OFFSET,					"T1 TXDEFR                       ");
+	DBG_MCR_READ(META_CR_THR1_PC,						"T1 PC                           ");
+	DBG_MCR_READ(META_CR_THR1_PCX,						"T1 PCX                          ");
+	DBG_MCR_READ(META_CR_THR1_SP,						"T1 SP                           ");
+#endif
 
 	if (bFirmwarePerf)
 	{
 		DBG_MSP_READ(META_CR_PERF_COUNT0,				"PERF_COUNT0                     ");
 		DBG_MSP_READ(META_CR_PERF_COUNT1,				"PERF_COUNT1                     ");
 	}
-
-	if (bMIPS)
-	{
-		DBG_READ32(RGX_CR_MIPS_EXCEPTION_STATUS,            "MIPS_EXCEPTION_STATUS           ");
-	}
+#endif
+#if defined(RGX_FEATURE_MIPS)
+	DBG_READ32(RGX_CR_MIPS_EXCEPTION_STATUS,            "MIPS_EXCEPTION_STATUS           ");
+#endif
 
 	return IMG_TRUE;
 }
 
-
-#if defined(SUPPORT_TRUSTED_DEVICE) && !defined(NO_HARDWARE)
-/*************************************************************************/ /*!
- @Function       RGXTDProcessFWImage
-
- @Description    Fetch and send data used by the trusted device to complete
-                 the FW image setup
-
- @Input          psDeviceNode - Device node
- @Input          psRGXFW      - Firmware blob
-
- @Return         PVRSRV_ERROR
-*/ /**************************************************************************/
-static PVRSRV_ERROR RGXTDProcessFWImage(PVRSRV_DEVICE_NODE *psDeviceNode,
-                                        struct RGXFW *psRGXFW)
-{
-	PVRSRV_DEVICE_CONFIG *psDevConfig = psDeviceNode->psDevConfig;
-	PVRSRV_RGXDEV_INFO *psDevInfo = psDeviceNode->pvDevice;
-	PVRSRV_TD_FW_PARAMS sTDFWParams;
-	PVRSRV_ERROR eError;
-
-	if (psDevConfig->pfnTDSendFWImage == NULL)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "RGXTDProcessFWImage: TDProcessFWImage not implemented!"));
-		return PVRSRV_ERROR_NOT_IMPLEMENTED;
-	}
-
-	sTDFWParams.pvFirmware = RGXFirmwareData(psRGXFW);
-	sTDFWParams.ui32FirmwareSize = RGXFirmwareSize(psRGXFW);
-	sTDFWParams.sFWCodeDevVAddrBase = psDevInfo->sFWCodeDevVAddrBase;
-	sTDFWParams.sFWDataDevVAddrBase = psDevInfo->sFWDataDevVAddrBase;
-	sTDFWParams.sFWCorememCodeFWAddr = psDevInfo->sFWCorememCodeFWAddr;
-	sTDFWParams.sFWInitFWAddr = psDevInfo->sFWInitFWAddr;
-
-	eError = psDevConfig->pfnTDSendFWImage(psDevConfig->hSysData, &sTDFWParams);
-
-	return eError;
-}
-#endif
-
 /*!
 *******************************************************************************
 
- @Function     AcquireHostData
+ @Function		PrepareDebugScript
 
- @Description  Acquire Device MemDesc and CPU pointer for a given PMR
+ @Description	Generates a script to dump debug info
 
- @Input        hServices      : Services connection
- @Input        hPMR           : PMR
- @Output       ppsHostMemDesc : Returned MemDesc
- @Output       ppvHostAddr    : Returned CPU pointer
+ @Input			psScript
 
- @Return       PVRSRV_ERROR
+ @Return		IMG_BOOL True if it runs out of cmds when building the script
 
 ******************************************************************************/
-static INLINE
-PVRSRV_ERROR AcquireHostData(SHARED_DEV_CONNECTION hServices,
-                             IMG_HANDLE hPMR,
-                             DEVMEM_MEMDESC **ppsHostMemDesc,
-                             void **ppvHostAddr)
+static IMG_BOOL PrepareDebugBusScript(RGX_SCRIPT_BUILD* psDbgBusScript)
 {
-	IMG_HANDLE hImportHandle;
-	IMG_DEVMEM_SIZE_T uiImportSize;
-	PVRSRV_ERROR eError;
+#if defined(RGX_FEATURE_PERFBUS) && defined(SUPPORT_DEBUG_BUS_DUMP)
+	IMG_UINT32 i;
+#define DUMP_DEBUG_BUS(N,R,C)	if (!ScriptDBGBusReadBlock(psDbgBusScript, N, R, C)) return IMG_FALSE;
+#define DBG_WRITE(R,V)			if (!ScriptWriteRGXReg(psDbgBusScript, R, V)) return IMG_FALSE;
+									  
+	DUMP_DEBUG_BUS("TA group", RGX_CR_TA_PERF, 9);
+	DUMP_DEBUG_BUS("RAST group", RGX_CR_RASTERISATION_PERF, 10);
+	DUMP_DEBUG_BUS("HUB group", RGX_CR_HUB_BIFPMCACHE_PERF, 17);
 
-	eError = DevmemMakeLocalImportHandle(hServices,
-	                                     hPMR,
-	                                     &hImportHandle);
-	if (eError != PVRSRV_OK)
+	for (i = 0; i < RGX_HWPERF_PHANTOM_INDIRECT_BY_DUST; i++)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "AcquireHostData: DevmemMakeLocalImportHandle failed (%d)", eError));
-		goto acquire_failmakehandle;
+		IMG_CHAR aszGroupName[100];
+		DBG_WRITE(RGX_CR_TPU_MCU_L0_PERF_INDIRECT, i);
+		snprintf(aszGroupName, sizeof(aszGroupName), "TPU group %d", i);
+		DUMP_DEBUG_BUS(aszGroupName, RGX_CR_TPU_MCU_L0_PERF, 6);
 	}
 
-	eError = DevmemLocalImport(hServices,
-	                           hImportHandle,
-	                           PVRSRV_MEMALLOCFLAG_CPU_READABLE |
-	                           PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE |
-	                           PVRSRV_MEMALLOCFLAG_GPU_CACHE_INCOHERENT |
-	                           PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE,
-	                           ppsHostMemDesc,
-	                           &uiImportSize,
-	                           "AcquireHostData");
-	if (eError != PVRSRV_OK)
+	for (i = 0; i < RGX_HWPERF_PHANTOM_INDIRECT_BY_CLUSTER; i++)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "AcquireHostData: DevmemLocalImport failed (%d)", eError));
-		goto acquire_failimport;
+		IMG_CHAR aszGroupName[100];
+		DBG_WRITE(RGX_CR_USC_PERF_INDIRECT, i);
+		snprintf(aszGroupName, sizeof(aszGroupName), "USC group %d", i);
+		DUMP_DEBUG_BUS(aszGroupName, RGX_CR_USC_PERF, 11);
 	}
-
-	eError = DevmemAcquireCpuVirtAddr(*ppsHostMemDesc,
-	                                  ppvHostAddr);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "AcquireHostData: DevmemAcquireCpuVirtAddr failed (%d)", eError));
-		goto acquire_failcpuaddr;
-	}
-
-	/* We don't need the import handle anymore */
-	DevmemUnmakeLocalImportHandle(hServices, hImportHandle);
-
-	return PVRSRV_OK;
-
-
-acquire_failcpuaddr:
-	DevmemFree(*ppsHostMemDesc);
-
-acquire_failimport:
-	DevmemUnmakeLocalImportHandle(hServices, hImportHandle);
-
-acquire_failmakehandle:
-	return eError;
-}
-
-/*!
-*******************************************************************************
-
- @Function     ReleaseHostData
-
- @Description  Releases resources associated with a Device MemDesc
-
- @Input        psHostMemDesc : MemDesc to free
-
- @Return       PVRSRV_ERROR
-
-******************************************************************************/
-static INLINE void ReleaseHostData(DEVMEM_MEMDESC *psHostMemDesc)
-{
-	DevmemReleaseCpuVirtAddr(psHostMemDesc);
-	DevmemFree(psHostMemDesc);
-}
-
-/*!
-*******************************************************************************
-
- @Function     GetFirmwareBVNC
-
- @Description  Retrieves FW BVNC information from binary data
-
- @Input        psRGXFW : Firmware binary handle to get BVNC from
-
- @Output       psRGXFWBVNC : structure store BVNC info
-
- @Return       IMG_TRUE upon success, IMG_FALSE otherwise
-
-******************************************************************************/
-static INLINE IMG_BOOL GetFirmwareBVNC(struct RGXFW *psRGXFW,
-                                       RGXFWIF_COMPCHECKS_BVNC *psFWBVNC)
-{
-#if defined(LINUX)
-	const size_t FWSize = RGXFirmwareSize(psRGXFW);
-	const RGXFWIF_COMPCHECKS_BVNC * psBinBVNC;
-#endif
-
-#if !defined(LINUX)
-	/* Check not available in non linux OSes. Just fill the struct and return true */
-	psFWBVNC->ui32LayoutVersion = RGXFWIF_COMPCHECKS_LAYOUT_VERSION;
-	psFWBVNC->ui32VLenMax = RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX;
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	rgx_bvnc_packed(&psFWBVNC->ui64BNC, psFWBVNC->aszV, psFWBVNC->ui32VLenMax,
-	                RGX_BNC_B, RGX_BVNC_V_ST, RGX_BNC_N, RGX_BNC_C);
+#undef DUMP_DEBUG_BUS
+#undef DBG_WRITE
 #else
-	rgx_bvnc_packed(&psFWBVNC->ui64BNC, psFWBVNC->aszV, psFWBVNC->ui32VLenMax,
-	                RGX_BNC_KM_B, RGX_BVNC_KM_V_ST, RGX_BNC_KM_N, RGX_BNC_KM_C);
-#endif /* SUPPORT_KERNEL_SRVINIT */
-
-#else
-
-	if (FWSize < FW_BVNC_BACKWARDS_OFFSET)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Firmware is too small (%zu bytes)",
-		         __func__, FWSize));
-		return IMG_FALSE;
-	}
-
-	psBinBVNC = (RGXFWIF_COMPCHECKS_BVNC *) ((IMG_UINT8 *) (RGXFirmwareData(psRGXFW)) +
-	                                         (FWSize - FW_BVNC_BACKWARDS_OFFSET));
-
-	psFWBVNC->ui32LayoutVersion = RGX_INT32_FROM_BE(psBinBVNC->ui32LayoutVersion);
-
-	psFWBVNC->ui32VLenMax = RGX_INT32_FROM_BE(psBinBVNC->ui32VLenMax);
-
-	psFWBVNC->ui64BNC = RGX_INT64_FROM_BE(psBinBVNC->ui64BNC);
-
-	strncpy(psFWBVNC->aszV, psBinBVNC->aszV, sizeof(psFWBVNC->aszV));
-#endif /* defined(LINUX) */
+	PVR_UNREFERENCED_PARAMETER(psDbgBusScript);
+#endif /* RGX_FEATURE_PERFBUS && SUPPORT_DEBUG_BUS_DUMP*/
 
 	return IMG_TRUE;
 }
 
-
 /*!
 *******************************************************************************
 
- @Function     RGXInitFirmwareBridgeWrapper
+ @Function		PrepareDeinitScript
 
- @Description  Calls the proper RGXInitFirmware bridge version
+ @Description	Generates a script to suspend the hw threads
 
- @Return       PVRSRV_ERROR
+ @Input			psScript
 
-******************************************************************************/
-static INLINE PVRSRV_ERROR RGXInitFirmwareBridgeWrapper(SHARED_DEV_CONNECTION    hServices,
-                                                        RGXFWIF_DEV_VIRTADDR     *psRGXFwInit,
-                                                        IMG_BOOL                 bEnableSignatureChecks,
-                                                        IMG_UINT32               ui32SignatureChecksBufSize,
-                                                        IMG_UINT32               ui32HWPerfFWBufSizeKB,
-                                                        IMG_UINT64               ui64HWPerfFilter,
-                                                        IMG_UINT32               ui32RGXFWAlignChecksArrLength,
-                                                        IMG_UINT32               *pui32RGXFWAlignChecks,
-                                                        IMG_UINT32               ui32FWConfigFlags,
-                                                        IMG_UINT32               ui32LogType,
-                                                        IMG_UINT32               ui32FilterFlags,
-                                                        IMG_UINT32               ui32JonesDisableMask,
-                                                        IMG_UINT32               ui32HWRDebugDumpLimit,
-                                                        RGXFWIF_COMPCHECKS_BVNC  *psClientBVNC,
-                                                        RGXFWIF_COMPCHECKS_BVNC  *psFirmwareBVNC,
-                                                        IMG_UINT32               ui32HWPerfCountersDataSize,
-                                                        IMG_HANDLE               *phHWPerfDataPMR,
-                                                        RGX_RD_POWER_ISLAND_CONF eRGXRDPowerIslandConf,
-                                                        FW_PERF_CONF             eFirmwarePerf)
-{
-	PVRSRV_ERROR eError;
-
-	RGX_FW_INIT_IN_PARAMS sInParams = {
-		RGXFWINITPARAMS_VERSION,
-		bEnableSignatureChecks,
-		ui32SignatureChecksBufSize,
-		ui32HWPerfFWBufSizeKB,
-		ui64HWPerfFilter,
-		ui32FWConfigFlags,
-		ui32LogType,
-		ui32FilterFlags,
-		ui32JonesDisableMask,
-		ui32HWRDebugDumpLimit,
-		{ 0 },
-		{ 0 },
-		ui32HWPerfCountersDataSize,
-		eRGXRDPowerIslandConf,
-		eFirmwarePerf,
-		{ 0 }
-	};
-
-	memcpy(&(sInParams.sClientBVNC), psClientBVNC, sizeof (sInParams.sClientBVNC));
-	memcpy(&(sInParams.sFirmwareBVNC), psFirmwareBVNC, sizeof (sInParams.sFirmwareBVNC));
-
-
-	eError = BridgeRGXInitFirmwareExtended(hServices, ui32RGXFWAlignChecksArrLength,
-	                                       pui32RGXFWAlignChecks, psRGXFwInit, phHWPerfDataPMR, &sInParams);
-
-	/* Error calling the bridge could be due to old KM not implementing the extended version */
-	if ((eError == PVRSRV_ERROR_BRIDGE_CALL_FAILED)
-	    || (eError == PVRSRV_ERROR_BRIDGE_EINVAL))
-	{
-		eError = BridgeRGXInitFirmware(hServices,
-		                               psRGXFwInit,
-		                               bEnableSignatureChecks,
-		                               ui32SignatureChecksBufSize,
-		                               ui32HWPerfFWBufSizeKB,
-		                               ui64HWPerfFilter,
-		                               ui32RGXFWAlignChecksArrLength,
-		                               pui32RGXFWAlignChecks,
-		                               ui32FWConfigFlags,
-		                               ui32LogType,
-		                               ui32FilterFlags,
-		                               ui32JonesDisableMask,
-		                               ui32HWRDebugDumpLimit,
-		                               psClientBVNC,
-		                               ui32HWPerfCountersDataSize,
-		                               phHWPerfDataPMR,
-		                               eRGXRDPowerIslandConf,
-		                               eFirmwarePerf);
-	}
-
-	return eError;
-}
-
-/*!
-*******************************************************************************
-
- @Function     InitFirmware
-
- @Description  Allocate, initialise and pdump Firmware code and data memory
-
- @Input        hServices       : Services connection
- @Input        psHints         : Apphints
- @Input        psBVNC          : Compatibility checks
- @Output       phFWCodePMR     : FW code PMR handle
- @Output       phFWDataPMR     : FW data PMR handle
- @Output       phFWCorememPMR  : FW coremem code PMR handle
- @Output       phHWPerfDataPMR : HWPerf control PMR handle
-
- @Return       PVRSRV_ERROR
+ @Return		IMG_BOOL True if it runs out of cmds when building the script
 
 ******************************************************************************/
-static PVRSRV_ERROR InitFirmware(SHARED_DEV_CONNECTION hServices,
-                                 RGX_SRVINIT_APPHINTS *psHints,
-                                 RGXFWIF_COMPCHECKS_BVNC *psBVNC,
-                                 IMG_HANDLE *phFWCodePMR,
-                                 IMG_HANDLE *phFWDataPMR,
-                                 IMG_HANDLE *phFWCorememPMR,
-                                 IMG_HANDLE *phHWPerfDataPMR)
+static IMG_BOOL PrepareDeinitScript(RGX_SCRIPT_BUILD* psScript)
 {
-	struct RGXFW      *psRGXFW = NULL;
-	const IMG_BYTE    *pbRGXFirmware = NULL;
-	RGXFWIF_COMPCHECKS_BVNC sFWBVNC;
-
-	/* FW code memory */
-	IMG_DEVMEM_SIZE_T uiFWCodeAllocSize;
-	IMG_DEV_VIRTADDR  sFWCodeDevVAddrBase;
-	DEVMEM_MEMDESC    *psFWCodeHostMemDesc;
-	void              *pvFWCodeHostAddr;
-
-	/* FW data memory */
-	IMG_DEVMEM_SIZE_T uiFWDataAllocSize;
-	IMG_DEV_VIRTADDR  sFWDataDevVAddrBase;
-	DEVMEM_MEMDESC    *psFWDataHostMemDesc;
-	void              *pvFWDataHostAddr;
-
-	/* FW coremem code memory */
-	IMG_DEVMEM_SIZE_T uiFWCorememCodeAllocSize;
-	IMG_DEV_VIRTADDR  sFWCorememDevVAddrBase;
-
-	/* 
-	 * Only declare psFWCorememHostMemDesc where used (PVR_UNREFERENCED_PARAMETER doesn't
-	 * help for local vars when using certain compilers)
-	 */
-	DEVMEM_MEMDESC    *psFWCorememHostMemDesc;
-	void              *pvFWCorememHostAddr = NULL;
-
-	RGXFWIF_DEV_VIRTADDR sFWCorememFWAddr; /* FW coremem data */
-	RGXFWIF_DEV_VIRTADDR sRGXFwInit;       /* FW init struct */
-	RGX_INIT_LAYER_PARAMS sInitParams;
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	IMG_UINT32 aui32RGXFWAlignChecks[] = {RGXFW_ALIGN_CHECKS_INIT};
-#endif
-	IMG_UINT32 ui32FWConfigFlags;
-	PVRSRV_ERROR eError;
-	IMG_CHAR *pszFWFilename = NULL;
-	IMG_CHAR *pszFWpFilename = NULL;
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	IMG_CHAR aszFWFilenameStr[OSStringLength(RGX_FW_FILENAME)+MAX_BVNC_STRING_LEN+2];
-	IMG_CHAR aszFWpFilenameStr[OSStringLength(RGX_FW_FILENAME)+MAX_BVNC_STRING_LEN+3];
-	PVRSRV_DEVICE_NODE *psDeviceNode = (PVRSRV_DEVICE_NODE *)hServices;
-	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *)psDeviceNode->pvDevice;
-
-	pszFWFilename = &aszFWFilenameStr[0];
-	OSSNPrintf(pszFWFilename, OSStringLength(RGX_FW_FILENAME)+MAX_BVNC_STRING_LEN+2, "%s.%d.%d.%d.%d", RGX_FW_FILENAME,
-	           psDevInfo->sDevFeatureCfg.ui32B, psDevInfo->sDevFeatureCfg.ui32V,
-	           psDevInfo->sDevFeatureCfg.ui32N, psDevInfo->sDevFeatureCfg.ui32C);
-	pszFWpFilename = &aszFWpFilenameStr[0];
-	OSSNPrintf(pszFWpFilename, OSStringLength(RGX_FW_FILENAME)+MAX_BVNC_STRING_LEN+3, "%s.%d.%dp.%d.%d", RGX_FW_FILENAME,
-	           psDevInfo->sDevFeatureCfg.ui32B, psDevInfo->sDevFeatureCfg.ui32V,
-	           psDevInfo->sDevFeatureCfg.ui32N, psDevInfo->sDevFeatureCfg.ui32C);
-#endif /* defined(SUPPORT_KERNEL_SRVINIT) */
-#if !defined(PVRSRV_GPUVIRT_GUESTDRV)
-	/*
-	 * Get pointer to Firmware image
-	 */
-
-	psRGXFW = RGXLoadFirmware(hServices, pszFWFilename, pszFWpFilename);
-	if (psRGXFW == NULL)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: RGXLoadFirmware failed"));
-		eError = PVRSRV_ERROR_INIT_FAILURE;
-		goto cleanup_initfw;
-	}
-	pbRGXFirmware = RGXFirmwareData(psRGXFW);
-
-	if (!GetFirmwareBVNC(psRGXFW, &sFWBVNC))
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: RGXLoadFirmware failed to get Firmware BVNC"));
-		eError = PVRSRV_ERROR_INIT_FAILURE;
-		goto cleanup_initfw;
-	}
-
-	sInitParams.hServices = hServices;
-
-	/*
-	 * Allocate Firmware memory
-	 */
-
-	eError = RGXGetFWImageAllocSize(&sInitParams,
-	                                &uiFWCodeAllocSize,
-	                                &uiFWDataAllocSize,
-	                                &uiFWCorememCodeAllocSize);
-
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: RGXGetFWImageAllocSize failed"));
-		goto cleanup_initfw;
-	}
-
-#if defined(SUPPORT_TRUSTED_DEVICE)
-	/* Disable META core memory allocation unless the META DMA is available */
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	if (!RGXDeviceHasFeatureInit(&sInitParams, RGX_FEATURE_META_DMA_BIT_MASK))
-	{
-		uiFWCorememCodeAllocSize = 0;
-	}
-#elif !defined(RGX_FEATURE_META_DMA)
-	uiFWCorememCodeAllocSize = 0;
-#endif
-#endif
+	/* Wait for Sidekick to signal IDLE except for the Garten Wrapper */
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SIDEKICK_IDLE,
+			RGX_CR_SIDEKICK_IDLE_MASKFULL^(RGX_CR_SIDEKICK_IDLE_GARTEN_EN|RGX_CR_SIDEKICK_IDLE_SOCIF_EN|RGX_CR_SIDEKICK_IDLE_HOSTIF_EN),
+			RGX_CR_SIDEKICK_IDLE_MASKFULL^(RGX_CR_SIDEKICK_IDLE_GARTEN_EN|RGX_CR_SIDEKICK_IDLE_SOCIF_EN|RGX_CR_SIDEKICK_IDLE_HOSTIF_EN))) return IMG_FALSE;
 #else
-	PVR_UNREFERENCED_PARAMETER(pszFWFilename);
-	PVR_UNREFERENCED_PARAMETER(pszFWpFilename);
-	PVR_UNREFERENCED_PARAMETER(sInitParams);
-	PVR_UNREFERENCED_PARAMETER(pbRGXFirmware);
-	uiFWCodeAllocSize = 0;
-	uiFWDataAllocSize = 0;
-	uiFWCorememCodeAllocSize = 0;
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_JONES_IDLE,
+			RGX_CR_JONES_IDLE_MASKFULL^(RGX_CR_JONES_IDLE_GARTEN_EN|RGX_CR_JONES_IDLE_SOCIF_EN|RGX_CR_JONES_IDLE_HOSTIF_EN),
+			RGX_CR_JONES_IDLE_MASKFULL^(RGX_CR_JONES_IDLE_GARTEN_EN|RGX_CR_JONES_IDLE_SOCIF_EN|RGX_CR_JONES_IDLE_HOSTIF_EN))) return IMG_FALSE;
 #endif
 
-	eError = BridgeRGXInitAllocFWImgMem(hServices,
-	                                    uiFWCodeAllocSize,
-	                                    uiFWDataAllocSize,
-	                                    uiFWCorememCodeAllocSize,
-	                                    phFWCodePMR,
-	                                    &sFWCodeDevVAddrBase,
-	                                    phFWDataPMR,
-	                                    &sFWDataDevVAddrBase,
-	                                    phFWCorememPMR,
-	                                    &sFWCorememDevVAddrBase,
-	                                    &sFWCorememFWAddr);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: PVRSRVRGXInitAllocFWImgMem failed (%d)", eError));
-		goto cleanup_initfw;
-	}
-
-
-	/*
-	 * Setup Firmware initialisation data
-	 */
-
-	GetFWConfigFlags(psHints, &ui32FWConfigFlags);
-
-	eError = RGXInitFirmwareBridgeWrapper(hServices,
-	                                      &sRGXFwInit,
-	                                      psHints->bEnableSignatureChecks,
-	                                      psHints->ui32SignatureChecksBufSize,
-	                                      psHints->ui32HWPerfFWBufSize,
-	                                      (IMG_UINT64)psHints->ui32HWPerfFilter0 |
-	                                      ((IMG_UINT64)psHints->ui32HWPerfFilter1 << 32),
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	                                      0,
-	                                      NULL,
+#if !defined(SUPPORT_SHARED_SLC)
+	/* Wait for SLC to signal IDLE */
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SLC_IDLE,
+			RGX_CR_SLC_IDLE_MASKFULL,
+			RGX_CR_SLC_IDLE_MASKFULL)) return IMG_FALSE;
 #else
-	                                      IMG_ARR_NUM_ELEMS(aui32RGXFWAlignChecks),
-	                                      aui32RGXFWAlignChecks,
-#endif
-	                                      ui32FWConfigFlags,
-	                                      psHints->ui32LogType,
-	                                      GetFilterFlags(psHints),
-	                                      psHints->ui32JonesDisableMask,
-	                                      psHints->ui32HWRDebugDumpLimit,
-	                                      psBVNC,
-	                                      &sFWBVNC,
-	                                      sizeof(RGXFWIF_HWPERF_CTL),
-	                                      phHWPerfDataPMR,
-	                                      psHints->eRGXRDPowerIslandConf,
-	                                      psHints->eFirmwarePerf);
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SLC3_IDLE,
+			RGX_CR_SLC3_IDLE_MASKFULL,
+			RGX_CR_SLC3_IDLE_MASKFULL)) return IMG_FALSE;
+#endif /* RGX_FEATURE_S7_TOP_INFRASTRUCTURE */
+#endif /* SUPPORT_SHARED_SLC */
 
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: PVRSRVRGXInitFirmware failed (%d)", eError));
-		goto cleanup_initfw;
-	}
-#if defined(PVRSRV_GPUVIRT_GUESTDRV)
-	PVR_UNREFERENCED_PARAMETER(pvFWCorememHostAddr);
-	PVR_UNREFERENCED_PARAMETER(psFWCorememHostMemDesc);
-	PVR_UNREFERENCED_PARAMETER(pvFWDataHostAddr);
-	PVR_UNREFERENCED_PARAMETER(psFWDataHostMemDesc);
-	PVR_UNREFERENCED_PARAMETER(pvFWCodeHostAddr);
-	PVR_UNREFERENCED_PARAMETER(psFWCodeHostMemDesc);
+	/* unset MTS DM association with threads */
+	if(!ScriptWriteRGXReg(
+			psScript, 
+			RGX_CR_MTS_INTCTX_THREAD0_DM_ASSOC,
+			RGX_CR_MTS_INTCTX_THREAD0_DM_ASSOC_DM_ASSOC_CLRMSK & RGX_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL)) return IMG_FALSE;
+	if(!ScriptWriteRGXReg(
+			psScript, 
+			RGX_CR_MTS_BGCTX_THREAD0_DM_ASSOC,
+			RGX_CR_MTS_BGCTX_THREAD0_DM_ASSOC_DM_ASSOC_CLRMSK & RGX_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL)) return IMG_FALSE;
+
+	if(!ScriptWriteRGXReg(
+			psScript, 
+			RGX_CR_MTS_INTCTX_THREAD1_DM_ASSOC,
+			RGX_CR_MTS_INTCTX_THREAD1_DM_ASSOC_DM_ASSOC_CLRMSK & RGX_CR_MTS_INTCTX_THREAD1_DM_ASSOC_MASKFULL)) return IMG_FALSE;
+	if(!ScriptWriteRGXReg(
+			psScript, 
+			RGX_CR_MTS_BGCTX_THREAD1_DM_ASSOC,
+			RGX_CR_MTS_BGCTX_THREAD1_DM_ASSOC_DM_ASSOC_CLRMSK & RGX_CR_MTS_BGCTX_THREAD1_DM_ASSOC_MASKFULL)) return IMG_FALSE;
+
+#if defined(RGX_FEATURE_META)
+	/* Disabling threads is only required for pdumps to stop the fw gracefully */
+	/* Disable thread 0 */
+	if(!ScriptWriteMetaRegThroughSP(psScript, 
+						 META_CR_T0ENABLE_OFFSET,
+						 ~META_CR_TXENABLE_ENABLE_BIT)) return IMG_FALSE;
+
+	/* Disable thread 1 */
+	if(!ScriptWriteMetaRegThroughSP(psScript, 
+						 META_CR_T1ENABLE_OFFSET,
+						 ~META_CR_TXENABLE_ENABLE_BIT)) return IMG_FALSE;
+
+	/* Only in PDUMPS: Clear down any irq raised by META 
+	   (done after disabling the FW threads to avoid a race condition) */
+	if(!ScriptWriteRGXRegPDUMPOnly(
+			psScript, 
+			RGX_CR_META_SP_MSLVIRQSTATUS,
+			0x0)) return IMG_FALSE;
+
+	/* Wait for the Slave Port to finish all the transactions */
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_META_SP_MSLVCTRL1, 
+			RGX_CR_META_SP_MSLVCTRL1_READY_EN|RGX_CR_META_SP_MSLVCTRL1_GBLPORT_IDLE_EN, 
+			RGX_CR_META_SP_MSLVCTRL1_READY_EN|RGX_CR_META_SP_MSLVCTRL1_GBLPORT_IDLE_EN)
+	  ) return IMG_FALSE;
+#endif
+	/* Extra Idle checks */
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_BIF_STATUS_MMU, 
+			0,
+			RGX_CR_BIF_STATUS_MMU_MASKFULL)
+	  ) return IMG_FALSE;
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_BIFPM_STATUS_MMU, 
+			0,
+			RGX_CR_BIFPM_STATUS_MMU_MASKFULL)
+	  ) return IMG_FALSE;
+#if !defined(RGX_FEATURE_XT_TOP_INFRASTRUCTURE) && !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_BIF_READS_EXT_STATUS, 
+			0,
+			RGX_CR_BIF_READS_EXT_STATUS_MASKFULL)
+	  ) return IMG_FALSE;
+#endif
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_BIFPM_READS_EXT_STATUS, 
+			0,
+			RGX_CR_BIFPM_READS_EXT_STATUS_MASKFULL)
+	  ) return IMG_FALSE;
+	if(!ScriptPoll64RGXReg
+		(
+			psScript, 
+			RGX_CR_SLC_STATUS1, 
+			0,
+#if defined(FIX_HW_BRN_43276)
+			RGX_CR_SLC_STATUS1_MASKFULL & RGX_CR_SLC_STATUS1_READS1_EXT_CLRMSK & RGX_CR_SLC_STATUS1_READS0_EXT_CLRMSK)
 #else
-	/*
-	 * Acquire pointers to Firmware allocations
-	 */
+			RGX_CR_SLC_STATUS1_MASKFULL)
+#endif 
+	  ) return IMG_FALSE;
 
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-	eError = AcquireHostData(hServices,
-	                         *phFWCodePMR,
-	                         &psFWCodeHostMemDesc,
-	                         &pvFWCodeHostAddr);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: AcquireHostData for FW code failed (%d)", eError));
-		goto release_code;
-	}
+	if(!ScriptPoll64RGXReg(
+			psScript, 
+			RGX_CR_SLC_STATUS2, 
+			0,
+			RGX_CR_SLC_STATUS2_MASKFULL)
+	  ) return IMG_FALSE;
+
+#if !defined(SUPPORT_SHARED_SLC)
+	/* Wait for SLC to signal IDLE */
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SLC_IDLE,
+			RGX_CR_SLC_IDLE_MASKFULL,
+			RGX_CR_SLC_IDLE_MASKFULL)) return IMG_FALSE;
 #else
-	PVR_UNREFERENCED_PARAMETER(psFWCodeHostMemDesc);
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SLC3_IDLE,
+			RGX_CR_SLC3_IDLE_MASKFULL,
+			RGX_CR_SLC3_IDLE_MASKFULL)) return IMG_FALSE;
+#endif /* RGX_FEATURE_S7_TOP_INFRASTRUCTURE */
+#endif /* SUPPORT_SHARED_SLC */
 
-	/* We can't get a pointer to a secure FW allocation from within the DDK */
-	pvFWCodeHostAddr = NULL;
-#endif
-
-	eError = AcquireHostData(hServices,
-	                         *phFWDataPMR,
-	                         &psFWDataHostMemDesc,
-	                         &pvFWDataHostAddr);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: AcquireHostData for FW data failed (%d)", eError));
-		goto release_data;
-	}
-
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-	if (uiFWCorememCodeAllocSize)
-	{
-		eError = AcquireHostData(hServices,
-								 *phFWCorememPMR,
-								 &psFWCorememHostMemDesc,
-								 &pvFWCorememHostAddr);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "InitFirmware: AcquireHostData for FW coremem code failed (%d)", eError));
-			goto release_corememcode;
-		}
-	}
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_SIDEKICK_IDLE,
+			RGX_CR_SIDEKICK_IDLE_MASKFULL^(RGX_CR_SIDEKICK_IDLE_GARTEN_EN|RGX_CR_SIDEKICK_IDLE_SOCIF_EN|RGX_CR_SIDEKICK_IDLE_HOSTIF_EN),
+			RGX_CR_SIDEKICK_IDLE_MASKFULL^(RGX_CR_SIDEKICK_IDLE_GARTEN_EN|RGX_CR_SIDEKICK_IDLE_SOCIF_EN|RGX_CR_SIDEKICK_IDLE_HOSTIF_EN))) return IMG_FALSE;
 #else
-	PVR_UNREFERENCED_PARAMETER(psFWCorememHostMemDesc);
-
-	/* We can't get a pointer to a secure FW allocation from within the DDK */
-	pvFWCorememHostAddr = NULL;
+	if(!ScriptPollRGXReg(
+			psScript, 
+			RGX_CR_JONES_IDLE,
+			RGX_CR_JONES_IDLE_MASKFULL^(RGX_CR_JONES_IDLE_GARTEN_EN|RGX_CR_JONES_IDLE_SOCIF_EN|RGX_CR_JONES_IDLE_HOSTIF_EN),
+			RGX_CR_JONES_IDLE_MASKFULL^(RGX_CR_JONES_IDLE_GARTEN_EN|RGX_CR_JONES_IDLE_SOCIF_EN|RGX_CR_JONES_IDLE_HOSTIF_EN))) return IMG_FALSE;
 #endif
 
-
-	/*
-	 * Process the Firmware image and setup code and data segments.
-	 *
-	 * When the trusted device is enabled and the FW code lives
-	 * in secure memory we will only setup the data segments here,
-	 * while the code segments will be loaded to secure memory
-	 * by the trusted device.
-	 */
-
-	eError = RGXProcessFWImage(&sInitParams,
-	                           pbRGXFirmware,
-	                           pvFWCodeHostAddr,
-	                           pvFWDataHostAddr,
-	                           pvFWCorememHostAddr,
-	                           &sFWCodeDevVAddrBase,
-	                           &sFWDataDevVAddrBase,
-	                           &sFWCorememDevVAddrBase,
-	                           &sFWCorememFWAddr,
-	                           &sRGXFwInit,
-#if defined(RGXFW_META_SUPPORT_2ND_THREAD)
-	                           2,
+#if defined(RGX_FEATURE_META)
+#if !defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	/* Wait for Sidekick to signal IDLE including the Garten Wrapper if
+	   there is no debugger attached (TxVECINT_BHALT = 0x0) */
+	if(!ScriptMetaRegCondPollRGXReg(
+			psScript, 
+			META_CR_TxVECINT_BHALT,
+			0x0,
+			0xFFFFFFFFU,
+			RGX_CR_SIDEKICK_IDLE,
+			RGX_CR_SIDEKICK_IDLE_GARTEN_EN,
+			RGX_CR_SIDEKICK_IDLE_GARTEN_EN)) return IMG_FALSE;
 #else
-	                           psHints->eUseMETAT1 == RGX_META_T1_OFF ? 1 : 2,
-#endif
-	                           psHints->eUseMETAT1 == RGX_META_T1_MAIN ? 1 : 0);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: RGXProcessFWImage failed (%d)", eError));
-		goto release_fw_allocations;
-	}
+	/* Wait for Jone to signal IDLE including the Garten Wrapper if
+	   there is no debugger attached (TxVECINT_BHALT = 0x0) */
+	if(!ScriptMetaRegCondPollRGXReg(
+			psScript, 
+			META_CR_TxVECINT_BHALT,
+			0x0,
+			0xFFFFFFFFU,
+			RGX_CR_JONES_IDLE,
+			RGX_CR_JONES_IDLE_GARTEN_EN,
+			RGX_CR_JONES_IDLE_GARTEN_EN)) return IMG_FALSE;
+#endif /* RGX_FEATURE_S7_TOP_INFRASTRUCTURE */
+#else
+	if(!ScriptPollRGXReg(
+			psScript,
+			RGX_CR_SIDEKICK_IDLE,
+			RGX_CR_SIDEKICK_IDLE_GARTEN_EN,
+			RGX_CR_SIDEKICK_IDLE_GARTEN_EN)) return IMG_FALSE;
 
-#if defined(SUPPORT_TRUSTED_DEVICE) && !defined(NO_HARDWARE)
-	RGXTDProcessFWImage(hServices, psRGXFW);
-#endif
-
-
-	/*
-	 * Perform final steps (if any) on the kernel
-	 * before pdumping the Firmware allocations
-	 */
-	eError = BridgeRGXInitFinaliseFWImage(hServices);
-
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "InitFirmware: RGXInitFinaliseFWImage failed (%d)", eError));
-		goto release_fw_allocations;
-	}
-
-	/*
-	 * PDump Firmware allocations
-	 */
-
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-	SRVINITPDumpComment(hServices, "Dump firmware code image");
-	DevmemPDumpLoadMem(psFWCodeHostMemDesc,
-	                   0,
-	                   uiFWCodeAllocSize,
-	                   PDUMP_FLAGS_CONTINUOUS);
 #endif
 
-	SRVINITPDumpComment(hServices, "Dump firmware data image");
-	DevmemPDumpLoadMem(psFWDataHostMemDesc,
-	                   0,
-	                   uiFWDataAllocSize,
-	                   PDUMP_FLAGS_CONTINUOUS);
-
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-	if (uiFWCorememCodeAllocSize)
-	{
-		SRVINITPDumpComment(hServices, "Dump firmware coremem image");
-		DevmemPDumpLoadMem(psFWCorememHostMemDesc,
-						   0,
-						   uiFWCorememCodeAllocSize,
-						   PDUMP_FLAGS_CONTINUOUS);
-	}
-#endif
-
-
-	/*
-	 * Release Firmware allocations and clean up
-	 */
-
-release_fw_allocations:
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-release_corememcode:
-	if (uiFWCorememCodeAllocSize)
-	{
-		ReleaseHostData(psFWCorememHostMemDesc);
-	}
-#endif
-
-release_data:
-	ReleaseHostData(psFWDataHostMemDesc);
-
-#if !defined(SUPPORT_TRUSTED_DEVICE) || defined(NO_HARDWARE)
-release_code:
-	ReleaseHostData(psFWCodeHostMemDesc);
-#endif
-#endif /* PVRSRV_GPUVIRT_GUESTDRV */
-cleanup_initfw:
-	if (psRGXFW != NULL)
-	{
-		RGXUnloadFirmware(psRGXFW);
-	}
-
-	return eError;
+	return IMG_TRUE;
 }
-
 
 #if defined(PDUMP)
 /*!
@@ -1675,34 +693,25 @@ cleanup_initfw:
 static void InitialiseHWPerfCounters(SHARED_DEV_CONNECTION hServices, DEVMEM_MEMDESC *psHWPerfDataMemDesc, RGXFWIF_HWPERF_CTL *psHWPerfInitDataInt)
 {
 	RGXFWIF_HWPERF_CTL_BLK *psHWPerfInitBlkData;
-	IMG_UINT32 ui32CntBlkModelLen;
-	const RGXFW_HWPERF_CNTBLK_TYPE_MODEL *asCntBlkTypeModel;
 	const RGXFW_HWPERF_CNTBLK_TYPE_MODEL* psBlkTypeDesc;
+	IMG_UINT32 gasCntBlkModelLen;
+	const RGXFW_HWPERF_CNTBLK_TYPE_MODEL *gasCntBlkTypeModel;
 	IMG_UINT32 ui32BlockID, ui32BlkCfgIdx, ui32CounterIdx ;
-	void *pvDev = NULL;	// Use SHARED_DEV_CONNECTION here?
-	RGX_HWPERF_CNTBLK_RT_INFO sCntBlkRtInfo;
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	{
-		PVRSRV_DEVICE_NODE *psDeviceNode = (PVRSRV_DEVICE_NODE *)hServices;
-		pvDev = psDeviceNode->pvDevice;
-	}
-#endif
-	ui32CntBlkModelLen = RGXGetHWPerfBlockConfig(&asCntBlkTypeModel);
-	for(ui32BlkCfgIdx = 0; ui32BlkCfgIdx < ui32CntBlkModelLen; ui32BlkCfgIdx++)
+	gasCntBlkModelLen = RGXGetHWPerfBlockConfig(&gasCntBlkTypeModel);
+	for(ui32BlkCfgIdx = 0; ui32BlkCfgIdx < gasCntBlkModelLen; ui32BlkCfgIdx++)
 	{
 		/* Exit early if this core does not have any of these counter blocks
-		 * due to core type/BVNC features.... */
-		psBlkTypeDesc = &asCntBlkTypeModel[ui32BlkCfgIdx];
-		if (psBlkTypeDesc->pfnIsBlkPresent(psBlkTypeDesc, pvDev, &sCntBlkRtInfo) == IMG_FALSE)
+		 * due to core type/BVNC.... */
+		psBlkTypeDesc = &gasCntBlkTypeModel[ui32BlkCfgIdx];
+		if (psBlkTypeDesc == NULL || psBlkTypeDesc->uiNumUnits == 0)
 		{
 			continue;
 		}
-
 		/* Program all counters in one block so those already on may
 		 * be configured off and vice-a-versa. */
 		for (ui32BlockID = psBlkTypeDesc->uiCntBlkIdBase;
-					 ui32BlockID < psBlkTypeDesc->uiCntBlkIdBase+sCntBlkRtInfo.uiNumUnits;
+					 ui32BlockID < psBlkTypeDesc->uiCntBlkIdBase+psBlkTypeDesc->uiNumUnits;
 					 ui32BlockID++)
 		{
 
@@ -1755,6 +764,8 @@ static void InitialiseHWPerfCounters(SHARED_DEV_CONNECTION hServices, DEVMEM_MEM
 			}
 		}
 	}
+
+
 }
 /*!
 *******************************************************************************
@@ -1785,183 +796,65 @@ static void InitialiseCustomCounters(SHARED_DEV_CONNECTION hServices, DEVMEM_MEM
 
 	for( ui32CustomBlock = 0; ui32CustomBlock < RGX_HWPERF_MAX_CUSTOM_BLKS; ui32CustomBlock++ )
 	{
-		/*
-		 * Some compilers cannot cope with the use of offsetof() below - the specific problem being the use of
-		 * a non-const variable in the expression, which it needs to be const. Typical compiler error produced is
-		 * "expression must have a constant value".
-		 */
-		const IMG_DEVMEM_OFFSET_T uiOffsetOfCustomBlockSelectedCounters
-		= (IMG_DEVMEM_OFFSET_T)(uintptr_t)&(((RGXFWIF_HWPERF_CTL *)0)->SelCntr[ui32CustomBlock].ui32NumSelectedCounters);
-
-		SRVINITPDumpComment(hServices, "ui32NumSelectedCounters - The Number of counters selected for this Custom Block: %d",ui32CustomBlock );
-		DevmemPDumpLoadMemValue32(psHWPerfDataMemDesc,
-					uiOffsetOfCustomBlockSelectedCounters,
-					0,
-					PDUMP_FLAGS_CONTINUOUS);
+			SRVINITPDumpComment(hServices, "ui32NumSelectedCounters - The Number of counters selected for this Custom Block: %d",ui32CustomBlock );
+			DevmemPDumpLoadMemValue32(psHWPerfDataMemDesc,
+						offsetof(RGXFWIF_HWPERF_CTL, SelCntr[ui32CustomBlock].ui32NumSelectedCounters),
+						0,
+						PDUMP_FLAGS_CONTINUOUS);
 
 		for(ui32CounterID = 0; ui32CounterID < RGX_HWPERF_MAX_CUSTOM_CNTRS; ui32CounterID++ )
 		{
-			const IMG_DEVMEM_OFFSET_T uiOffsetOfCustomBlockSelectedCounterIDs
-			= (IMG_DEVMEM_OFFSET_T)(uintptr_t)&(((RGXFWIF_HWPERF_CTL *)0)->SelCntr[ui32CustomBlock].aui32SelectedCountersIDs[ui32CounterID]);
-
 			SRVINITPDumpComment(hServices, "CUSTOMBLK_%d_COUNTERID_%d",ui32CustomBlock, ui32CounterID);
 			DevmemPDumpLoadMemValue32(psHWPerfDataMemDesc,
-					uiOffsetOfCustomBlockSelectedCounterIDs,
+					offsetof(RGXFWIF_HWPERF_CTL, SelCntr[ui32CustomBlock].aui32SelectedCountersIDs[ui32CounterID]),
 					0,
 					PDUMP_FLAGS_CONTINUOUS);
 		}
 	}
 }
+#endif
 
-/*!
-*******************************************************************************
+#if defined(SUPPORT_TRUSTED_DEVICE) && !defined(NO_HARDWARE)
+/*************************************************************************/ /*!
+ @Function       RGXTDProcessFWImage
 
- @Function     InitialiseAllCounters
+ @Description    Fetch and send data used by the trusted device to complete
+                 the FW image setup
 
- @Description  Initialise HWPerf and custom counters
+ @Input          psDeviceNode - Device node
+ @Input          psRGXFW      - Firmware blob
 
- @Input        hServices      : Services connection
- @Input        hHWPerfDataPMR : HWPerf control PMR handle
-
- @Return       PVRSRV_ERROR
-
-******************************************************************************/
-static PVRSRV_ERROR InitialiseAllCounters(SHARED_DEV_CONNECTION hServices,
-                                          IMG_HANDLE hHWPerfDataPMR)
+ @Return         PVRSRV_ERROR
+*/ /**************************************************************************/
+static PVRSRV_ERROR RGXTDProcessFWImage(PVRSRV_DEVICE_NODE *psDeviceNode,
+                                        struct RGXFW *psRGXFW)
 {
-	RGXFWIF_HWPERF_CTL *psHWPerfInitData;
-	DEVMEM_MEMDESC *psHWPerfDataMemDesc;
+	PVRSRV_DEVICE_CONFIG *psDevConfig = psDeviceNode->psDevConfig;
+	PVRSRV_RGXDEV_INFO *psDevInfo = psDeviceNode->pvDevice;
+	PVRSRV_TD_FW_PARAMS sTDFWParams;
 	PVRSRV_ERROR eError;
 
-	eError = AcquireHostData(hServices,
-	                         hHWPerfDataPMR,
-	                         &psHWPerfDataMemDesc,
-	                         (void **)&psHWPerfInitData);
-
-
-	if (eError != PVRSRV_OK)
+	if (psDevConfig->pfnTDSendFWImage == NULL)
 	{
-		PVR_LOGG_IF_ERROR(eError, "DevmemAcquireCpuVirtAddr", failHWPerfCountersMemDescAqCpuVirt);
+		PVR_DPF((PVR_DBG_ERROR, "RGXTDProcessFWImage: TDProcessFWImage not implemented!"));
+		return PVRSRV_ERROR_NOT_IMPLEMENTED;
 	}
 
-	InitialiseHWPerfCounters(hServices, psHWPerfDataMemDesc, psHWPerfInitData);
-	InitialiseCustomCounters(hServices, psHWPerfDataMemDesc);
+	sTDFWParams.pvFirmware = RGXFirmwareData(psRGXFW);
+	sTDFWParams.ui32FirmwareSize = RGXFirmwareSize(psRGXFW);
+	sTDFWParams.sFWCodeDevVAddrBase = psDevInfo->sFWCodeDevVAddrBase;
+	sTDFWParams.sFWDataDevVAddrBase = psDevInfo->sFWDataDevVAddrBase;
+	sTDFWParams.sFWCorememCodeFWAddr = psDevInfo->sFWCorememCodeFWAddr;
+	sTDFWParams.sFWInitFWAddr = psDevInfo->sFWInitFWAddr;
 
-failHWPerfCountersMemDescAqCpuVirt:
-	ReleaseHostData(psHWPerfDataMemDesc);
+	eError = psDevConfig->pfnTDSendFWImage(&sTDFWParams);
 
 	return eError;
 }
-#endif /* PDUMP */
-
-static void
-_ParseHTBAppHints(SHARED_DEV_CONNECTION hServices)
-{
-	PVRSRV_ERROR eError;
-	void * pvParamState = NULL;
-	IMG_UINT32 ui32LogType;
-	IMG_BOOL bAnyLogGroupConfigured;
-
-	IMG_CHAR * szBufferName = "PVRHTBuffer";
-	IMG_UINT32 ui32BufferSize;
-	HTB_OPMODE_CTRL eOpMode;
-
-	/* Services initialisation parameters */
-	pvParamState = SrvInitParamOpen();
-
-	SrvInitParamGetUINT32BitField(pvParamState, EnableHTBLogGroup, ui32LogType);
-	bAnyLogGroupConfigured = ui32LogType ? IMG_TRUE: IMG_FALSE;
-	SrvInitParamGetUINT32List(pvParamState, HTBOperationMode, eOpMode);
-	SrvInitParamGetUINT32(pvParamState, HTBufferSize, ui32BufferSize);
-
-	eError = HTBConfigure(hServices, szBufferName, ui32BufferSize);
-	PVR_LOGG_IF_ERROR(eError, "PVRSRVHTBConfigure", cleanup);
-
-	if (bAnyLogGroupConfigured)
-	{
-		eError = HTBControl(hServices, 1, &ui32LogType, 0, 0, HTB_LOGMODE_ALLPID, eOpMode);
-		PVR_LOGG_IF_ERROR(eError, "PVRSRVHTBControl", cleanup);
-	}
-
-cleanup:
-	SrvInitParamClose(pvParamState);
-}
-
-#if defined(PDUMP) && defined(SUPPORT_KERNEL_SRVINIT) && defined(__KERNEL__)
-static void RGXInitFWSigRegisters(PVRSRV_RGXDEV_INFO *psDevInfo)
-{
-	IMG_UINT32	ui32PhantomCnt = 0;
-
-	if (psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_CLUSTER_GROUPING_BIT_MASK)
-	{
-		ui32PhantomCnt = RGX_GET_NUM_PHANTOMS(psDevInfo->sDevFeatureCfg.ui32NumClusters) - 1;
-	}
-
-	/*Initialise the TA related signature registers */
-	if(0 == gui32TASigRegCount)
-	{
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_SCALABLE_VDM_GPP_BIT_MASK)
-		{
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVB_CHECKSUM, RGX_CR_BLACKPEARL_INDIRECT,0, ui32PhantomCnt};
-		}else
-		{
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS0_CHECKSUM, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS1_CHECKSUM, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS2_CHECKSUM, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS3_CHECKSUM, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS4_CHECKSUM, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_USC_UVS5_CHECKSUM, 0, 0, 0};
-		}
-
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_SCALABLE_TE_ARCH_BIT_MASK)
-		{
-			if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_SCALABLE_VDM_GPP_BIT_MASK)
-			{
-				asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_PPP_CLIP_CHECKSUM, RGX_CR_BLACKPEARL_INDIRECT,0, ui32PhantomCnt};
-			}else
-			{
-				asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_PPP, 0, 0, 0};
-			}
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_TE_CHECKSUM,0, 0, 0};
-		}else
-		{
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_PPP_SIGNATURE, 0, 0, 0};
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_TE_SIGNATURE, 0, 0, 0};
-		}
-
-		asTASigRegList[gui32TASigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_VCE_CHECKSUM, 0, 0, 0};
-
-		if(0 == (psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_PDS_PER_DUST_BIT_MASK))
-		{
-			asTASigRegList[gui32TASigRegCount++] = 	(RGXFW_REGISTER_LIST){RGX_CR_PDS_DOUTM_STM_SIGNATURE,0, 0, 0};
-		}
-	}
-
-	if(0 == gui323DSigRegCount)
-	{
-		/* List of 3D signature and checksum register addresses */
-		if(0 == (psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_S7_TOP_INFRASTRUCTURE_BIT_MASK))
-		{
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_ISP_PDS_CHECKSUM,			0,							0, 0};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_ISP_TPF_CHECKSUM,			0,							0, 0};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_TFPU_PLANE0_CHECKSUM,		0,							0, 0};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_TFPU_PLANE1_CHECKSUM,		0,							0, 0};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_PBE_CHECKSUM,				0,							0, 0};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_IFPU_ISP_CHECKSUM,			0,							0, 0};
-		}else
-		{
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_ISP_PDS_CHECKSUM,			RGX_CR_BLACKPEARL_INDIRECT,	0, ui32PhantomCnt};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_ISP_TPF_CHECKSUM,			RGX_CR_BLACKPEARL_INDIRECT,	0, ui32PhantomCnt};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_TFPU_PLANE0_CHECKSUM,		RGX_CR_BLACKPEARL_INDIRECT,	0, ui32PhantomCnt};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_TFPU_PLANE1_CHECKSUM,		RGX_CR_BLACKPEARL_INDIRECT,	0, ui32PhantomCnt};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_PBE_CHECKSUM,				RGX_CR_PBE_INDIRECT,		0, psDevInfo->sDevFeatureCfg.ui32NumClusters-1};
-			as3DSigRegList[gui323DSigRegCount++] = (RGXFW_REGISTER_LIST){RGX_CR_IFPU_ISP_CHECKSUM,			RGX_CR_BLACKPEARL_INDIRECT,	0, ui32PhantomCnt};
-		};
-
-	}
-
-}
 #endif
+
+#endif /* defined(PVRSRV_GPUVIRT_GUESTDRV) */
+
 
 /*!
 *******************************************************************************
@@ -1980,52 +873,384 @@ static void RGXInitFWSigRegisters(PVRSRV_RGXDEV_INFO *psDevInfo)
 IMG_INTERNAL
 PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 {
-	PVRSRV_ERROR eError;
+	PVRSRV_ERROR				eError;
 	RGXFWIF_COMPCHECKS_BVNC_DECLARE_AND_INIT(sBVNC);
 
-	/* Services initialisation parameters */
-	RGX_SRVINIT_APPHINTS sApphints = {0};
-	IMG_UINT32 ui32DeviceFlags;
-	IMG_UINT64	ui64ErnsBrns = 0, ui64Features = 0;
+	IMG_UINT32			aui32RGXFWAlignChecks[] = {RGXFW_ALIGN_CHECKS_INIT};
 
 	/* Server scripts */
-	RGX_SCRIPT_BUILD sDbgInitScript = {RGX_MAX_DEBUG_COMMANDS,  0, IMG_FALSE, asDbgCommands};
+	RGX_SCRIPT_BUILD	sDbgInitScript    = {RGX_MAX_DEBUG_COMMANDS,  0, IMG_FALSE, asDbgCommands};
+	RGX_SCRIPT_BUILD	sDbgBusInitScript = {RGX_MAX_DBGBUS_COMMANDS, 0, IMG_FALSE, asDbgBusCommands};
+	RGX_SCRIPT_BUILD	sDeinitScript     = {RGX_MAX_DEINIT_COMMANDS, 0, IMG_FALSE, asDeinitCommands};
 
-	/* FW allocations handles */
-	IMG_HANDLE hFWCodePMR;
-	IMG_HANDLE hFWDataPMR;
-	IMG_HANDLE hFWCorememPMR;
+	/* FW code memory */
+	IMG_DEVMEM_SIZE_T			uiFWCodeAllocSize = 0;	
+	void						*pvFWCodeHostAddr;
 
-	/* HWPerf Ctl allocation handle */
-	IMG_HANDLE hHWPerfDataPMR;
+	/* FW data memory */
+	IMG_DEVMEM_SIZE_T			uiFWDataAllocSize = 0;	
+	IMG_DEV_VIRTADDR			sFWDataDevVAddrBase;
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	PVRSRV_DEVICE_NODE *psDeviceNode = (PVRSRV_DEVICE_NODE *)hServices;
-	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *)psDeviceNode->pvDevice;
+	/* FW Coremem buffer */
+	IMG_DEVMEM_SIZE_T			uiFWCorememCodeAllocSize = 0;
+#if defined(RGX_META_COREMEM_CODE) || defined(RGX_META_COREMEM_DATA)
+	IMG_HANDLE 					hFWCorememImportHandle;
+	IMG_DEVMEM_SIZE_T			uiFWCorememImportSize;
+	DEVMEM_MEMDESC				*psFWCorememHostMemDesc;
+#endif
 
-	IMG_CHAR sV[RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX];
+	IMG_DEV_VIRTADDR			sFWCorememDevVAddrBase;
+	IMG_HANDLE					hFWCorememPMR;
 
-	OSSNPrintf(sV, sizeof(sV), "%d", psDevInfo->sDevFeatureCfg.ui32V);
-	/*
-	 * FIXME:
-	 * Is this check redundant for the kernel mode version of srvinit?
-	 * How do we check the user mode BVNC in this case?
-	 */
-	rgx_bvnc_packed(&sBVNC.ui64BNC, sBVNC.aszV, sBVNC.ui32VLenMax, psDevInfo->sDevFeatureCfg.ui32B, \
-							sV,	\
-							psDevInfo->sDevFeatureCfg.ui32N, psDevInfo->sDevFeatureCfg.ui32C);
+	RGXFWIF_DEV_VIRTADDR		sFWCorememFWAddr;
+	/* FW code memory */
+	IMG_DEV_VIRTADDR			sFWCodeDevVAddrBase;
+	IMG_HANDLE					hFWCodePMR;
+	/* FW data memory */
+	IMG_HANDLE					hFWDataPMR;
+	RGXFWIF_DEV_VIRTADDR 		sRGXFwInit;
 
+	/* Services initialisation parameters*/
+	void				*pvParamState = NULL;
+	IMG_UINT32			ui32ParamTemp;
+	IMG_BOOL			bEnableSignatureChecks;
+	IMG_UINT32			ui32SignatureChecksBufSize;
+	IMG_UINT32			ui32DeviceFlags = 0;
+	IMG_UINT32			ui32FWConfigFlags = 0;
+	IMG_UINT32			ui32HWPerfFilter0, ui32HWPerfFilter1;
+	IMG_UINT32			ui32HWPerfHostFilter;
+	IMG_UINT32			ui32HWPerfFWBufSize;
+	IMG_UINT32			ui32HWRDebugDumpLimit;
+	RGX_RD_POWER_ISLAND_CONF	eRGXRDPowerIslandConf;
+	RGX_META_T1_CONF    eUseMETAT1;
+	RGX_ACTIVEPM_CONF		eRGXActivePMConf;
+	IMG_BOOL			bDustRequestInject;
 
-	ui64ErnsBrns = psDevInfo->sDevFeatureCfg.ui64ErnsBrns;
-	ui64Features = psDevInfo->sDevFeatureCfg.ui64Features;
+	IMG_UINT32			ui32LogType;
+	IMG_UINT32			ui32FilterFlags = 0;
+	IMG_UINT32			ui32JonesDisableMask = 0;	/*!< Bitfield to disable Jones ECO fixes */
+	IMG_BOOL			bFirmwareLogTypeConfigured;
+	IMG_UINT32			ui32LogTypeTemp = 0;
+	IMG_BOOL			bAnyLogGroupConfigured = IMG_FALSE;	
+
+	FW_PERF_CONF		eFirmwarePerf;
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These variables are n/a in guest drivers */
 #else
-	rgx_bvnc_packed(&sBVNC.ui64BNC, sBVNC.aszV, sBVNC.ui32VLenMax, RGX_BVNC_B, RGX_BVNC_V_ST, RGX_BVNC_N, RGX_BVNC_C);
+	/* FW code memory */
+	DEVMEM_MEMDESC		*psFWCodeHostMemDesc;
+	IMG_HANDLE 			hFWCodeImportHandle;
+	IMG_DEVMEM_SIZE_T	uiFWCodeImportSize;
+	/* FW data memory */
+	DEVMEM_MEMDESC		*psFWDataHostMemDesc;
+	IMG_HANDLE 			hFWDataImportHandle;
+	IMG_DEVMEM_SIZE_T	uiFWDataImportSize;
+	void				*pvFWDataHostAddr;
+	void                *pvFWCorememHostAddr;
+	struct RGXFW 		*psRGXFW;
+	const IMG_BYTE 		*pbRGXFirmware;
+	
+	IMG_UINT32			ui32FWContextSwitchProfile;	
+	IMG_UINT32			ui32TruncateMode = 0;
+	IMG_BOOL			bFilteringMode = IMG_FALSE;
+	IMG_BOOL			bEnable2Thrds;	
+	IMG_BOOL            bHWPerfDisableCustomCounterFilter;
+	IMG_BOOL			bEnableHWR;
+	IMG_BOOL			bEnableHWPerf;
+	IMG_BOOL			bEnableHWPerfHost;
+	IMG_UINT32			ui32EnableFWContextSwitch;
+	IMG_BOOL			bZeroFreelist;
+	IMG_BOOL			bCheckMlist;
+#if defined(DEBUG)
+	IMG_BOOL			bAssertOnOutOfMem = IMG_FALSE;
+#endif
+	IMG_BOOL			bEnableCDMKillRand = IMG_FALSE;
+	IMG_BOOL			bDisableDMOverlap = IMG_FALSE;
+	IMG_BOOL			bDisableClockGating;
+	IMG_BOOL			bDisablePDP;
+	IMG_BOOL			bEnableRTUBypass;
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+	IMG_BOOL			bEnableFTrace;
+#endif
+	IMG_BOOL			bDisableFEDLogging;
+
+	RGX_INIT_LAYER_PARAMS sInitParams;
+
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+	IMG_UINT32			aui32OSidMin[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS];
+	IMG_UINT32			aui32OSidMax[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS];
+#endif
+#if defined(PDUMP)
+	RGXFWIF_HWPERF_CTL *psHWPerfInitData;
+	DEVMEM_MEMDESC				*psHWPerfDataMemDesc;
+	IMG_HANDLE 				hHWPerfDataImportHandle;
+	IMG_DEVMEM_SIZE_T			uiHWPerfDataImportSize;
+#endif
+#endif
+	IMG_HANDLE					hHWPerfDataPMR;
+
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* Guest drivers do not perform firmware loading */
+	PVR_UNREFERENCED_PARAMETER(pvFWCodeHostAddr);
+#else
+	psRGXFW = RGXLoadFirmware();
+	if (psRGXFW == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Firmware load failed"));
+		eError = PVRSRV_ERROR_INIT_FAILURE;
+		goto cleanup;
+	}
+	pbRGXFirmware = RGXFirmwareData(psRGXFW);
 #endif
 
 	/* Services initialisation parameters */
-	_ParseHTBAppHints(hServices);
-	GetApphints(&sApphints, ui64ErnsBrns, ui64Features);
-	GetDeviceFlags(&sApphints, &ui32DeviceFlags);
+	pvParamState = SrvInitParamOpen();
+
+	SrvInitParamGetUINT32(pvParamState, FirmwarePerf, ui32ParamTemp);
+	eFirmwarePerf = ui32ParamTemp;
+
+	SrvInitParamGetUINT32(pvParamState, HWRDebugDumpLimit, ui32HWRDebugDumpLimit);
+	SrvInitParamGetUINT32(pvParamState, HWPerfFWBufSizeInKB, ui32HWPerfFWBufSize);
+	SrvInitParamGetUINT32(pvParamState, SignatureChecksBufSize, ui32SignatureChecksBufSize);
+	SrvInitParamGetUINT32(pvParamState, HWPerfFilter0, ui32HWPerfFilter0);
+	SrvInitParamGetUINT32(pvParamState, HWPerfFilter1, ui32HWPerfFilter1);
+	SrvInitParamGetUINT32(pvParamState, HWPerfHostFilter, ui32HWPerfHostFilter);
+	SrvInitParamGetBOOL(pvParamState, EnableSignatureChecks, bEnableSignatureChecks);
+
+	SrvInitParamGetUINT32(pvParamState, EnableAPM, ui32ParamTemp);
+	eRGXActivePMConf = ui32ParamTemp;
+
+	SrvInitParamGetUINT32(pvParamState, EnableRDPowerIsland, ui32ParamTemp);
+	eRGXRDPowerIslandConf = ui32ParamTemp;
+
+	SrvInitParamGetUINT32(pvParamState, UseMETAT1, ui32ParamTemp);
+	eUseMETAT1 = ui32ParamTemp & RGXFWIF_INICFG_METAT1_MASK;
+
+	SrvInitParamGetBOOL(pvParamState, DustRequestInject, bDustRequestInject);
+
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These parameter is n/a in guest drivers */
+#else
+	SrvInitParamGetBOOL(pvParamState, Enable2ndThread, bEnable2Thrds);
+	SrvInitParamGetUINT32(pvParamState, EnableFWContextSwitch, ui32EnableFWContextSwitch);
+	SrvInitParamGetUINT32(pvParamState, FWContextSwitchProfile, ui32FWContextSwitchProfile);
+
+	SrvInitParamGetBOOL(pvParamState, EnableHWPerf,	bEnableHWPerf);
+	SrvInitParamGetBOOL(pvParamState, EnableHWPerfHost, bEnableHWPerfHost);
+	SrvInitParamGetBOOL(pvParamState, HWPerfDisableCustomCounterFilter, bHWPerfDisableCustomCounterFilter);
+
+	SrvInitParamGetBOOL(pvParamState, EnableHWR, bEnableHWR);
+	SrvInitParamGetBOOL(pvParamState, CheckMList, bCheckMlist);
+	SrvInitParamGetBOOL(pvParamState, ZeroFreelist,	bZeroFreelist);
+	SrvInitParamGetBOOL(pvParamState, DisableClockGating, bDisableClockGating);
+	SrvInitParamGetBOOL(pvParamState, DisablePDP, bDisablePDP);
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+	SrvInitParamGetBOOL(pvParamState, EnableFTraceGPU, bEnableFTrace);
+#endif
+#if defined(HW_ERN_41805) || defined(HW_ERN_42606)
+	SrvInitParamGetUINT32(pvParamState, TruncateMode, ui32TruncateMode);
+#endif
+#if defined(HW_ERN_42290) && defined(RGX_FEATURE_TPU_FILTERING_MODE_CONTROL)
+	SrvInitParamGetBOOL(pvParamState, NewFilteringMode, bFilteringMode);
+#endif
+	SrvInitParamGetBOOL(pvParamState, DisableFEDLogging, bDisableFEDLogging);
+	SrvInitParamGetBOOL(pvParamState, EnableRTUBypass, bEnableRTUBypass);
+
+#if defined(DEBUG)
+	SrvInitParamGetBOOL(pvParamState, AssertOutOfMemory, bAssertOnOutOfMem);
+#endif
+	SrvInitParamGetBOOL(pvParamState, EnableCDMKillingRandMode, bEnableCDMKillRand);
+	SrvInitParamGetBOOL(pvParamState, DisableDMOverlap, bDisableDMOverlap);
+#if defined(RGX_FEATURE_S7_TOP_INFRASTRUCTURE)
+	SrvInitParamGetUINT32(pvParamState, JonesDisableMask, ui32JonesDisableMask);
+	ui32JonesDisableMask = ui32JonesDisableMask & ~RGX_CR_JONES_FIX_DISABLE_CLRMSK;
+#endif
+
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+{
+	IMG_UINT	uiCounter, uiRegion;
+	void		*pvHintState = NULL;
+
+	PVR_DPF((PVR_DBG_MESSAGE,"\n[GPU Virtualization Validation]: Reading OSid limits\n"));
+
+	PVRSRVCreateAppHintState(IMG_SRVCLIENT, 0, &pvHintState);
+
+	for (uiRegion = 0; uiRegion < GPUVIRT_VALIDATION_NUM_REGIONS; uiRegion++)
+	{
+		for (uiCounter = 0; uiCounter < GPUVIRT_VALIDATION_NUM_OS; uiCounter++)
+		{
+			IMG_CHAR	pszHintString[GPUVIRT_VALIDATION_MAX_STRING_LENGTH];
+			IMG_UINT32	ui32Default = 0;
+
+			snprintf(pszHintString, GPUVIRT_VALIDATION_MAX_STRING_LENGTH, "OSidRegion%dMin%d", uiRegion, uiCounter );
+
+			PVRSRVGetAppHint(pvHintState, pszHintString, IMG_UINT_TYPE, &ui32Default, &(aui32OSidMin[uiCounter][uiRegion]));
+
+			snprintf(pszHintString, GPUVIRT_VALIDATION_MAX_STRING_LENGTH, "OSidRegion%dMax%d", uiRegion, uiCounter );
+
+			PVRSRVGetAppHint(pvHintState, pszHintString, IMG_UINT_TYPE, &ui32Default, &(aui32OSidMax[uiCounter][uiRegion]));
+		}
+	}
+
+	for (uiCounter = 0; uiCounter < GPUVIRT_VALIDATION_NUM_OS; uiCounter++)
+	{
+		for (uiRegion = 0; uiRegion < GPUVIRT_VALIDATION_NUM_REGIONS; uiRegion++)
+		{
+			PVR_DPF((PVR_DBG_MESSAGE,"\n[GPU Virtualization Validation]: Region:%d, OSid:%d, Min:%u, Max:%u\n",uiRegion, uiCounter, aui32OSidMin[uiCounter][uiRegion], aui32OSidMax[uiCounter][uiRegion]));
+		}
+	}
+
+	PVRSRVFreeAppHintState(IMG_SRVCLIENT, pvHintState);
+}
+#endif
+
+	ui32HWRDebugDumpLimit = MIN(ui32HWRDebugDumpLimit, RGXFWIF_HWR_DEBUG_DUMP_ALL);
+#endif
+
+	bFirmwareLogTypeConfigured = SrvInitParamGetUINT32List(pvParamState, FirmwareLogType, ui32LogTypeTemp);
+	bAnyLogGroupConfigured = SrvInitParamGetUINT32BitField(pvParamState, EnableLogGroup, ui32LogType);
+
+	if (bFirmwareLogTypeConfigured)
+	{
+		if (ui32LogTypeTemp == 2 /* TRACE */)
+		{
+			if (!bAnyLogGroupConfigured)
+			{
+				/* no groups configured - defaulting to MAIN group */
+				ui32LogType |= RGXFWIF_LOG_TYPE_GROUP_MAIN;
+			}
+			ui32LogType |= RGXFWIF_LOG_TYPE_TRACE;
+		}
+		else if (ui32LogTypeTemp == 1 /* TBI */)
+		{
+			if (!bAnyLogGroupConfigured)
+			{
+				/* no groups configured - defaulting to MAIN group */
+				ui32LogType |= RGXFWIF_LOG_TYPE_GROUP_MAIN;
+			}
+			ui32LogType &= ~RGXFWIF_LOG_TYPE_TRACE;
+		}
+		else if (ui32LogTypeTemp == 0 /* NONE */)
+		{
+			ui32LogType = RGXFWIF_LOG_TYPE_NONE;
+		}
+	}
+	else
+	{
+		/* no log type configured - defaulting to TRACE */
+		ui32LogType |= RGXFWIF_LOG_TYPE_TRACE;
+	}
+
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These functionality is n/a to guest drivers */
+#else
+	if (bEnable2Thrds)
+	{
+		eError = PVRSRV_ERROR_NOT_SUPPORTED;
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Enable2ndThread parameter not supported (%d)", eError));
+#if defined(FIX_HW_BRN_40298)
+		/* If the second thread needs to be enabled, then we need a proper WA for this BRN */
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: 2nd Thread Enabled but WA not implemented (%d)", eError));
+#endif
+		goto cleanup;
+	}
+	ui32FWConfigFlags |= (ui32EnableFWContextSwitch & ~RGXFWIF_INICFG_CTXSWITCH_CLRMSK);
+	ui32FWConfigFlags |= ((ui32FWContextSwitchProfile << RGXFWIF_INICFG_CTXSWITCH_PROFILE_SHIFT) & RGXFWIF_INICFG_CTXSWITCH_PROFILE_MASK);
+	ui32FWConfigFlags |= bEnableHWPerf? RGXFWIF_INICFG_HWPERF_EN : 0;
+	ui32FWConfigFlags |= bHWPerfDisableCustomCounterFilter ? RGXFWIF_INICFG_HWP_DISABLE_FILTER : 0;
+	ui32FWConfigFlags |= bCheckMlist? RGXFWIF_INICFG_CHECK_MLIST_EN : 0;
+#if !defined(NO_HARDWARE)
+	ui32FWConfigFlags |= bEnableHWR? RGXFWIF_INICFG_HWR_EN : 0;
+#endif
+	ui32FWConfigFlags |= bDisableClockGating? RGXFWIF_INICFG_DISABLE_CLKGATING_EN : 0;
+
+	ui32FWConfigFlags |= (eFirmwarePerf==FW_PERF_CONF_POLLS)? RGXFWIF_INICFG_POLL_COUNTERS_EN : 0;
+	ui32FWConfigFlags |= (eFirmwarePerf==FW_PERF_CONF_CUSTOM_TIMER)? RGXFWIF_INICFG_CUSTOM_PERF_TIMER_EN : 0;
+
+	ui32FWConfigFlags |= bDisablePDP? RGXFWIF_SRVCFG_DISABLE_PDP_EN : 0;
+	ui32FWConfigFlags |= bEnableCDMKillRand? RGXFWIF_INICFG_CDM_KILL_MODE_RAND_EN : 0;
+#if defined(DEBUG)
+	ui32FWConfigFlags |= bAssertOnOutOfMem? RGXFWIF_INICFG_ASSERT_ON_OUTOFMEMORY : 0;
+#endif
+	ui32FWConfigFlags |= bDisableDMOverlap? RGXFWIF_INICFG_DISABLE_DM_OVERLAP : 0;
+
+	ui32DeviceFlags |= bZeroFreelist ? RGXKMIF_DEVICE_STATE_ZERO_FREELIST : 0;
+	ui32DeviceFlags |= bDisableFEDLogging ? RGXKMIF_DEVICE_STATE_DISABLE_DW_LOGGING_EN : 0;
+	ui32DeviceFlags |= bDustRequestInject? RGXKMIF_DEVICE_STATE_DUST_REQUEST_INJECT_EN : 0;
+
+	if (bEnableHWPerfHost)
+	{
+		if (ui32HWPerfHostFilter == 0)
+		{
+			ui32HWPerfHostFilter = HW_PERF_FILTER_DEFAULT_ALL_ON;
+		}
+	}
+	else
+	{
+		if (ui32HWPerfHostFilter != 0)
+		{
+			bEnableHWPerfHost = IMG_TRUE;
+		}
+	}
+	ui32DeviceFlags |= bEnableHWPerfHost ? RGXKMIF_DEVICE_STATE_HWPERF_HOST_EN : 0;
+	if (bEnableHWPerf && (ui32HWPerfFilter0 == 0 && ui32HWPerfFilter1 == 0))
+	{
+		ui32HWPerfFilter0 = HW_PERF_FILTER_DEFAULT_ALL_ON;
+		ui32HWPerfFilter1 = HW_PERF_FILTER_DEFAULT_ALL_ON;
+	}
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+	if (bEnableFTrace)
+	{
+		ui32DeviceFlags |= RGXKMIF_DEVICE_STATE_FTRACE_EN;
+		/* Since FTrace GPU events depends on HWPerf, ensure it is enabled here */
+		ui32FWConfigFlags |= RGXFWIF_INICFG_HWPERF_EN;
+
+		/* In case we have not set EnableHWPerf AppHint just request creation
+		 * of certain events we need for the FTrace.
+		 */
+		if (!bEnableHWPerf)
+		{
+			ui32HWPerfFilter0 = 0x007BFF00;
+			ui32HWPerfFilter1 = 0x0;
+		}
+		else
+		{
+			ui32HWPerfFilter0 = HW_PERF_FILTER_DEFAULT_ALL_ON;
+			ui32HWPerfFilter1 = HW_PERF_FILTER_DEFAULT_ALL_ON;
+		}
+
+	}
+#endif
+
+#if defined(RGX_FEATURE_RAY_TRACING)
+	ui32FWConfigFlags |= bEnableRTUBypass ? RGXFWIF_INICFG_RTU_BYPASS_EN : 0;
+#endif
+
+	ui32FWConfigFlags |= (eUseMETAT1 << RGXFWIF_INICFG_METAT1_SHIFT);
+
+	ui32FilterFlags |= bFilteringMode ? RGXFWIF_FILTCFG_NEW_FILTER_MODE : 0;
+	if(ui32TruncateMode == 2)
+	{
+		ui32FilterFlags |= RGXFWIF_FILTCFG_TRUNCATE_INT;
+	}
+	else if(ui32TruncateMode == 3)
+	{
+		ui32FilterFlags |= RGXFWIF_FILTCFG_TRUNCATE_HALF;
+	}
+#endif /* defined(PVRSRV_GPUVIRT_GUESTDRV) */
+	
+	/* Require a minimum amount of memory for the signature buffers */
+	if (ui32SignatureChecksBufSize < RGXFW_SIG_BUFFER_SIZE_DEFAULT)
+	{
+		ui32SignatureChecksBufSize = RGXFW_SIG_BUFFER_SIZE_DEFAULT;
+	}
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	rgx_bvnc_packed(&sBVNC.ui32BNC, sBVNC.aszV, sBVNC.ui32VLenMax, RGX_BVNC_KM_B, RGX_BVNC_KM_V_ST, RGX_BVNC_KM_N, RGX_BVNC_KM_C); 
+#else
+	rgx_bvnc_packed(&sBVNC.ui32BNC, sBVNC.aszV, sBVNC.ui32VLenMax, RGX_BVNC_B, RGX_BVNC_V_ST, RGX_BVNC_N, RGX_BVNC_C); 
+#endif
+
 
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
 {
@@ -2037,42 +1262,246 @@ PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 	{
 		for (uiRegion = 0; uiRegion < GPUVIRT_VALIDATION_NUM_REGIONS; uiRegion++)
 		{
-			aui32Buffer[ui32Counter++] = sApphints.aui32OSidMin[uiOS][uiRegion];
-			aui32Buffer[ui32Counter++] = sApphints.aui32OSidMax[uiOS][uiRegion];
+			aui32Buffer[ui32Counter++] = aui32OSidMin[uiOS][uiRegion];
+			aui32Buffer[ui32Counter++] = aui32OSidMax[uiOS][uiRegion];
 		}
 	}
 
-	BridgeGPUVIRTPopulateLMASubArenas(hServices, ui32Counter, aui32Buffer, sApphints.bEnableTrustedDeviceAceConfig);
+	BridgeGPUVIRTPopulateLMASubArenas(hServices, ui32Counter, aui32Buffer);
 }
 #endif
 
 
-	eError = InitFirmware(hServices,
-	                      &sApphints,
-	                      &sBVNC,
-	                      &hFWCodePMR,
-	                      &hFWDataPMR,
-	                      &hFWCorememPMR,
-	                      &hHWPerfDataPMR);
-	if (eError != PVRSRV_OK)
+	/*
+	 * FW Memory allocation
+	 */
+	RGXGetFWImageAllocSize(&uiFWCodeAllocSize,
+	                       &uiFWDataAllocSize,
+	                       &uiFWCorememCodeAllocSize);
+
+	/* Do firmware memory allocations that back its code and data sections */
+	eError = BridgeRGXInitAllocFWImgMem(hServices,
+	                                    uiFWCodeAllocSize,
+	                                    uiFWDataAllocSize,
+	                                    uiFWCorememCodeAllocSize,
+	                                    &hFWCodePMR,
+	                                    &sFWCodeDevVAddrBase,
+	                                    &hFWDataPMR,
+	                                    &sFWDataDevVAddrBase,
+	                                    &hFWCorememPMR,
+	                                    &sFWCorememDevVAddrBase,
+	                                    &sFWCorememFWAddr);
+	if(eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "RGXInit: InitFirmware failed (%d)", eError));
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: PVRSRVRGXInitAllocFWImgMemfailed (%d)", eError));
 		goto cleanup;
 	}
+
+	/* Initialize firmware configuration */
+	eError = BridgeRGXInitFirmware(hServices,
+	                               &sRGXFwInit,
+	                               bEnableSignatureChecks,
+	                               ui32SignatureChecksBufSize,
+	                               ui32HWPerfFWBufSize,
+	                               (IMG_UINT64)ui32HWPerfFilter0|((IMG_UINT64)ui32HWPerfFilter1<<32),
+	                               sizeof(aui32RGXFWAlignChecks),
+	                               aui32RGXFWAlignChecks,
+	                               ui32FWConfigFlags,
+	                               ui32LogType,
+	                               ui32FilterFlags,
+	                               ui32JonesDisableMask,
+	                               ui32HWRDebugDumpLimit,
+	                               &sBVNC,
+	                               sizeof(RGXFWIF_HWPERF_CTL),
+	                               &hHWPerfDataPMR,
+	                               eRGXRDPowerIslandConf,
+	                               eFirmwarePerf);
+
+	if(eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: PVRSRVRGXInitFirmware failed (%d)", eError));
+		goto cleanup;
+	}
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRLock();
+#endif
+
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These functionality is n/a to guest drivers */
+#else
+#if !defined(SUPPORT_TRUSTED_DEVICE)
+	DevmemMakeLocalImportHandle(hServices,
+	                            hFWCodePMR,
+	                            &hFWCodeImportHandle);
+
+	DevmemLocalImport(hServices,
+	                  hFWCodeImportHandle,
+	                  PVRSRV_MEMALLOCFLAG_CPU_READABLE |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE |
+	                  PVRSRV_MEMALLOCFLAG_GPU_CACHE_INCOHERENT |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE,
+	                  &psFWCodeHostMemDesc,
+	                  &uiFWCodeImportSize);
+
+	DevmemAcquireCpuVirtAddr(psFWCodeHostMemDesc,
+	                         &pvFWCodeHostAddr);
+#else
+	PVR_UNREFERENCED_PARAMETER(hFWCodeImportHandle);
+	PVR_UNREFERENCED_PARAMETER(psFWCodeHostMemDesc);
+	PVR_UNREFERENCED_PARAMETER(uiFWCodeImportSize);
+
+	/* We can't get a pointer to a secure FW allocation from within the DDK */
+	pvFWCodeHostAddr = NULL;
+#endif
+
+	DevmemMakeLocalImportHandle(hServices,
+	                            hFWDataPMR,
+	                            &hFWDataImportHandle);
+
+	DevmemLocalImport(hServices,
+	                  hFWDataImportHandle,
+	                  PVRSRV_MEMALLOCFLAG_CPU_READABLE |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE |
+	                  PVRSRV_MEMALLOCFLAG_GPU_CACHE_INCOHERENT |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE,
+	                  &psFWDataHostMemDesc,
+	                  &uiFWDataImportSize);
+
+	DevmemAcquireCpuVirtAddr(psFWDataHostMemDesc,
+	                         &pvFWDataHostAddr);
+
+
+	/* Map FW coremem buffer to copy the coremem contents on it */
+#if defined(RGX_META_COREMEM_CODE) || defined(RGX_META_COREMEM_DATA)
+	DevmemMakeLocalImportHandle(hServices,
+	                            hFWCorememPMR,
+	                            &hFWCorememImportHandle);
+
+	DevmemLocalImport(hServices,
+	                  hFWCorememImportHandle,
+	                  PVRSRV_MEMALLOCFLAG_CPU_READABLE |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE |
+	                  PVRSRV_MEMALLOCFLAG_GPU_CACHE_INCOHERENT |
+	                  PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE,
+	                  &psFWCorememHostMemDesc,
+	                  &uiFWCorememImportSize);
+
+	DevmemAcquireCpuVirtAddr(psFWCorememHostMemDesc,
+	                         &pvFWCorememHostAddr);
+#else
+	pvFWCorememHostAddr = NULL;
+#endif
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRUnlock();
+#endif
+
+	/*
+	 * Process the FW image and setup code and data segments.
+	 *
+	 * When the trusted device is enabled and the FW image lives
+	 * in secure memory we will only setup the data segments here,
+	 * while the code segments will be loaded to secure memory
+	 * by the trusted device.
+	 */
+	sInitParams.hServices = hServices;
+
+	eError = RGXProcessFWImage(&sInitParams,
+	                           pbRGXFirmware,
+	                           pvFWCodeHostAddr,
+	                           pvFWDataHostAddr,
+	                           pvFWCorememHostAddr,
+	                           &sFWCodeDevVAddrBase,
+	                           &sFWDataDevVAddrBase,
+	                           &sFWCorememDevVAddrBase,
+	                           &sFWCorememFWAddr,
+	                           &sRGXFwInit,
+	                           eUseMETAT1 == RGX_META_T1_OFF ? 1 : 2,
+	                           eUseMETAT1 == RGX_META_T1_MAIN ? 1 : 0);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: RGXProcessFWImage failed (%d)", eError));
+		goto cleanup;
+	}
+
+#if defined(SUPPORT_TRUSTED_DEVICE) && !defined(NO_HARDWARE)
+	RGXTDProcessFWImage(hServices, psRGXFW);
+#endif
+
+	/*
+	 * FW image processing complete, perform final steps
+	 * (if any) on the kernel before pdumping the FW code
+	 */
+	eError = BridgeRGXInitFinaliseFWImage(hServices,
+	                                      hFWCodePMR,
+	                                      uiFWCodeAllocSize);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: RGXInitFinaliseFWImage failed (%d)", eError));
+		goto cleanup;
+	}
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRLock();
+#endif
+
+#if !defined(SUPPORT_TRUSTED_DEVICE)
+	/* dump the fw code */
+	SRVINITPDumpComment(hServices, "Dump firmware code image");
+	DevmemPDumpLoadMem(psFWCodeHostMemDesc,
+							 0,
+							 uiFWCodeAllocSize,
+							 PDUMP_FLAGS_CONTINUOUS);
+#endif
+	SRVINITPDumpComment(hServices, "Dump firmware data image");
+	DevmemPDumpLoadMem(psFWDataHostMemDesc,
+							 0,
+							 uiFWDataAllocSize,
+							 PDUMP_FLAGS_CONTINUOUS);
+
+
+#if defined(RGX_META_COREMEM_CODE) && !defined(SUPPORT_TRUSTED_DEVICE)
+	SRVINITPDumpComment(hServices, "Dump firmware coremem image");
+	DevmemPDumpLoadMem(psFWCorememHostMemDesc,
+							 0,
+							 RGX_META_COREMEM_CODE_SIZE,
+							 PDUMP_FLAGS_CONTINUOUS);
+
+	/* clean the mappings that are not required anymore */
+	DevmemReleaseCpuVirtAddr(psFWCorememHostMemDesc);
+	DevmemFree(psFWCorememHostMemDesc);
+	DevmemUnmakeLocalImportHandle(hServices,
+	                              hFWCorememImportHandle);
+#endif
+	
+	/* clean the mappings that are not required anymore */
+	DevmemReleaseCpuVirtAddr(psFWDataHostMemDesc);
+	DevmemFree(psFWDataHostMemDesc);
+	DevmemUnmakeLocalImportHandle(hServices,
+	                              hFWDataImportHandle);
+
+#if !defined(SUPPORT_TRUSTED_DEVICE)
+	DevmemReleaseCpuVirtAddr(psFWCodeHostMemDesc);
+	DevmemFree(psFWCodeHostMemDesc);
+	DevmemUnmakeLocalImportHandle(hServices,
+	                              hFWCodeImportHandle);
+#endif
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRUnlock();
+#endif
 
 	/*
 	 * Build Debug info script
 	 */
 	sDbgInitScript.psCommands = asDbgCommands;
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	if(!PrepareDebugScript(&sDbgInitScript, sApphints.eFirmwarePerf != FW_PERF_CONF_NONE, psDevInfo))
-#else
-	if(!PrepareDebugScript(&sDbgInitScript, sApphints.eFirmwarePerf != FW_PERF_CONF_NONE, NULL))
-#endif
+	if(!PrepareDebugScript(&sDbgInitScript, eFirmwarePerf != FW_PERF_CONF_NONE))
 	{
 		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the dbg commands"));
 	}
+
 
 	/* finish the script */
 	if(!ScriptHalt(&sDbgInitScript))
@@ -2080,24 +1509,79 @@ PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the terminating dbg script"));
 	}
 
+	/*
+	 * Build Debugbus script
+	 */
+	sDbgBusInitScript.psCommands = asDbgBusCommands;
+
+	if(!PrepareDebugBusScript(&sDbgBusInitScript))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the dbg commands"));
+	}
+
+	/* finish the script */
+	if(!ScriptHalt(&sDbgBusInitScript))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the terminating dbg script"));
+	}
+
+	/*
+	 * Build deinit script
+	 */
+	sDeinitScript.psCommands = asDeinitCommands;
+
+	if(!PrepareDeinitScript(&sDeinitScript))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the deinit commands"));
+	}
+
+	/* finish the script */
+	if(!ScriptHalt(&sDeinitScript))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXInit: Run out of mem for the terminating deinit script"));
+	}
 #if defined(PDUMP)
-	eError = InitialiseAllCounters(hServices, hHWPerfDataPMR);
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRLock();
+#endif
+	/* Acquire HWPerf data mem handle to be able to fill it later */
+	DevmemMakeLocalImportHandle(hServices,
+	                            hHWPerfDataPMR,
+	                            &hHWPerfDataImportHandle);
+
+	DevmemLocalImport(hServices,
+	                        hHWPerfDataImportHandle,
+	                        PVRSRV_MEMALLOCFLAG_CPU_READABLE |
+	                        PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE |
+	                        PVRSRV_MEMALLOCFLAG_GPU_CACHE_INCOHERENT |
+	                        PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE,
+	                        &psHWPerfDataMemDesc,
+	                        &uiHWPerfDataImportSize);
+	eError = DevmemAcquireCpuVirtAddr(psHWPerfDataMemDesc, (void **)&psHWPerfInitData);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "RGXInit: InitialiseAllCounters failed (%d)", eError));
-		goto cleanup;
+		PVR_LOGG_IF_ERROR(eError, "DevmemAcquireCpuVirtAddr", failHWPerfCountersMemDescAqCpuVirt);
 	}
+
+	InitialiseHWPerfCounters(hServices, psHWPerfDataMemDesc, psHWPerfInitData);
+	InitialiseCustomCounters(hServices, psHWPerfDataMemDesc);
+
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRUnlock();
 #endif
+#endif
+#endif /* defined(PVRSRV_GPUVIRT_GUESTDRV) */
 
 	/*
 	 * Perform second stage of RGX initialisation
 	 */
 	eError = BridgeRGXInitDevPart2(hServices,
 	                               sDbgInitScript.psCommands,
+	                               sDbgBusInitScript.psCommands,
+	                               sDeinitScript.psCommands,
 	                               ui32DeviceFlags,
-	                               sApphints.ui32HWPerfHostBufSize,
-	                               sApphints.ui32HWPerfHostFilter,
-	                               sApphints.eRGXActivePMConf,
+	                               ui32HWPerfHostFilter,
+	                               eRGXActivePMConf,
 	                               hFWCodePMR,
 	                               hFWDataPMR,
 	                               hFWCorememPMR,
@@ -2109,51 +1593,18 @@ PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 		goto cleanup;
 	}
 
-#if defined(SUPPORT_KERNEL_SRVINIT) && defined(SUPPORT_VALIDATION)
-	PVRSRVAppHintDumpState();
-#endif
-
-#if defined(PDUMP)
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* These functionality is n/a to guest drivers */
+#else
+#if !defined(SUPPORT_KERNEL_SRVINIT) && defined(PDUMP)
 	/*
 	 * Dump the list of signature registers
 	 */
 	{
 		IMG_UINT32 i;
-		IMG_UINT32 ui32TASigRegCount = 0, ui323DSigRegCount= 0;
-		IMG_BOOL	bRayTracing = IMG_FALSE;
-
-#if defined(SUPPORT_KERNEL_SRVINIT) && defined(__KERNEL__)
-		RGXInitFWSigRegisters(psDevInfo);
-		ui32TASigRegCount = gui32TASigRegCount;
-		ui323DSigRegCount = gui323DSigRegCount;
-		if(psDevInfo->sDevFeatureCfg.ui64Features & RGX_FEATURE_RAY_TRACING_BIT_MASK)
-		{
-			bRayTracing = IMG_TRUE;
-		}
-#if defined(DEBUG)
-		if (gui32TASigRegCount > SIG_REG_TA_MAX_COUNT)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: TA signature registers max count exceeded",__func__));
-			PVR_ASSERT(0);
-		}
-		if (gui323DSigRegCount > SIG_REG_3D_MAX_COUNT)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: 3D signature registers max count exceeded",__func__));
-			PVR_ASSERT(0);
-		}
-#endif
-#else
-		ui32TASigRegCount = sizeof(asTASigRegList)/sizeof(RGXFW_REGISTER_LIST);
-		ui323DSigRegCount = sizeof(as3DSigRegList)/sizeof(RGXFW_REGISTER_LIST);
-#if defined(RGX_FEATURE_RAY_TRACING)
-		bRayTracing = IMG_TRUE;
-#endif
-#endif
-
-
 
 		SRVINITPDumpComment(hServices, "Signature TA registers: ");
-		for (i = 0; i < ui32TASigRegCount; i++)
+		for (i = 0; i < sizeof(asTASigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
 		{
 			if (asTASigRegList[i].ui16IndirectRegNum != 0)
 			{
@@ -2168,7 +1619,7 @@ PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 		}
 
 		SRVINITPDumpComment(hServices, "Signature 3D registers: ");
-		for (i = 0; i < ui323DSigRegCount; i++)
+		for (i = 0; i < sizeof(as3DSigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
 		{
 			if (as3DSigRegList[i].ui16IndirectRegNum != 0)
 			{
@@ -2182,47 +1633,67 @@ PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices)
 			}
 		}
 
-		if(bRayTracing)
+#if defined(RGX_FEATURE_RAY_TRACING)
+		SRVINITPDumpComment(hServices, "Signature RTU registers: ");
+		for (i = 0; i < sizeof(asRTUSigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
 		{
-#if defined (RGX_FEATURE_RAY_TRACING) || defined(SUPPORT_KERNEL_SRVINIT)
-			SRVINITPDumpComment(hServices, "Signature RTU registers: ");
-			for (i = 0; i < sizeof(asRTUSigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
+			if (asRTUSigRegList[i].ui16IndirectRegNum != 0)
 			{
-				if (asRTUSigRegList[i].ui16IndirectRegNum != 0)
-				{
-					SRVINITPDumpComment(hServices, " * 0x%8.8X (indirect via 0x%8.8X %d to %d)",
-								  asRTUSigRegList[i].ui16RegNum, asRTUSigRegList[i].ui16IndirectRegNum,
-								  asRTUSigRegList[i].ui16IndirectStartVal, asRTUSigRegList[i].ui16IndirectEndVal);
-				}
-				else
-				{
-					SRVINITPDumpComment(hServices, " * 0x%8.8X", asRTUSigRegList[i].ui16RegNum);
-				}
+				SRVINITPDumpComment(hServices, " * 0x%8.8X (indirect via 0x%8.8X %d to %d)",
+				              asRTUSigRegList[i].ui16RegNum, asRTUSigRegList[i].ui16IndirectRegNum,
+				              asRTUSigRegList[i].ui16IndirectStartVal, asRTUSigRegList[i].ui16IndirectEndVal);
 			}
-
-			SRVINITPDumpComment(hServices, "Signature SHG registers: ");
-			for (i = 0; i < sizeof(asSHGSigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
+			else
 			{
-				if (asSHGSigRegList[i].ui16IndirectRegNum != 0)
-				{
-					SRVINITPDumpComment(hServices, " * 0x%8.8X (indirect via 0x%8.8X %d to %d)",
-								  asSHGSigRegList[i].ui16RegNum, asSHGSigRegList[i].ui16IndirectRegNum,
-								  asSHGSigRegList[i].ui16IndirectStartVal, asSHGSigRegList[i].ui16IndirectEndVal);
-				}
-				else
-				{
-					SRVINITPDumpComment(hServices, " * 0x%8.8X", asSHGSigRegList[i].ui16RegNum);
-				}
+				SRVINITPDumpComment(hServices, " * 0x%8.8X", asRTUSigRegList[i].ui16RegNum);
 			}
-#endif
 		}
 
+		SRVINITPDumpComment(hServices, "Signature SHG registers: ");
+		for (i = 0; i < sizeof(asSHGSigRegList)/sizeof(RGXFW_REGISTER_LIST); i++)
+		{
+			if (asSHGSigRegList[i].ui16IndirectRegNum != 0)
+			{
+				SRVINITPDumpComment(hServices, " * 0x%8.8X (indirect via 0x%8.8X %d to %d)",
+				              asSHGSigRegList[i].ui16RegNum, asSHGSigRegList[i].ui16IndirectRegNum,
+				              asSHGSigRegList[i].ui16IndirectStartVal, asSHGSigRegList[i].ui16IndirectEndVal);
+			}
+			else
+			{
+				SRVINITPDumpComment(hServices, " * 0x%8.8X", asSHGSigRegList[i].ui16RegNum);
+			}
+		}
+#endif
 	}
 #endif	/* !defined(SUPPORT_KERNEL_SRVINIT) && defined(PDUMP) */
+#endif /*   defined(PVRSRV_GPUVIRT_GUESTDRV) */
 
 	eError = PVRSRV_OK;
+#if defined(PDUMP)
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRLock();
+#endif
 
+	DevmemReleaseCpuVirtAddr(psHWPerfDataMemDesc);
+	DevmemFree(psHWPerfDataMemDesc);
+	DevmemUnmakeLocalImportHandle(hServices,
+	                              hHWPerfDataImportHandle);
+#if defined(SUPPORT_KERNEL_SRVINIT)
+	PMRUnlock();
+#endif
+failHWPerfCountersMemDescAqCpuVirt:
+#endif
 cleanup:
+	SrvInitParamClose(pvParamState);
+
+#if	defined(PVRSRV_GPUVIRT_GUESTDRV)
+	/* Guest driver do not unload firmware */
+#else
+	if (psRGXFW != NULL)
+	{
+		RGXUnloadFirmware(psRGXFW);
+	}
+#endif
 	return eError;
 }
 

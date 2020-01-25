@@ -160,8 +160,7 @@ static void apply_ved_slc_workaround(struct drm_device *dev)
 	struct drm_psb_private *dev_priv = psb_priv(dev);
 	struct msvdx_private *msvdx_priv = dev_priv->msvdx_private;
 
-	if (!(msvdx_priv->msvdx_ctx->ctx_type & VA_RT_FORMAT_PROTECTED) &&
-			atomic_read(&msvdx_priv->slc_workaround_ctx)) {
+	if (atomic_read(&msvdx_priv->vc1_workaround_ctx)) {
 		uint32_t reg, data;
 
 		/* soc.gfx_wrapper.gbypassenable_sw = 1 */

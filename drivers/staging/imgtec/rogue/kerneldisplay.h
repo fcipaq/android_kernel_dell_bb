@@ -1,9 +1,8 @@
 /*************************************************************************/ /*!
 @File
-@Title          Interface between 3rd party display controller (DC) drivers
-                and the Services server module.
-@Description    API between Services and the 3rd party DC driver and vice versa.
+@Title          Interface for 3rd party display class (DC) drivers
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
+@Description    API between services and the 3rd party DC driver and vice versa
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -49,78 +48,34 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 extern "C" {
 #endif
 
-#include <powervr/mem_types.h>
-
 #include "pvrsrv_error.h"
 #include "img_types.h"
 #include "pvrsrv_surface.h"
 #include "dc_external.h"
-
-/*!
- ******************************************************************************
- @mainpage Introduction and Document Scope
-This document is a function reference for the 3rd party display
-controller interface. The interface ensures that the 3rd party display driver and
-Services can exchange configurations and buffers and can inform each
-other about occurring events like render completion or vsyncs.
-
-This interface should be used and implemented if the 3rd party display driver
-is not using a native OS interface such as the Linux DRM/KMS API.
-
-To fully understand the document the reader should be aware that
-the Services driver - offering PowerVR core and platform functionality to the
-driver layers (OGLES etc.) above - is split into the "Services Client"
-user mode library and the "Services Server" kernel mode driver that communicate
-via the "Services Bridge". The terms "User-Mode" and "Client" are used as
-synonyms as well as "Kernel-Mode" and "Server".
-
-Please refer to the more comprehensive '3rd Party Display Integration Guide'
-for an architecture overview and an explanation of the data flow between a
-client process, Services and the 3rd party display driver. It also contains
-descriptions about how to make use of the client side interface that is supposed
-to be integrated in some kind of display manager like e.g. the Rogue DDK WSEGL
-window manager.
-
-The documented functions are split into different parts:
-- Callbacks that need an implementation by the 3rd party display driver and
-that are used by the Services server, some of them optional (kerneldisplay.h)
-- Functions that the Services server module exports and can be used by the
-3rd party display driver. Mainly to register/deregister a new display device
-and to query state information (kerneldisplay.h)
-- Functions that are called by the client process (a display manager e.g. WSEGL)
-to control the DC interaction (dc_client.h)
-- Commonly used structure definitions to exchange data between the modules
-(dc_external.h, pvrsrv_surface.h)
- *****************************************************************************/
+#include "dc_common.h"
 
 /*************************************************************************/ /*!
 @Function       GetInfo
 
-@Description    Query the display controller for its information structure.
-
-   Called by client function: #PVRSRVDCGetInfo()
-
-   Implementation of this callback is mandatory.
+@Description    Query the display controller for its information structure
 
 @Input          hDeviceData             Device private data
 
 @Output         psDisplayInfo           Display info structure
+
+@Return         PVRSRV_OK if the query was successful
 */
 /*****************************************************************************/
 typedef void (*GetInfo)(IMG_HANDLE hDeviceData,
-                        DC_DISPLAY_INFO *psDisplayInfo);
+						DC_DISPLAY_INFO *psDisplayInfo);
 
 /*************************************************************************/ /*!
 @Function       PanelQueryCount
 
 @Description    Query the display controller for how many panels are
-                connected to it.
+                contented to it.
 
-   Called by client function: #PVRSRVDCPanelQueryCount()
-
-   Implementation of this callback is mandatory.
-
-@Input          hDeviceData            Device private data
+@Input          hDeviceData             Device private data
 
 @Output         pui32NumPanels         Number of panels
 
@@ -128,7 +83,7 @@ typedef void (*GetInfo)(IMG_HANDLE hDeviceData,
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*PanelQueryCount)(IMG_HANDLE hDeviceData,
-                                        IMG_UINT32 *pui32NumPanels);
+										 IMG_UINT32 *ppui32NumPanels);
 
 /*************************************************************************/ /*!
 @Function       PanelQuery
@@ -136,162 +91,139 @@ typedef PVRSRV_ERROR (*PanelQueryCount)(IMG_HANDLE hDeviceData,
 @Description    Query the display controller for information on what panel(s)
                 are connected to it and their properties.
 
-   Called by client function: #PVRSRVDCPanelQuery()
-
-   Implementation of this callback is mandatory.
-
 @Input          hDeviceData             Device private data
 
-@Input          ui32PanelsArraySize     Size of the PanelInfo array
-                                        (i.e. number of panels that
-                                        can be returned)
+@Input          ui32PanelsArraySize    Size of the format and dimension
+                                        array size (i.e. number of panels
+                                        that can be returned)
 
-@Output         pui32NumPanels          Number of panels returned
+@Output         pui32NumPanels         Number of panels returned
 
-@Output         pasPanelInfo            Array of formats, allocated beforehand
+@Output         pasFormat               Array of formats
+
+@Output         pasDims                 Array of dimensions
 
 @Return         PVRSRV_OK if the query was successful
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*PanelQuery)(IMG_HANDLE hDeviceData,
-                                   IMG_UINT32 ui32PanelsArraySize,
-                                   IMG_UINT32 *pui32NumPanels,
-                                   PVRSRV_PANEL_INFO *pasPanelInfo);
+									IMG_UINT32 ui32PanelsArraySize,
+									IMG_UINT32 *pui32NumPanels,
+									PVRSRV_PANEL_INFO *pasPanelInfo);
 
 /*************************************************************************/ /*!
 @Function       FormatQuery
 
-@Description    Query the display controller to check if it supports the specified
+@Description    Query the display controller to see if it supports the specified
                 format(s).
-
-   Called by client function: #PVRSRVDCFormatQuery()
-
-   Implementation of this callback is mandatory.
 
 @Input          hDeviceData             Device private data
 
 @Input          ui32NumFormats          Number of formats to check
-                                        (i.e. length of the Format array)
 
 @Input          pasFormat               Array of formats to check
 
-@Output         pui32Supported          For each format, the number of display
+@Output			pui32Supported          For each format, the number of display
                                         pipes that support that format
 
 @Return         PVRSRV_OK if the query was successful
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*FormatQuery)(IMG_HANDLE hDeviceData,
-                                    IMG_UINT32 ui32NumFormats,
-                                    PVRSRV_SURFACE_FORMAT *pasFormat,
-                                    IMG_UINT32 *pui32Supported);
+									IMG_UINT32 ui32NumFormats,
+									PVRSRV_SURFACE_FORMAT *pasFormat,
+									IMG_UINT32 *pui32Supported);
 
 /*************************************************************************/ /*!
 @Function       DimQuery
 
-@Description    Query the specified display plane for the display dimensions
+@Description    Query the specificed display plane for the display dimensions
                 it supports.
-
-   Called by client function: #PVRSRVDCDimQuery()
-
-   Implementation of this callback is mandatory.
 
 @Input          hDeviceData             Device private data
 
 @Input          ui32NumDims             Number of dimensions to check
-                                        (i.e. length of the Dim array)
 
-@Input          pasDim                  Array of dimensions to check
+@Input          pasDim                  Array of dimentations to check
 
 @Output         pui32Supported          For each dimension, the number of
                                         display pipes that support that
-                                        dimension
+                                         dimension
 
 @Return         PVRSRV_OK if the query was successful
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*DimQuery)(IMG_HANDLE hDeviceData,
-                                 IMG_UINT32 ui32NumDims,
-                                 PVRSRV_SURFACE_DIMS *pasDim,
-                                 IMG_UINT32 *pui32Supported);
+								 IMG_UINT32 ui32NumDims,
+								 PVRSRV_SURFACE_DIMS *psDim,
+								 IMG_UINT32 *pui32Supported);
+
 
 /*************************************************************************/ /*!
 @Function       SetBlank
 
-@Description    Enable/disable blanking of the screen.
+@Description    Enable/disable blanking of the screen
 
-   Called by client function: #PVRSRVDCSetBlank()
+@Input          psConnection            Services connection
 
-   Implementation of this callback is optional.
+@Input          hDevice                 3rd party display class device
 
-@Input          hDeviceData             Device private data
-
-@Input          bEnable                 Enable/Disable the blanking
+@Input          bEnabled                Enable/Disable the blanking
 
 @Return         PVRSRV_OK on success
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*SetBlank)(IMG_HANDLE hDeviceData,
-                                 IMG_BOOL bEnable);
+								 IMG_BOOL bEnabled);
 
 /*************************************************************************/ /*!
 @Function       SetVSyncReporting
 
-@Description    Enable VSync reporting. If enabled, the 3rd party display
-                driver is expected to call PVRSRVCheckStatus() after a VSync
-                event occurred. This will signal the Services driver global 
-                event object.
+@Description    Enable VSync reporting by trigger the global event object on
+                every vsync happened.
 
-   Called by client function: #PVRSRVDCSetVSyncReporting()
+@Input          psConnection            Services connection
 
-   Implementation of this callback is optional.
+@Input          hDevice                 3rd party display class device
 
-@Input          hDeviceData             Device private data
-
-@Input          bEnable                 Enable/Disable the reporting
+@Input          bEnabled                Enable/Disable the reporting
 
 @Return         PVRSRV_OK on success
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*SetVSyncReporting)(IMG_HANDLE hDeviceData,
-                                          IMG_BOOL bEnable);
+										  IMG_BOOL bEnabled);
 
 /*************************************************************************/ /*!
-@Function       LastVSyncQuery
+@Function       PVRSRVDCLastVSyncQuery
 
 @Description    Query the time the last vsync happened.
 
-   Called by client function: #PVRSRVDCLastVSyncQuery()
+@Input          psConnection            Services connection
 
-   Implementation of this callback is optional.
+@Input          hDevice                 3rd party display class device
 
-@Input          hDeviceData             Device private data
-
-@Output         pi64Timestamp           The requested timestamp
-                                        of the system time in ns
+@Output         pi64Timestamp           the requested timestamp
 
 @Return         PVRSRV_OK if the query was successful
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*LastVSyncQuery)(IMG_HANDLE hDeviceData,
-                                       IMG_INT64 *pi64Timestamp);
+									   IMG_INT64 *pi64Timestamp);
+
+typedef PVRSRV_ERROR (*BufferSystemAcquire)(IMG_HANDLE hDeviceData,
+											IMG_DEVMEM_LOG2ALIGN_T *puiLog2PageSize,
+											IMG_UINT32 *pui32PageCount,
+											IMG_UINT32 *pui32PhysHeapID,
+											IMG_UINT32 *pui32ByteStride,
+											IMG_HANDLE *phSystemBuffer);
+
+typedef	void (*BufferSystemRelease)(IMG_HANDLE hSystemBuffer);
 
 /*************************************************************************/ /*!
 @Function       ContextCreate
 
 @Description    Create display context.
-                The client application and the display driver have to agree
-                as to what exactly a context represents, Services will just
-                pass it through and tie it to its own concept of a
-                display context.
-                It might contain additional locks, work-queues or other
-                important data that is necessary to drive the interaction
-                with Services. A context is usually associated with one device
-                but that is not a hard requirement.
-
-   Called by client function: #PVRSRVDCDisplayContextCreate()
-
-   Implementation of this callback is mandatory.
 
 @Input          hDeviceData             Device private data
 
@@ -301,29 +233,19 @@ typedef PVRSRV_ERROR (*LastVSyncQuery)(IMG_HANDLE hDeviceData,
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*ContextCreate)(IMG_HANDLE hDeviceData,
-                                      IMG_HANDLE *hDisplayContext);
+									  IMG_HANDLE *hDisplayContext);
 
 /*************************************************************************/ /*!
 @Function       ContextConfigureCheck
 
 @Description    Check to see if a configuration is valid for the display
-                controller. Because of runtime changes the display context
-                might not be able to work with a certain configuration anymore.
-                This function is intended to be called before ContextConfigure
-                so that the application can query details about the current
-                surface config and then do the ContextConfigure call with
-                the updated data.
-                The arrays should be z-sorted, with the farthest plane
-                first and the nearest plane last.
+                controller.
 
-   Called by client function: #PVRSRVDCContextConfigureCheck()
-
-   Implementation of this callback is optional.
+                Note: This function is optional
 
 @Input          hDisplayContext         Display context
 
 @Input          ui32PipeCount           Number of display pipes to configure
-                                        (length of the input arrays)
 
 @Input          pasSurfAttrib           Array of surface attributes (one for
                                         each display plane)
@@ -335,25 +257,18 @@ typedef PVRSRV_ERROR (*ContextCreate)(IMG_HANDLE hDeviceData,
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*ContextConfigureCheck)(IMG_HANDLE hDisplayContext,
-                                              IMG_UINT32 ui32PipeCount,
-                                              PVRSRV_SURFACE_CONFIG_INFO *pasSurfAttrib,
-                                              IMG_HANDLE *ahBuffers);
+											  IMG_UINT32 ui32PipeCount,
+											  PVRSRV_SURFACE_CONFIG_INFO *pasSurfAttrib,
+											  IMG_HANDLE *ahBuffers);
 
 /*************************************************************************/ /*!
 @Function       ContextConfigure
 
-@Description    Configure the display pipeline to display a given buffer.
-                The arrays should be z-sorted, with the farthest plane first
-                and the nearest plane last.
-
-   Called by client function: #PVRSRVDCContextConfigure(), #PVRSRVDCContextConfigureWithFDSync()
-
-   Implementation of this callback is mandatory.
+@Description    Configuration the display pipeline.
 
 @Input          hDisplayContext         Display context
 
 @Input          ui32PipeCount           Number of display pipes to configure
-                                        (i.e. length of the input arrays)
 
 @Input          pasSurfAttrib           Array of surface attributes (one for
                                         each display plane)
@@ -367,23 +282,21 @@ typedef PVRSRV_ERROR (*ContextConfigureCheck)(IMG_HANDLE hDisplayContext,
 @Input          hConfigData             Config handle which gets passed to
                                         DisplayConfigurationRetired when this
                                         configuration is retired
+
+@Return         PVRSRV_OK if the configuration was successfully queued
 */
 /*****************************************************************************/
 typedef void (*ContextConfigure)(IMG_HANDLE hDisplayContext,
-                                 IMG_UINT32 ui32PipeCount,
-                                 PVRSRV_SURFACE_CONFIG_INFO *pasSurfAttrib,
-                                 IMG_HANDLE *ahBuffers,
-                                 IMG_UINT32 ui32DisplayPeriod,
-                                 IMG_HANDLE hConfigData);
+								 IMG_UINT32 ui32PipeCount,
+								 PVRSRV_SURFACE_CONFIG_INFO *pasSurfAttrib,
+								 IMG_HANDLE *ahBuffers,
+								 IMG_UINT32 ui32DisplayPeriod,
+								 IMG_HANDLE hConfigData);
 
 /*************************************************************************/ /*!
 @Function       ContextDestroy
 
 @Description    Destroy a display context.
-
-   Called by client function: #PVRSRVDCDisplayContextDestroy()
-
-   Implementation of this callback is mandatory.
 
 @Input          hDisplayContext         Display context to destroy
 
@@ -404,22 +317,16 @@ typedef void (*ContextDestroy)(IMG_HANDLE hDisplayContext);
                 still needs to be created and returned to the caller as well
                 as some information about the buffer that's required upfront.
 
-   Called by client function: #PVRSRVDCBufferAlloc()
-
-   Implementation of this callback is mandatory.
-
 @Input          hDisplayContext         Display context this buffer will be
                                         used on
 
 @Input          psSurfInfo              Attributes of the buffer
 
-@Output         puiLog2PageSize         Pagesize in log2(bytes) of one page
+@Output         puiLog2PageSize         Log2 of the pagesize of the buffer
 
 @Output         pui32PageCount          Number of pages in the buffer
 
-@Output         pui32PhysHeapID         Physical heap ID to use. The physical
-                                        heap has been created in the Services
-                                        system layer.
+@Output         pui32PhysHeapID         Physcial heap ID to use
 
 @Output         pui32ByteStride         Stride (in bytes) of allocated buffer
 
@@ -429,30 +336,22 @@ typedef void (*ContextDestroy)(IMG_HANDLE hDisplayContext);
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*BufferAlloc)(IMG_HANDLE hDisplayContext,
-                                    DC_BUFFER_CREATE_INFO *psSurfInfo,
-                                    IMG_DEVMEM_LOG2ALIGN_T *puiLog2PageSize,
-                                    IMG_UINT32 *pui32PageCount,
-                                    IMG_UINT32 *pui32PhysHeapID,
-                                    IMG_UINT32 *pui32ByteStride,
-                                    IMG_HANDLE *phBuffer);
+									DC_BUFFER_CREATE_INFO *psSurfInfo,
+									IMG_DEVMEM_LOG2ALIGN_T *puiLog2PageSize,
+									IMG_UINT32 *pui32PageCount,
+									IMG_UINT32 *pui32PhysHeapID,
+									IMG_UINT32 *pui32ByteStride,
+									IMG_HANDLE *phBuffer);
 
 /*************************************************************************/ /*!
 @Function       BufferImport
 
-@Description    Import memory allocated from an external source (e.g. Services)
-                to the display controller. The DC checks to see if the import
-                is compatible and potentially sets up HW to map the imported
-                buffer, although this isn't required to happen until the first
-                call to BufferMap.
+@Description    Import memory allocated from an external source to the display
+                controller. The DC checks to see if the import is compatible
+                and potentially sets up HW to map the imported buffer, although
+                this isn't require to happen until the first call to DCBufferMap
 
-                Note: Provide this function if the controller
-                can scan out arbitrary memory, allocated for another purpose by
-                Services. To be able to use this buffer (depending on its
-                origin) the display controller probably will need a MMU.
-
-   Called by client function: #PVRSRVDCBufferImport()
-
-   Implementation of this callback is optional.
+                Note: This is optional
 
 @Input          hDisplayContext         Display context this buffer will be
                                         used on
@@ -469,54 +368,45 @@ typedef PVRSRV_ERROR (*BufferAlloc)(IMG_HANDLE hDisplayContext,
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*BufferImport)(IMG_HANDLE hDisplayContext,
-                                     IMG_UINT32 ui32NumPlanes,
-                                     IMG_HANDLE **pahImport,
-                                     DC_BUFFER_IMPORT_INFO *psSurfAttrib,
-                                     IMG_HANDLE *phBuffer);
+									 IMG_UINT32 ui32NumPlanes,
+									 IMG_HANDLE **paphImport,
+									 DC_BUFFER_IMPORT_INFO *psSurfAttrib,
+									 IMG_HANDLE *phBuffer);
 
 /*************************************************************************/ /*!
 @Function       BufferAcquire
 
-@Description    Acquire the buffer's physical memory pages. If the buffer doesn't
-                have any memory backing yet then this will trigger the 3rd
+@Description    Acquire the buffer's physcial memory pages. If the buffer doesn't
+                have any memory backing it yet then this will trigger the 3rd
                 party driver to allocate it.
 
                 Note: The page count isn't passed back in this function as
-                Services has already obtained it during BufferAlloc.
-
-   Called when Services requests buffer access for the first time. Usually part
-   of non display class functions.
-
-   Implementation of this callback is mandatory.
+                services has already obtained it during BufferAlloc.
 
 @Input          hBuffer                 Handle to the buffer
 
 @Output         pasDevPAddr             Array of device physical page address
                                         of this buffer
 
-@Output         ppvLinAddr              CPU virtual address of buffer. This is
-                                        optional but if you have one you must
+@Output         pvLinAddr               CPU virtual address of buffer. This is
+                                        optionial but if you have one you must
                                         return it otherwise return NULL.
 
 @Return         PVRSRV_OK if the buffer was successfully acquired
 */
 /*****************************************************************************/
 typedef PVRSRV_ERROR (*BufferAcquire)(IMG_HANDLE hBuffer,
-                                      IMG_DEV_PHYADDR *pasDevPAddr,
-                                      void **ppvLinAddr);
+									  IMG_DEV_PHYADDR *pasDevPAddr,
+									  void **ppvLinAddr);
 
 /*************************************************************************/ /*!
 @Function       BufferRelease
 
-@Description    Undo everything done by BufferAcquire.
-                Will release the buffer's physical memory pages if
-                BufferAcquire allocated them.
-
-   Called when Services finished buffer access.
-
-   Implementation of this callback is mandatory.
+@Description    Release the buffer's physcial memory pages.
 
 @Input          hBuffer                 Handle to the buffer
+
+@Return         None
 */
 /*****************************************************************************/
 typedef void (*BufferRelease)(IMG_HANDLE hBuffer);
@@ -526,13 +416,11 @@ typedef void (*BufferRelease)(IMG_HANDLE hBuffer);
 
 @Description    Release a reference to the device buffer. If this was the last
                 reference the 3rd party driver is entitled to free the backing
-                memory and other related resources.
-
-   Called by client function: #PVRSRVDCBufferFree()
-
-   Implementation of this callback is mandatory.
+                memory.
 
 @Input          hBuffer                 Buffer handle we're releasing
+
+@Return         None
 */
 /*****************************************************************************/
 typedef void (*BufferFree)(IMG_HANDLE hBuffer);
@@ -541,15 +429,8 @@ typedef void (*BufferFree)(IMG_HANDLE hBuffer);
 @Function       BufferMap
 
 @Description    Map the buffer into the display controller
-                Note: This function depends on the behaviour of
-                BufferAlloc/BufferAcquire/BufferImport/BufferSystemAcquire
-                and the controller's ability to map in memory.
-                If the controller has no MMU or the above functions already
-                map the buffer this callback does not need an implementation.
 
-   Called by client function: #PVRSRVDCBufferPin()
-
-   Implementation of this callback is optional.
+                Note: This function is optional
 
 @Input          hBuffer                 Buffer to map
 
@@ -561,194 +442,96 @@ typedef PVRSRV_ERROR (*BufferMap)(IMG_HANDLE hBuffer);
 /*************************************************************************/ /*!
 @Function       BufferUnmap
 
-@Description    Undo everything done by BufferMap.
-                Usually that means to unmap a buffer from the display controller.
+@Description    Unmap a buffer from the display controller
 
-   Called by client function: #PVRSRVDCBufferUnpin()
-
-   Implementation of this callback is optional.
+                Note: This function is optional
 
 @Input          hBuffer                 Buffer to unmap
+
+@Return         None
 */
 /*****************************************************************************/
 typedef void (*BufferUnmap)(IMG_HANDLE hBuffer);
 
 
-/*************************************************************************/ /*!
-@Function       BufferSystemAcquire
-
-@Description    DEPRICATED, please use BufferAlloc
-                Acquire the system buffer from the display driver.
-                If the OS should trigger a mode change then it's not allowed to
-                free the previous buffer until Services has released it
-                via BufferSystemRelease. The system buffer has to be associated
-                to a PhysHeapID which can be one of the existing physical heaps
-                if the system buffer is compatible with it or must be a separate
-                heap created for this use.
-
-   Called by client function: #PVRSRVDCSystemBufferAcquire()
-
-   Implementation of this callback is optional.
-
-@Input          hDeviceData             Device private data
-
-@Output         puiLog2PageSize         The physical pagesize in log2(bytes)
-                                        of one page that the buffer is composed of
-
-@Output         pui32PageCount          The number of pages the buffer contains
-
-@Output         pui32PhysHeapID         The ID of the Services PhysHeap that has
-                                        been setup in the system layer
-
-@Output         pui32ByteStride         Byte stride of the buffer
-
-@Output         phSystemBuffer          Handle to the buffer object
-
-@Return         PVRSRV_OK if the query was successful
+/*
+	Function table for server->display
 */
-/*****************************************************************************/
-typedef PVRSRV_ERROR (*BufferSystemAcquire)(IMG_HANDLE hDeviceData,
-                                            IMG_DEVMEM_LOG2ALIGN_T *puiLog2PageSize,
-                                            IMG_UINT32 *pui32PageCount,
-                                            IMG_UINT32 *pui32PhysHeapID,
-                                            IMG_UINT32 *pui32ByteStride,
-                                            IMG_HANDLE *phSystemBuffer);
-
-/*************************************************************************/ /*!
-@Function       BufferSystemRelease
-
-@Description    DEPRICATED, please use BufferFree
-                Release a display buffer acquired with BufferSystemAcquire.
-                Services calls this after it has no use for the buffer anymore.
-                The buffer must not be destroyed before Services releases it
-                with this call.
-
-   Called by client function: #PVRSRVDCSystemBufferRelease()
-
-   Implementation of this callback is optional.
-
-@Input          hSystemBuffer          Handle to the buffer object
-*/
-/*****************************************************************************/
-typedef	void (*BufferSystemRelease)(IMG_HANDLE hSystemBuffer);
-
-#if defined(INTEGRITY_OS)
-typedef PVRSRV_ERROR (*AcquireKernelMappingData)(IMG_HANDLE hBuffer, IMG_HANDLE *phMapping, void **ppPhysAddr);
-typedef PVRSRV_ERROR (*MapMemoryObject)(IMG_HANDLE hBuffer, IMG_HANDLE *phMemObj);
-typedef PVRSRV_ERROR (*UnmapMemoryObject)(IMG_HANDLE hBuffer);
-
-#if defined(USING_HYPERVISOR)
-typedef IMG_HANDLE (*GetPmr)(IMG_HANDLE hBuffer, size_t ulOffset);
-#endif
-#endif
-
-/*!
- * Function table for functions to be implemented by the display controller
- * that will be called from within Services.
- * The table will be provided to Services with the call to DCRegisterDevice.
- */
 typedef struct _DC_DEVICE_FUNCTIONS_
 {
-	/* Mandatory query functions */
+	/*! Mandatory query functions */
 	GetInfo						pfnGetInfo;
 	PanelQueryCount				pfnPanelQueryCount;
 	PanelQuery					pfnPanelQuery;
 	FormatQuery					pfnFormatQuery;
 	DimQuery					pfnDimQuery;
 
-	/* Optional blank/vsync functions */
-	SetBlank					pfnSetBlank;
-	SetVSyncReporting			pfnSetVSyncReporting;
+	/*! Optional blank/vsync function */
+	SetBlank		            pfnSetBlank;
+	SetVSyncReporting		    pfnSetVSyncReporting;
 	LastVSyncQuery				pfnLastVSyncQuery;
 
-	/* Mandatory configure functions */
+	/*! Mandatory configure function */
 	ContextCreate				pfnContextCreate;
 	ContextDestroy				pfnContextDestroy;
 	ContextConfigure			pfnContextConfigure;
 
-	/* Optional context functions */
+	/*! Optional context function */
 	ContextConfigureCheck		pfnContextConfigureCheck;
 
-	/* Mandatory buffer functions */
+	/*! Mandatory buffer functions */
 	BufferAlloc					pfnBufferAlloc;
 	BufferAcquire				pfnBufferAcquire;
 	BufferRelease				pfnBufferRelease;
 	BufferFree					pfnBufferFree;
 
-	/* Optional - Provide this function if your controller can
-	 * scan out arbitrary memory, allocated for another purpose
-	 * by Services. */
+	/*! Optional buffer functions, pfnBufferMap and pfnBufferUnmap are paired
+		functions, provide both or neither */
 	BufferImport				pfnBufferImport;
-
-	/* Optional - Provide these functions if your controller
-	 * has an MMU and does not (or cannot) map/unmap buffers at
-	 * alloc/free time */
 	BufferMap					pfnBufferMap;
 	BufferUnmap					pfnBufferUnmap;
-
-	/* Optional - DEPRICATED */
 	BufferSystemAcquire			pfnBufferSystemAcquire;
 	BufferSystemRelease			pfnBufferSystemRelease;
-
-#if defined(INTEGRITY_OS)
-	/* The addition of these functions allow dc_server to delegate calls to
-	 * the respective functions on its PMRs towards the DC module
-	 */
-	AcquireKernelMappingData	pfnAcquireKernelMappingData;
-	MapMemoryObject             pfnMapMemoryObject;
-	UnmapMemoryObject           pfnUnmapMemoryObject;
-
-#if defined(USING_HYPERVISOR)
-	GetPmr				pfnGetPmr;
-#endif
-#endif
 } DC_DEVICE_FUNCTIONS;
 
 
 /*
- * Functions exported by kernel Services for use by 3rd party kernel display
- * controller device driver
+	functions exported by kernel services for use by 3rd party kernel display
+	class device driver
 */
 
 /*************************************************************************/ /*!
 @Function       DCRegisterDevice
 
-@Description    This needs to be called by the display driver before any further
-                communication with Services.
-                It registers a display controller device with Services. After this
-                registration Services is able to use the display controller
-                and will make use of the callbacks. Services will provide the
-                hDeviceData in the callbacks whenever necessary.
+@Description    Register a display class device
 
 @Input          psFuncTable             Callback function table
 
 @Input          ui32MaxConfigsInFlight  The maximum number of configs that this
-                                        display device can have in-flight. This
-                                        determines the number of possible calls
-                                        to ContextConfigure before Services has to
-                                        wait for DCDisplayConfigurationRetired
-                                        calls.
+                                        display device can have in-flight.
 
-@Input          hDeviceData             Device private data passed into callbacks
+@Input          hDeviceData             3rd party device handle, passed into
+                                        DC callbacks
 
 @Output         phSrvHandle             Services handle to pass back into
                                         UnregisterDCDevice
 
-@Return         PVRSRV_OK if the display controller driver was successfully registered
+@Return         PVRSRV_OK if the display class driver was successfully registered
 */
 /*****************************************************************************/
 PVRSRV_ERROR DCRegisterDevice(DC_DEVICE_FUNCTIONS *psFuncTable,
-                              IMG_UINT32 ui32MaxConfigsInFlight,
-                              IMG_HANDLE hDeviceData,
-                              IMG_HANDLE *phSrvHandle);
+							  IMG_UINT32 ui32MaxConfigsInFlight,
+							  IMG_HANDLE hDeviceData,
+							  IMG_HANDLE *phSrvHandle);
 
 /*************************************************************************/ /*!
 @Function       DCUnregisterDevice
 
-@Description    Unregister a display controller device. Undo everything done with
-                DCRegisterDevice. Services will stop using this device.
+@Description    Unregister a display class device
 
-@Input          hSrvHandle              Services device handle
+@Input          hDevice                Services device handle
+
+@Return         None
 */
 /*****************************************************************************/
 void DCUnregisterDevice(IMG_HANDLE hSrvHandle);
@@ -757,9 +540,11 @@ void DCUnregisterDevice(IMG_HANDLE hSrvHandle);
 @Function       DCDisplayConfigurationRetired
 
 @Description    Called when a configuration as been retired due to a new
-                configuration now being active. See #PVRSRVDCContextConfigure().
+                configuration now being active.
 
 @Input          hConfigData             ConfigData that is being retired
+
+@Return         None
 */
 /*****************************************************************************/
 void DCDisplayConfigurationRetired(IMG_HANDLE hConfigData);
@@ -782,41 +567,40 @@ IMG_BOOL DCDisplayHasPendingCommand(IMG_HANDLE hConfigData);
 @Function       DCImportBufferAcquire
 
 @Description    Acquire information about a buffer that was imported with
-                BufferImport. DCImportBufferRelease has to be called after
-                the buffer will not be used anymore.
+                BufferImport.
 
 @Input          hImport                 Import buffer
 
-@Input          uiLog2PageSize          Pagesize in log2(bytes) of the buffer
+@Input          uiLog2PageSize          Log 2 of the DC's page size
 
 @Output         pui32PageCount          Size of the buffer in pages
 
-@Output         pasDevPAddr             Array of device physical page address
+@Output         ppasDevPAddr            Array of device physcial page address
                                         of this buffer
 
 @Return         PVRSRV_OK if the import buffer was successfully acquired
 */
 /*****************************************************************************/
 PVRSRV_ERROR DCImportBufferAcquire(IMG_HANDLE hImport,
-                                   IMG_DEVMEM_LOG2ALIGN_T uiLog2PageSize,
-                                   IMG_UINT32 *pui32PageCount,
-                                   IMG_DEV_PHYADDR **pasDevPAddr);
+								   IMG_DEVMEM_LOG2ALIGN_T uiLog2PageSize,
+								   IMG_UINT32 *pui32PageCount,
+								   IMG_DEV_PHYADDR **ppasDevPAddr);
 
 /*************************************************************************/ /*!
 @Function       DCImportBufferRelease
 
 @Description    Release an imported buffer.
 
-@Input          hImport                 Import handle we are releasing
+@Input          hImport                 Import handle we're releasing
 
-@Input          pasDevPAddr             Import data which was returned from
+@Input          pasDevPAddr             Import data was returned from
                                         DCImportBufferAcquire
+
+@Return         None
 */
 /*****************************************************************************/
 void DCImportBufferRelease(IMG_HANDLE hImport,
-                           IMG_DEV_PHYADDR *pasDevPAddr);
-
-
+						   IMG_DEV_PHYADDR *pasDevPAddr);
 
 #if defined (__cplusplus)
 }

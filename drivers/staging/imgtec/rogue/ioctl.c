@@ -133,10 +133,7 @@ static IMG_UINT32 DBGDIOCDrivGetStream(void * pvInBuffer, void * pvOutBuffer, IM
 	psParams	= (PDBG_IN_FINDSTREAM)pvInBuffer;
 	phStream	= (IMG_SID *)pvOutBuffer;
 
-	/* Ensure that the name will be NULL terminated */
-	psParams->pszName[DEBUG_STREAM_NAME_MAX-1] = '\0';
-
-	*phStream = PStream2SID(ExtDBGDrivFindStream(psParams->pszName, psParams->bResetStream));
+	*phStream = PStream2SID(ExtDBGDrivFindStream(WIDEPTR_GET_PTR(psParams->pszName, bCompat), psParams->bResetStream));
 
 	return(IMG_TRUE);
 }

@@ -41,19 +41,19 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-#ifndef _SYNC_
-#define _SYNC_
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
-#include <powervr/sync_external.h>
+#include "sync_external.h"
 #include "pdumpdefs.h"
 #include "dllist.h"
 #include "pvr_debug.h"
 
 #include "device_connection.h"
 
-#if defined(__KERNEL__) && defined(LINUX) && !defined(__GENKSYMS__)
+#ifndef _SYNC_
+#define _SYNC_
+
+#if defined(__KERNEL__) && defined(ANDROID) && !defined(__GENKSYMS__)
 #define __pvrsrv_defined_struct_enum__
 #include <services_kernel_client.h>
 #endif
@@ -145,11 +145,10 @@ SyncPrimAllocForServerSync(PSYNC_PRIM_CONTEXT   hSyncPrimContext,
 
 @Input          psSync                  The synchronisation primitive to free
 
-@Return         PVRSRV_OK if the synchronisation primitive was
-                successfully freed
+@Return         None
 */
 /*****************************************************************************/
-PVRSRV_ERROR
+void
 SyncPrimFree(PVRSRV_CLIENT_SYNC_PRIM *psSync);
 
 /*************************************************************************/ /*!
@@ -161,10 +160,10 @@ SyncPrimFree(PVRSRV_CLIENT_SYNC_PRIM *psSync);
 
 @Input          ui32Value               Value to set it to
 
-@Return         PVRSRV_OK on success
+@Return         None
 */
 /*****************************************************************************/
-PVRSRV_ERROR
+void
 SyncPrimSet(PVRSRV_CLIENT_SYNC_PRIM *psSync, IMG_UINT32 ui32Value);
 
 #if defined(NO_HARDWARE)
@@ -178,10 +177,10 @@ SyncPrimSet(PVRSRV_CLIENT_SYNC_PRIM *psSync, IMG_UINT32 ui32Value);
 
 @Input          ui32Value               Value to update it to
 
-@Return         PVRSRV_OK on success
+@Return         None
 */
 /*****************************************************************************/
-PVRSRV_ERROR
+void
 SyncPrimNoHwUpdate(PVRSRV_CLIENT_SYNC_PRIM *psSync, IMG_UINT32 ui32Value);
 #endif
 
@@ -202,8 +201,8 @@ SyncPrimServerGetStatus(IMG_UINT32 ui32SyncCount,
 PVRSRV_ERROR
 SyncPrimServerQueueOp(PVRSRV_CLIENT_SYNC_PRIM_OP *psSyncOp);
 
-PVRSRV_ERROR
-SyncPrimIsServerSync(PVRSRV_CLIENT_SYNC_PRIM *psSync, IMG_BOOL *pbServerSync);
+IMG_BOOL
+SyncPrimIsServerSync(PVRSRV_CLIENT_SYNC_PRIM *psSync);
 
 IMG_HANDLE
 SyncPrimGetServerHandle(PVRSRV_CLIENT_SYNC_PRIM *psSync);
@@ -227,8 +226,8 @@ SyncPrimOpReady(PSYNC_OP_COOKIE psCookie,
 PVRSRV_ERROR
 SyncPrimOpComplete(PSYNC_OP_COOKIE psCookie);
 
-IMG_INTERNAL
-PVRSRV_ERROR SyncPrimOpDestroy(PSYNC_OP_COOKIE psCookie);
+void
+SyncPrimOpDestroy(PSYNC_OP_COOKIE psCookie);
 
 PVRSRV_ERROR
 SyncPrimOpResolve(PSYNC_OP_COOKIE psCookie,

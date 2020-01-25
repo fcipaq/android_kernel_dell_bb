@@ -59,7 +59,6 @@ typedef struct _PVRSRV_CLEANUP_THREAD_WORK_
 	CLEANUP_THREAD_FN pfnFree; /*!< function to be called */
 	void *pvData; /*!< private data for pfnFree */
 	IMG_UINT32 ui32RetryCount; /*!< number of times the callback should be re-tried when it returns error */
-	IMG_BOOL bDependsOnHW;
 } PVRSRV_CLEANUP_THREAD_WORK;
 
 /*!

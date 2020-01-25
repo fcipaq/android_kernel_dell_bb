@@ -68,55 +68,34 @@ extern "C" {
 				  "Offset of " #_a "." #_b " is not properly aligned")
 
 
-/* The following enum assumes only one of RGX_FEATURE_TLA or RGX_FEATURE_FASTRENDER_DM feature
- * is present. In case this is no more true, fail build to fix code */
-#if defined (RGX_FEATURE_TLA) && defined (RGX_FEATURE_FASTRENDER_DM)
-#error "Both RGX_FEATURE_TLA and RGX_FEATURE_FASTRENDER_DM defined. Fix code to handle this!"
+/*! The number of performance counters in each layout block */
+#if defined(RGX_FEATURE_CLUSTER_GROUPING)
+#define RGX_HWPERF_CNTRS_IN_BLK 6
+#define RGX_HWPERF_CNTRS_IN_BLK_MIN 4
+#else
+#define RGX_HWPERF_CNTRS_IN_BLK 4
+#define RGX_HWPERF_CNTRS_IN_BLK_MIN 4
 #endif
 
+
 /*! The master definition for data masters known to the firmware of RGX.
- * When a new DM is added to this enum, relevant entry should be added to
- * RGX_HWPERF_DM enum list.
  * The DM in a V1 HWPerf packet uses this definition. */
 typedef enum _RGXFWIF_DM_
 {
 	RGXFWIF_DM_GP			= 0,
-
-	/* Either TDM or 2D DM is present. The above build time error is present to verify this */
-	RGXFWIF_DM_2D			= 1, /* when RGX_FEATURE_TLA defined */
-	RGXFWIF_DM_TDM			= 1, /* when RGX_FEATURE_FASTRENDER_DM defined */
-
+	RGXFWIF_DM_2D			= 1,
 	RGXFWIF_DM_TA			= 2,
 	RGXFWIF_DM_3D			= 3,
 	RGXFWIF_DM_CDM			= 4,
-
-	/* present on Ray cores only */
+#if defined(RGX_FEATURE_RAY_TRACING)
 	RGXFWIF_DM_RTU			= 5,
 	RGXFWIF_DM_SHG			= 6,
-
+#endif
 	RGXFWIF_DM_LAST,
 
 	RGXFWIF_DM_FORCE_I32  = 0x7fffffff   /*!< Force enum to be at least 32-bits wide */
 } RGXFWIF_DM;
 
-typedef enum _RGX_KICK_TYPE_DM_
-{
-	RGX_KICK_TYPE_DM_GP			= 1 << 0,
-	RGX_KICK_TYPE_DM_TDM_2D		= 1 << 1,
-	RGX_KICK_TYPE_DM_TA			= 1 << 2,
-	RGX_KICK_TYPE_DM_3D			= 1 << 3,
-	RGX_KICK_TYPE_DM_CDM		= 1 << 4,
-	RGX_KICK_TYPE_DM_RTU		= 1 << 5,
-	RGX_KICK_TYPE_DM_SHG		= 1 << 6,
-	RGX_KICK_TYPE_DM_TQ2D		= 1 << 7,
-	RGX_KICK_TYPE_DM_TQ3D		= 1 << 8,
-	RGX_KICK_TYPE_DM_LAST		= 1 << 9
-} RGX_KICK_TYPE_DM;
-
-/* Maximum number of DM in use: GP, 2D/TDM, TA, 3D, CDM, SHG, RTU */
-#define RGXFWIF_DM_DEFAULT_MAX	(7)
-
-#if !defined(__KERNEL__)
 #if defined(RGX_FEATURE_RAY_TRACING)
 #define RGXFWIF_DM_MAX_MTS 8
 #else
@@ -124,37 +103,25 @@ typedef enum _RGX_KICK_TYPE_DM_
 #endif
 
 #if defined(RGX_FEATURE_RAY_TRACING)
-/* Maximum number of DM in use: GP, 2D/TDM, TA, 3D, CDM, SHG, RTU */
+/* Maximum number of DM in use: GP, 2D, TA, 3D, CDM, SHG, RTU */
 #define RGXFWIF_DM_MAX			(7)
 #else
-/* Maximum number of DM in use: GP, 2D/TDM, TA, 3D, CDM*/
 #define RGXFWIF_DM_MAX			(5)
-#endif
-#define RGXFWIF_HWDM_MAX		(RGXFWIF_DM_MAX)
-#else
-	#define RGXFWIF_DM_MIN_MTS_CNT (6)
-	#define RGXFWIF_RAY_TRACING_DM_MTS_CNT (2)
-	#define RGXFWIF_DM_MIN_CNT			(5)
-	#define RGXFWIF_RAY_TRACING_DM_CNT	(2)
-	#define RGXFWIF_DM_MAX	(RGXFWIF_DM_MIN_CNT + RGXFWIF_RAY_TRACING_DM_CNT)
 #endif
 
 /* Min/Max number of HW DMs (all but GP) */
 #if defined(RGX_FEATURE_TLA)
 #define RGXFWIF_HWDM_MIN		(1)
 #else
-#if defined(RGX_FEATURE_FASTRENDER_DM)
-#define RGXFWIF_HWDM_MIN		(1)
-#else
 #define RGXFWIF_HWDM_MIN		(2)
 #endif
-#endif
+#define RGXFWIF_HWDM_MAX		(RGXFWIF_DM_MAX)
 
 /*!
  ******************************************************************************
  * RGXFW Compiler alignment definitions
  *****************************************************************************/
-#if defined(__GNUC__) || defined(HAS_GNUC_ATTRIBUTES)
+#if defined(__GNUC__)
 #define RGXFW_ALIGN			__attribute__ ((aligned (8)))
 #elif defined(_MSC_VER)
 #define RGXFW_ALIGN			__declspec(align(8))

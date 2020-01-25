@@ -47,8 +47,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "allocmem.h"
 #include "pvr_debug.h"
 
-#include <linux/sched.h>
-
 #if defined (SUPPORT_ION)
 #include <linux/err.h>
 #include PVR_ANDROID_ION_HEADER
@@ -69,7 +67,7 @@ PVRSRV_ERROR OSConnectionPrivateDataInit(IMG_HANDLE *phOsPrivateData, void *pvOS
 	ENV_ION_CONNECTION_DATA *psIonConnection;
 #endif
 
-	*phOsPrivateData = OSAllocZMem(sizeof(ENV_CONNECTION_DATA));
+	*phOsPrivateData = OSAllocMem(sizeof(ENV_CONNECTION_DATA));
 
 	if (*phOsPrivateData == NULL)
 	{
@@ -78,21 +76,20 @@ PVRSRV_ERROR OSConnectionPrivateDataInit(IMG_HANDLE *phOsPrivateData, void *pvOS
 	}
 
 	psEnvConnection = (ENV_CONNECTION_DATA *)*phOsPrivateData;
-
-	psEnvConnection->owner = current->tgid;
+	OSMemSet(psEnvConnection, 0, sizeof(*psEnvConnection));
 
 	/* Save the pointer to our struct file */
 	psEnvConnection->psFile = psPrivData->psFile;
 	psEnvConnection->psDevNode = psPrivData->psDevNode;
 
 #if defined(SUPPORT_ION)
-	psIonConnection = (ENV_ION_CONNECTION_DATA *)OSAllocZMem(sizeof(ENV_ION_CONNECTION_DATA));
+	psIonConnection = (ENV_ION_CONNECTION_DATA *)OSAllocMem(sizeof(ENV_ION_CONNECTION_DATA));
 	if (psIonConnection == NULL)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "%s: OSAllocMem failed", __FUNCTION__));
 		return PVRSRV_ERROR_OUT_OF_MEMORY;
 	}
-
+	OSMemSet(psIonConnection, 0, sizeof(*psIonConnection));
 	psEnvConnection->psIonData = psIonConnection;
 	/*
 		We can have more then one connection per process so we need more then

@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for pvrtl
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for pvrtl
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for pvrtl
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,13 +45,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_PVRTL_BRIDGE_H
 #define COMMON_PVRTL_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "devicemem_typedefs.h"
-#include "pvrsrv_tlcommon.h"
+#include "pvr_tl.h"
 
 
 #define PVRSRV_BRIDGE_PVRTL_CMD_FIRST			0
@@ -59,11 +57,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_PVRTL_TLCLOSESTREAM			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+1
 #define PVRSRV_BRIDGE_PVRTL_TLACQUIREDATA			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+2
 #define PVRSRV_BRIDGE_PVRTL_TLRELEASEDATA			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+3
-#define PVRSRV_BRIDGE_PVRTL_TLDISCOVERSTREAMS			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+4
-#define PVRSRV_BRIDGE_PVRTL_TLRESERVESTREAM			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+5
-#define PVRSRV_BRIDGE_PVRTL_TLCOMMITSTREAM			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+6
-#define PVRSRV_BRIDGE_PVRTL_TLWRITEDATA			PVRSRV_BRIDGE_PVRTL_CMD_FIRST+7
-#define PVRSRV_BRIDGE_PVRTL_CMD_LAST			(PVRSRV_BRIDGE_PVRTL_CMD_FIRST+7)
+#define PVRSRV_BRIDGE_PVRTL_CMD_LAST			(PVRSRV_BRIDGE_PVRTL_CMD_FIRST+3)
 
 
 /*******************************************
@@ -73,7 +67,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 /* Bridge in structure for TLOpenStream */
 typedef struct PVRSRV_BRIDGE_IN_TLOPENSTREAM_TAG
 {
-	const IMG_CHAR * puiName;
+	IMG_CHAR * puiName;
 	IMG_UINT32 ui32Mode;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_TLOPENSTREAM;
 
@@ -139,86 +133,6 @@ typedef struct PVRSRV_BRIDGE_OUT_TLRELEASEDATA_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_TLRELEASEDATA;
-
-
-/*******************************************
-            TLDiscoverStreams          
- *******************************************/
-
-/* Bridge in structure for TLDiscoverStreams */
-typedef struct PVRSRV_BRIDGE_IN_TLDISCOVERSTREAMS_TAG
-{
-	const IMG_CHAR * puiNamePattern;
-	IMG_UINT32 ui32Max;
-	/* Output pointer pui32Streams is also an implied input */
-	IMG_UINT32 * pui32Streams;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_TLDISCOVERSTREAMS;
-
-/* Bridge out structure for TLDiscoverStreams */
-typedef struct PVRSRV_BRIDGE_OUT_TLDISCOVERSTREAMS_TAG
-{
-	IMG_UINT32 * pui32Streams;
-	IMG_UINT32 ui32NumFound;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_TLDISCOVERSTREAMS;
-
-
-/*******************************************
-            TLReserveStream          
- *******************************************/
-
-/* Bridge in structure for TLReserveStream */
-typedef struct PVRSRV_BRIDGE_IN_TLRESERVESTREAM_TAG
-{
-	IMG_HANDLE hSD;
-	IMG_UINT32 ui32Size;
-	IMG_UINT32 ui32SizeMin;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_TLRESERVESTREAM;
-
-/* Bridge out structure for TLReserveStream */
-typedef struct PVRSRV_BRIDGE_OUT_TLRESERVESTREAM_TAG
-{
-	IMG_UINT32 ui32BufferOffset;
-	IMG_UINT32 ui32Available;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_TLRESERVESTREAM;
-
-
-/*******************************************
-            TLCommitStream          
- *******************************************/
-
-/* Bridge in structure for TLCommitStream */
-typedef struct PVRSRV_BRIDGE_IN_TLCOMMITSTREAM_TAG
-{
-	IMG_HANDLE hSD;
-	IMG_UINT32 ui32ReqSize;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_TLCOMMITSTREAM;
-
-/* Bridge out structure for TLCommitStream */
-typedef struct PVRSRV_BRIDGE_OUT_TLCOMMITSTREAM_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_TLCOMMITSTREAM;
-
-
-/*******************************************
-            TLWriteData          
- *******************************************/
-
-/* Bridge in structure for TLWriteData */
-typedef struct PVRSRV_BRIDGE_IN_TLWRITEDATA_TAG
-{
-	IMG_HANDLE hSD;
-	IMG_UINT32 ui32Size;
-	IMG_BYTE * psData;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_TLWRITEDATA;
-
-/* Bridge out structure for TLWriteData */
-typedef struct PVRSRV_BRIDGE_OUT_TLWRITEDATA_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_TLWRITEDATA;
 
 
 #endif /* COMMON_PVRTL_BRIDGE_H */

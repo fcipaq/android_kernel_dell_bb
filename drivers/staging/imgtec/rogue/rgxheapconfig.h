@@ -41,97 +41,104 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-//#warning FIXME:  add the MMU specialisation defines here (or in hwdefs, perhaps?)
-
 #ifndef __RGXHEAPCONFIG_H__
 #define __RGXHEAPCONFIG_H__
 
 #include "rgxdefs_km.h"
 
-/*
-	RGX Device Virtual Address Space Definitions
-	NOTES:
-		Base addresses have to be a multiple of 4MiB
+#define DEV_DEVICE_TYPE			PVRSRV_DEVICE_TYPE_RGX
+#define DEV_DEVICE_CLASS		PVRSRV_DEVICE_CLASS_3D
 
-		RGX_PDSCODEDATA_HEAP_BASE and RGX_USCCODE_HEAP_BASE will be programmed,
-		on a global basis, into RGX_CR_PDS_EXEC_BASE and RGX_CR_USC_CODE_BASE_*
-		respectively. Therefore if clients use multiple configs they must still
-		be consistent with their definitions for these heaps.
+#define DEV_MAJOR_VERSION		1
+#define DEV_MINOR_VERSION		0
 
-		Shared virtual memory (GENERAL_SVM) support requires half of the address
-		space be reserved for SVM allocations unless BRN fixes are required in
-		which case the SVM heap is disabled. This is reflected in the device
-		connection capability bits returned to userspace.
-		
-		Variable page-size heap (GENERAL_NON4K) support splits available fixed
-		4K page-size heap (GENERAL) address space in half. The actual page size
-		defaults to 16K; AppHint PVRSRV_APPHINT_GENERAL_NON4K_HEAP_PAGE_SIZE
-		can be used to forced it to these values: 4K,64K,256K,1M,2M.
+/*      
+	RGX Device Virtual Address Space Definitions:
+
+	Notes:
+	Base addresses have to be a multiple of 4MiB
+	
+	RGX_PDSCODEDATA_HEAP_BASE and RGX_USCCODE_HEAP_BASE will be programmed, on a
+	global basis, into RGX_CR_PDS_EXEC_BASE and RGX_CR_USC_CODE_BASE_*
+	respectively.
+	Therefore if clients use multiple configs they must still be consistent with
+	their definitions for these heaps.
 */
 
-	/* Start at 4 MiB Size of 512 GiB less 4 MiB (managed by OS/Services) */
-	#define RGX_GENERAL_SVM_HEAP_BASE			IMG_UINT64_C(0x0000400000)
-	#define RGX_GENERAL_SVM_HEAP_SIZE			IMG_UINT64_C(0x7FFFC00000)
+#if RGX_FEATURE_VIRTUAL_ADDRESS_SPACE_BITS == 40
 
-	/* Start at 512GiB. Size of 256 GiB */
-	#define RGX_GENERAL_HEAP_BASE				IMG_UINT64_C(0x8000000000)
-	#define RGX_GENERAL_HEAP_SIZE				IMG_UINT64_C(0x4000000000)
+	/* Start at 128 Kb. Size of 256 Mb */
+//	#define RGX_3DPARAMETERS_HEAP_BASE			IMG_UINT64_C(0x0000020000)
+//  #define RGX_3DPARAMETERS_HEAP_SIZE			IMG_UINT64_C(0x0010000000)
 
-	/* Start at 768GiB. Size of 64 GiB */
-	#define RGX_GENERAL_NON4K_HEAP_BASE			IMG_UINT64_C(0xC000000000)
-	#define RGX_GENERAL_NON4K_HEAP_SIZE			IMG_UINT64_C(0x1000000000)
+	/* Start at 4GiB. Size of 512 GiB */
+	#define RGX_GENERAL_HEAP_BASE				IMG_UINT64_C(0x0100000000)
+    #define RGX_GENERAL_HEAP_SIZE				IMG_UINT64_C(0x8000000000)
 
-	/* Start at 832 GiB. Size of 32 GiB */
-	#define RGX_BIF_TILING_NUM_HEAPS			4
-	#define RGX_BIF_TILING_HEAP_SIZE			IMG_UINT64_C(0x0200000000)
-	#define RGX_BIF_TILING_HEAP_1_BASE			IMG_UINT64_C(0xD000000000)
-	#define RGX_BIF_TILING_HEAP_2_BASE			(RGX_BIF_TILING_HEAP_1_BASE + RGX_BIF_TILING_HEAP_SIZE)
-	#define RGX_BIF_TILING_HEAP_3_BASE			(RGX_BIF_TILING_HEAP_2_BASE + RGX_BIF_TILING_HEAP_SIZE)
-	#define RGX_BIF_TILING_HEAP_4_BASE			(RGX_BIF_TILING_HEAP_3_BASE + RGX_BIF_TILING_HEAP_SIZE)
+	/* start at 516 GiB. Size of 32 GiB */
+	#define RGX_BIF_TILING_NUM_HEAPS            4
+	#define RGX_BIF_TILING_HEAP_SIZE            IMG_UINT64_C(0x0200000000)
+	#define RGX_BIF_TILING_HEAP_1_BASE          IMG_UINT64_C(0x8100000000)
+	#define RGX_BIF_TILING_HEAP_2_BASE          (RGX_BIF_TILING_HEAP_1_BASE + RGX_BIF_TILING_HEAP_SIZE)
+	#define RGX_BIF_TILING_HEAP_3_BASE          (RGX_BIF_TILING_HEAP_2_BASE + RGX_BIF_TILING_HEAP_SIZE)
+	#define RGX_BIF_TILING_HEAP_4_BASE          (RGX_BIF_TILING_HEAP_3_BASE + RGX_BIF_TILING_HEAP_SIZE)
 
+#if defined(FIX_HW_BRN_52402)
 	/* HWBRN52402 workaround requires PDS memory to be below 16GB. Start at 8GB. Size of 4GB. */
-	#define RGX_PDSCODEDATA_BRN_52402_HEAP_BASE	IMG_UINT64_C(0x0200000000)
-	#define RGX_PDSCODEDATA_BRN_52402_HEAP_SIZE	IMG_UINT64_C(0x0100000000)
-
-	/* Start at 872 GiB. Size of 4 GiB */
-	#define RGX_PDSCODEDATA_HEAP_BASE			IMG_UINT64_C(0xDA00000000)
+	#define RGX_PDSCODEDATA_HEAP_BASE			IMG_UINT64_C(0x0200000000)
     #define RGX_PDSCODEDATA_HEAP_SIZE			IMG_UINT64_C(0x0100000000)
+#else
+	/* Start at 600GiB. Size of 4 GiB */
+	#define RGX_PDSCODEDATA_HEAP_BASE			IMG_UINT64_C(0x9600000000)
+    #define RGX_PDSCODEDATA_HEAP_SIZE			IMG_UINT64_C(0x0100000000)
+#endif
 
-	/* HWBRN63142 workaround requires Region Header memory to be at the top
-	   of a 16GB aligned range. This is so when masked with 0x03FFFFFFFF the
-	   address will avoid aliasing PB addresses. Start at 879.75GB. Size of 256MB. */
-	#define RGX_RGNHDR_BRN_63142_HEAP_BASE		IMG_UINT64_C(0xDBF0000000)
-	#define RGX_RGNHDR_BRN_63142_HEAP_SIZE		IMG_UINT64_C(0x0010000000)
-
-	/* Start at 880 GiB, Size of 1 MiB */
-	#define RGX_VISTEST_HEAP_BASE				IMG_UINT64_C(0xDC00000000)
-	#define RGX_VISTEST_HEAP_SIZE				IMG_UINT64_C(0x0000100000)
-
+/* start at 604GiB, size of 1 MiB */
+	#define RGX_VISTEST_HEAP_BASE			IMG_UINT64_C(0x9700000000)
+    #define RGX_VISTEST_HEAP_SIZE			IMG_UINT64_C(0x0000100000)
+ 
+#if defined(FIX_HW_BRN_52402)
 	/* HWBRN52402 workaround requires PDS memory to be below 16GB. Start at 12GB. Size of 4GB. */
-	#define RGX_USCCODE_BRN_52402_HEAP_BASE		IMG_UINT64_C(0x0300000000)
-	#define RGX_USCCODE_BRN_52402_HEAP_SIZE		IMG_UINT64_C(0x0100000000)
+	#define RGX_USCCODE_HEAP_BASE				IMG_UINT64_C(0x0300000000)
+    #define RGX_USCCODE_HEAP_SIZE				IMG_UINT64_C(0x0100000000)
+#else
+	/* Start at 800GiB. Size of 4 GiB */
+	#define RGX_USCCODE_HEAP_BASE				IMG_UINT64_C(0xC800000000)
+    #define RGX_USCCODE_HEAP_SIZE				IMG_UINT64_C(0x0100000000)
+#endif
+ 
+	/* Start at 903GiB. Size of 4 GiB for META and 32MB for MIPS*/
+#if defined(SUPPORT_PVRSRV_GPUVIRT) && defined(PVRSRV_GPUVIRT_GUESTDRV)
+	#define RGX_FIRMWARE_HEAP_BASE				(0xE1C0000000 + (PVRSRV_GPUVIRT_OSID * PVRSRV_GPUVIRT_FWHEAP_SIZE))
+#else
+	#define RGX_FIRMWARE_HEAP_BASE				IMG_UINT64_C(0xE1C0000000)
+#endif
 
-	/* Start at 896 GiB Size of 4 GiB */
-	#define RGX_USCCODE_HEAP_BASE				IMG_UINT64_C(0xE000000000)
-	#define RGX_USCCODE_HEAP_SIZE				IMG_UINT64_C(0x0100000000)
+#if defined(SUPPORT_PVRSRV_GPUVIRT)
+	#define RGX_FIRMWARE_HEAP_SIZE				PVRSRV_GPUVIRT_FWHEAP_SIZE
+#else
+#if defined(RGX_FEATURE_META)
+	#define RGX_FIRMWARE_HEAP_SIZE				IMG_UINT64_C(0x0100000000)
+#else
+	#define RGX_FIRMWARE_HEAP_SIZE				IMG_UINT64_C(0x0002000000)
+#endif
+#endif
 
-
-	/* Start at 903GiB. Size of 32MB per OSID (defined in rgxdefs_km.h)
-	   #define RGX_FIRMWARE_HEAP_BASE			IMG_UINT64_C(0xE1C0000000)
-	   #define RGX_FIRMWARE_HEAP_SIZE			(1<<RGX_FW_HEAP_SHIFT) 
-	   #define RGX_FIRMWARE_HEAP_SHIFT			RGX_FW_HEAP_SHIFT */
-
+#if defined(FIX_HW_BRN_52402) || defined(FIX_HW_BRN_55091)
 	/* HWBRN52402 & HWBRN55091 workarounds requires TQ memory to be below 16GB and 16GB aligned. Start at 0GB. Size of 8GB. */
-	#define RGX_TQ3DPARAMETERS_BRN_52402_55091_HEAP_BASE		IMG_UINT64_C(0x0000000000)
-	#define RGX_TQ3DPARAMETERS_BRN_52402_55091_HEAP_SIZE		IMG_UINT64_C(0x0200000000)
-
+    #define RGX_TQ3DPARAMETERS_HEAP_BASE		IMG_UINT64_C(0x0000000000)
+    #define RGX_TQ3DPARAMETERS_HEAP_SIZE		IMG_UINT64_C(0x0200000000)
+#else
 	/* Start at 912GiB. Size of 16 GiB. 16GB aligned to match RGX_CR_ISP_PIXEL_BASE */
-	#define RGX_TQ3DPARAMETERS_HEAP_BASE		IMG_UINT64_C(0xE400000000)
-	#define RGX_TQ3DPARAMETERS_HEAP_SIZE		IMG_UINT64_C(0x0400000000)
+    #define RGX_TQ3DPARAMETERS_HEAP_BASE		IMG_UINT64_C(0xE400000000)
+    #define RGX_TQ3DPARAMETERS_HEAP_SIZE		IMG_UINT64_C(0x0400000000)
+#endif
 
 	/* Size of 16 * 4 KB (think about large page systems .. */
-  	#define RGX_HWBRN37200_HEAP_BASE				IMG_UINT64_C(0xFFFFF00000)
-   	#define RGX_HWBRN37200_HEAP_SIZE				IMG_UINT64_C(0x0000100000)
+#if defined(FIX_HW_BRN_37200)
+    #define RGX_HWBRN37200_HEAP_BASE				IMG_UINT64_C(0xFFFFF00000)
+    #define RGX_HWBRN37200_HEAP_SIZE				IMG_UINT64_C(0x0000100000)
+#endif
 
 	/* Start at 928GiB. Size of 4 GiB */
 	#define RGX_DOPPLER_HEAP_BASE				IMG_UINT64_C(0xE800000000)
@@ -140,18 +147,65 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	/* Start at 932GiB. Size of 4 GiB */
 	#define RGX_DOPPLER_OVERFLOW_HEAP_BASE		IMG_UINT64_C(0xE900000000)
 	#define RGX_DOPPLER_OVERFLOW_HEAP_SIZE		IMG_UINT64_C(0x0100000000)
+	
+	/* signal we've identified the core by the build */
+	#define RGX_CORE_IDENTIFIED
+#endif /* RGX_FEATURE_VIRTUAL_ADDRESS_SPACE_BITS == 40 */
 
-	/* Start at 936GiB. Two groups of 128 KBytes that must follow each other in this order. */
-	#define RGX_SERVICES_SIGNALS_HEAP_BASE		IMG_UINT64_C(0xEA00000000)
-	#define RGX_SERVICES_SIGNALS_HEAP_SIZE		IMG_UINT64_C(0x0000020000)
+#if !defined(RGX_CORE_IDENTIFIED)
+	#error "rgxheapconfig.h: ERROR: unspecified RGX Core version"
+#endif
 
-	#define RGX_SIGNALS_HEAP_BASE				IMG_UINT64_C(0xEA00020000)
-	#define RGX_SIGNALS_HEAP_SIZE				IMG_UINT64_C(0x0000020000)
+/* /\********************************************************************************* */
+/*  * */
+/*  * Heap overlap check */
+/*  * */
+/*  ********************************************************************************\/ */
+/* #if defined(SUPPORT_RGX_GENERAL_MAPPING_HEAP) */
+/* 	#if ((RGX_GENERAL_MAPPING_HEAP_BASE + RGX_GENERAL_MAPPING_HEAP_SIZE) >= RGX_GENERAL_HEAP_BASE) */
+/* 		#error "rgxheapconfig.h: ERROR: RGX_GENERAL_MAPPING_HEAP overlaps RGX_GENERAL_HEAP" */
+/* 	#endif */
+/* #endif */
 
-	/* TDM TPU YUV coeffs - can be reduced to a single page */
-	#define RGX_TDM_TPU_YUV_COEFFS_HEAP_BASE	IMG_UINT64_C(0xEA00080000)
-	#define RGX_TDM_TPU_YUV_COEFFS_HEAP_SIZE	IMG_UINT64_C(0x0000040000)
+/* #if ((RGX_GENERAL_HEAP_BASE + RGX_GENERAL_HEAP_SIZE) >= RGX_3DPARAMETERS_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_GENERAL_HEAP overlaps RGX_3DPARAMETERS_HEAP" */
+/* #endif */
 
+/* #if ((RGX_3DPARAMETERS_HEAP_BASE + RGX_3DPARAMETERS_HEAP_SIZE) >= RGX_TADATA_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_3DPARAMETERS_HEAP overlaps RGX_TADATA_HEAP" */
+/* #endif */
+
+/* #if ((RGX_TADATA_HEAP_BASE + RGX_TADATA_HEAP_SIZE) >= RGX_SYNCINFO_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_TADATA_HEAP overlaps RGX_SYNCINFO_HEAP" */
+/* #endif */
+
+/* #if ((RGX_SYNCINFO_HEAP_BASE + RGX_SYNCINFO_HEAP_SIZE) >= RGX_PDSPIXEL_CODEDATA_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_SYNCINFO_HEAP overlaps RGX_PDSPIXEL_CODEDATA_HEAP" */
+/* #endif */
+
+/* #if ((RGX_PDSPIXEL_CODEDATA_HEAP_BASE + RGX_PDSPIXEL_CODEDATA_HEAP_SIZE) >= RGX_KERNEL_CODE_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_PDSPIXEL_CODEDATA_HEAP overlaps RGX_KERNEL_CODE_HEAP" */
+/* #endif */
+
+/* #if ((RGX_KERNEL_CODE_HEAP_BASE + RGX_KERNEL_CODE_HEAP_SIZE) >= RGX_PDSVERTEX_CODEDATA_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_KERNEL_CODE_HEAP overlaps RGX_PDSVERTEX_CODEDATA_HEAP" */
+/* #endif */
+
+/* #if ((RGX_PDSVERTEX_CODEDATA_HEAP_BASE + RGX_PDSVERTEX_CODEDATA_HEAP_SIZE) >= RGX_KERNEL_DATA_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_PDSVERTEX_CODEDATA_HEAP overlaps RGX_KERNEL_DATA_HEAP" */
+/* #endif */
+
+/* #if ((RGX_KERNEL_DATA_HEAP_BASE + RGX_KERNEL_DATA_HEAP_SIZE) >= RGX_PIXELSHADER_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_KERNEL_DATA_HEAP overlaps RGX_PIXELSHADER_HEAP" */
+/* #endif */
+
+/* #if ((RGX_PIXELSHADER_HEAP_BASE + RGX_PIXELSHADER_HEAP_SIZE) >= RGX_VERTEXSHADER_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_PIXELSHADER_HEAP overlaps RGX_VERTEXSHADER_HEAP" */
+/* #endif */
+
+/* #if ((RGX_VERTEXSHADER_HEAP_BASE + RGX_VERTEXSHADER_HEAP_SIZE) < RGX_VERTEXSHADER_HEAP_BASE) */
+/* 	#error "rgxheapconfig.h: ERROR: RGX_VERTEXSHADER_HEAP_BASE size cause wraparound" */
+/* #endif */
 
 #endif /* __RGXHEAPCONFIG_H__ */
 

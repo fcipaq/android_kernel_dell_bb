@@ -47,7 +47,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pdump_mmu.h"
 #include "pdump_osfunc.h"
 #include "pdump_km.h"
-#include "pdump_physmem.h"
 #include "osfunc.h"
 #include "pvr_debug.h"
 #include "pvrsrv_error.h"
@@ -55,6 +54,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define MAX_PDUMP_MMU_CONTEXTS	(10)
 static IMG_UINT32 guiPDumpMMUContextAvailabilityMask = (1<<MAX_PDUMP_MMU_CONTEXTS)-1;
 
+/* arbitrary buffer length here. */
+#define MAX_SYMBOLIC_ADDRESS_LENGTH 40
 
 #define MMUPX_FMT(X) ((X<3) ? ((X<2) ?  "MMUPT_\0" : "MMUPD_\0") : "MMUPC_\0")
 #define MIPSMMUPX_FMT(X) ((X<3) ? ((X<2) ?  "MIPSMMUPT_\0" : "MIPSMMUPD_\0") : "MIPSMMUPC_\0")
@@ -182,6 +183,8 @@ PVRSRV_ERROR PDumpMMUMalloc(const IMG_CHAR			*pszPDumpDevName,
 
 	PDUMP_GET_SCRIPT_STRING();
 
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
+
 	if (eMMULevel >= MMU_LEVEL_LAST)
 	{
 		eErr = PVRSRV_ERROR_INVALID_PARAMS;
@@ -263,6 +266,8 @@ PVRSRV_ERROR PDumpMMUFree(const IMG_CHAR				*pszPDumpDevName,
 
 	PDUMP_GET_SCRIPT_STRING();
 
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
+
 	if (eMMULevel >= MMU_LEVEL_LAST)
 	{
 		eErr = PVRSRV_ERROR_INVALID_PARAMS;
@@ -333,6 +338,8 @@ PVRSRV_ERROR PDumpMMUMalloc2(const IMG_CHAR			*pszPDumpDevName,
 
 	PDUMP_GET_SCRIPT_STRING();
 
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
+
 	PDUMP_LOCK();
 	/*
 		Write a comment to the PDump2 script streams indicating the memory allocation
@@ -388,6 +395,8 @@ PVRSRV_ERROR PDumpMMUFree2(const IMG_CHAR				*pszPDumpDevName,
 
 	PDUMP_GET_SCRIPT_STRING();
 
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
+
 	PDUMP_LOCK();
 	/*
 		Write a comment to the PDUMP2 script streams indicating the memory free
@@ -434,8 +443,8 @@ PVRSRV_ERROR PDumpPTBaseObjectToMem64(const IMG_CHAR *pszPDumpDevName,
 								  IMG_UINT64 ui64PxSymAddr)
 {
 
-	IMG_CHAR aszMemspaceNameDest[PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH];
-	IMG_CHAR aszSymbolicNameDest[PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH];
+	IMG_CHAR aszMemspaceNameDest[PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT];
+	IMG_CHAR aszSymbolicNameDest[PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT];
 	IMG_DEVMEM_OFFSET_T uiPDumpSymbolicOffsetDest;
 	IMG_DEVMEM_OFFSET_T uiNextSymNameDest;
 	PVRSRV_ERROR eErr = PVRSRV_OK;
@@ -445,9 +454,9 @@ PVRSRV_ERROR PDumpPTBaseObjectToMem64(const IMG_CHAR *pszPDumpDevName,
 
 	eErr = PMR_PDumpSymbolicAddr(psPMRDest,
 									 uiLogicalOffsetDest,
-									 PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH,
+									 PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT,
 									 aszMemspaceNameDest,
-									 PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH,
+									 PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT,
 									 aszSymbolicNameDest,
 									 &uiPDumpSymbolicOffsetDest,
 									 &uiNextSymNameDest);
@@ -516,12 +525,14 @@ PVRSRV_ERROR PDumpMMUDumpPxEntries(MMU_LEVEL eMMULevel,
     IMG_INT32  iShiftAmount;
     IMG_CHAR   *pszWrwSuffix = 0;
     void *pvRawBytes = 0;
-    IMG_CHAR aszPxSymbolicAddr[PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH];
+    IMG_CHAR aszPxSymbolicAddr[MAX_SYMBOLIC_ADDRESS_LENGTH];
     IMG_UINT64 ui64PxE64;
     IMG_UINT64 ui64Protflags64;
     IMG_CHAR *pszMMUPX;
 
 	PDUMP_GET_SCRIPT_STRING();
+
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
 
 	if (!PDumpReady())
 	{
@@ -557,7 +568,7 @@ PVRSRV_ERROR PDumpMMUDumpPxEntries(MMU_LEVEL eMMULevel,
 		pszMMUPX = MMUPX_FMT(eMMULevel);
 	}
     OSSNPrintf(aszPxSymbolicAddr,
-               PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH,
+               MAX_SYMBOLIC_ADDRESS_LENGTH,
                ":%s:%s%016llX",
                pszPDumpDevName,
                pszMMUPX,
@@ -897,11 +908,11 @@ static PVRSRV_ERROR _PdumpFreeMMUContext(IMG_UINT32 ui32MMUContextID)
 
 
 /**************************************************************************
- * Function Name  : PDumpMMUAllocMMUContext
+ * Function Name  : PDumpSetMMUContext
  * Inputs         :
  * Outputs        : None
  * Returns        : PVRSRV_ERROR
- * Description    : Alloc MMU Context
+ * Description    : Set MMU Context
 **************************************************************************/
 PVRSRV_ERROR PDumpMMUAllocMMUContext(const IMG_CHAR *pszPDumpMemSpaceName,
                                      IMG_DEV_PHYADDR sPCDevPAddr,
@@ -918,8 +929,7 @@ PVRSRV_ERROR PDumpMMUAllocMMUContext(const IMG_CHAR *pszPDumpMemSpaceName,
 	eErr = _PdumpAllocMMUContext(&ui32MMUContextID);
 	if(eErr != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: _PdumpAllocMMUContext failed: %d",
-				 __func__, eErr));
+		PVR_DPF((PVR_DBG_ERROR, "PDumpSetMMUContext: _PdumpAllocMMUContext failed: %d", eErr));
         PVR_DBG_BREAK;
 		goto ErrOut;
 	}
@@ -974,11 +984,11 @@ ErrOut:
 
 
 /**************************************************************************
- * Function Name  : PDumpMMUFreeMMUContext
+ * Function Name  : PDumpClearMMUContext
  * Inputs         :
  * Outputs        : None
  * Returns        : PVRSRV_ERROR
- * Description    : Free MMU Context
+ * Description    : Clear MMU Context
 **************************************************************************/
 PVRSRV_ERROR PDumpMMUFreeMMUContext(const IMG_CHAR *pszPDumpMemSpaceName,
                                     IMG_UINT32 ui32MMUContextID)
@@ -1012,8 +1022,7 @@ PVRSRV_ERROR PDumpMMUFreeMMUContext(const IMG_CHAR *pszPDumpMemSpaceName,
 	eErr = _PdumpFreeMMUContext(ui32MMUContextID);
 	if(eErr != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: _PdumpFreeMMUContext failed: %d",
-				 __func__, eErr));
+		PVR_DPF((PVR_DBG_ERROR, "PDumpClearMMUContext: _PdumpFreeMMUContext failed: %d", eErr));
 		goto ErrUnlock;
 	}
 
@@ -1039,6 +1048,8 @@ PVRSRV_ERROR PDumpMMUActivateCatalog(const IMG_CHAR *pszPDumpRegSpaceName,
 	PVRSRV_ERROR eErr = PVRSRV_OK;
 
 	PDUMP_GET_SCRIPT_STRING();
+
+	ui32Flags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
 
 	if (!PDumpReady())
 	{
@@ -1100,6 +1111,8 @@ PDumpMMUSAB(const IMG_CHAR *pszPDumpMemNamespace,
 
 	PDUMP_GET_SCRIPT_STRING();
 
+	ui32PDumpFlags |= ( PDumpIsPersistent() ) ? PDUMP_FLAGS_PERSISTENT : 0;
+
 	if (!PDumpReady())
 	{
 		eErr = PVRSRV_ERROR_PDUMP_NOT_AVAILABLE;
@@ -1150,10 +1163,10 @@ PVRSRV_ERROR PdumpWireUpMipsTLB(PMR *psPMRSource,
 								IMG_UINT32 ui32Flags)
 {
 	PVRSRV_ERROR eErr = PVRSRV_OK;
-	IMG_CHAR aszMemspaceNameSource[PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH];
-	IMG_CHAR aszSymbolicNameSource[PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH];
-	IMG_CHAR aszMemspaceNameDest[PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH];
-	IMG_CHAR aszSymbolicNameDest[PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH];
+	IMG_CHAR aszMemspaceNameSource[PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT];
+	IMG_CHAR aszSymbolicNameSource[PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT];
+	IMG_CHAR aszMemspaceNameDest[PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT];
+	IMG_CHAR aszSymbolicNameDest[PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT];
 	IMG_DEVMEM_OFFSET_T uiPDumpSymbolicOffsetSource;
 	IMG_DEVMEM_OFFSET_T uiPDumpSymbolicOffsetDest;
 	IMG_DEVMEM_OFFSET_T uiNextSymNameSource;
@@ -1164,9 +1177,9 @@ PVRSRV_ERROR PdumpWireUpMipsTLB(PMR *psPMRSource,
 
 	eErr = PMR_PDumpSymbolicAddr(psPMRSource,
 									 uiLogicalOffsetSource,
-									 PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH,
+									 PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT,
 									 aszMemspaceNameSource,
-									 PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH,
+									 PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT,
 									 aszSymbolicNameSource,
 									 &uiPDumpSymbolicOffsetSource,
 									 &uiNextSymNameSource);
@@ -1178,9 +1191,9 @@ PVRSRV_ERROR PdumpWireUpMipsTLB(PMR *psPMRSource,
 
 	eErr = PMR_PDumpSymbolicAddr(psPMRDest,
 									 uiLogicalOffsetDest,
-									 PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH,
+									 PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT,
 									 aszMemspaceNameDest,
-									 PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH,
+									 PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT,
 									 aszSymbolicNameDest,
 									 &uiPDumpSymbolicOffsetDest,
 									 &uiNextSymNameDest);
@@ -1255,8 +1268,8 @@ PVRSRV_ERROR PdumpInvalidateMipsTLB(PMR *psPMRDest,
 									IMG_UINT32 ui32Flags)
 {
 	PVRSRV_ERROR eErr = PVRSRV_OK;
-	IMG_CHAR aszMemspaceNameDest[PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH];
-	IMG_CHAR aszSymbolicNameDest[PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH];
+	IMG_CHAR aszMemspaceNameDest[PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT];
+	IMG_CHAR aszSymbolicNameDest[PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT];
 	IMG_DEVMEM_OFFSET_T uiPDumpSymbolicOffsetDest;
 	IMG_DEVMEM_OFFSET_T uiNextSymNameDest;
 
@@ -1265,9 +1278,9 @@ PVRSRV_ERROR PdumpInvalidateMipsTLB(PMR *psPMRDest,
 
 	eErr = PMR_PDumpSymbolicAddr(psPMRDest,
 									 uiLogicalOffsetDest,
-									 PHYSMEM_PDUMP_MEMSPACE_MAX_LENGTH,
+									 PMR_MAX_MEMSPACE_NAME_LENGTH_DEFAULT,
 									 aszMemspaceNameDest,
-									 PHYSMEM_PDUMP_SYMNAME_MAX_LENGTH,
+									 PMR_MAX_SYMBOLIC_ADDRESS_LENGTH_DEFAULT,
 									 aszSymbolicNameDest,
 									 &uiPDumpSymbolicOffsetDest,
 									 &uiNextSymNameDest);

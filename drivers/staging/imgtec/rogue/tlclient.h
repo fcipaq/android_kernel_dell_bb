@@ -48,6 +48,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_defs.h"
 #include "pvrsrv_error.h"
 
+#include "pvr_tlcommon.h"
+
 
 /* This value is used for the hSrvHandle argument in the client API when
  * called directly from the kernel which will lead to a direct bridge access.
@@ -71,7 +73,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /***************************************************************************/
 IMG_INTERNAL
 PVRSRV_ERROR TLClientOpenStream(IMG_HANDLE hSrvHandle,
-		const IMG_CHAR* pszName,
+		IMG_PCHAR    pszName,
 		IMG_UINT32   ui32Mode,
 		IMG_HANDLE*  phSD);
 
@@ -91,76 +93,6 @@ IMG_INTERNAL
 PVRSRV_ERROR TLClientCloseStream(IMG_HANDLE hSrvHandle,
 		IMG_HANDLE hSD);
 
-/**************************************************************************/ /*!
- @Function      TLClientDiscoverStreams
- @Description   Finds all streams that's name starts with pszNamePattern and
-                ends with a number.
- @Input         hSrvHandle      Address of a pointer to a connection object
- @Input         pszNamePattern  Name pattern. Must be beginning of a string.
- @Output        pui32Streams    Array of numbers from end of the discovered
-                names.
- @inOut         pui32Count      When input max number of number that can fit
-                                into pui32Streams. When output number of
-                                discovered streams.
- @Return		PVRSRV_ERROR    for system codes
-*/ /***************************************************************************/
-IMG_INTERNAL
-PVRSRV_ERROR TLClientDiscoverStreams(IMG_HANDLE hSrvHandle,
-		const IMG_CHAR *pszNamePattern,
-		IMG_UINT32 *pui32Streams,
-		IMG_UINT32 *pui32NumFound);
-
-/**************************************************************************/ /*!
- @Function      TLClientReserveStream
- @Description   Reserves a region with given size in the stream. If the stream
-                is already reserved the function will return an error.
- @Input         hSrvHandle      Address of a pointer to a connection object
- @Input         hSD             Handle of the stream object to close
- @Output        ppui8Data       pointer to the buffer
- @Input         ui32Size        size of the data
- @Return
-*/ /***************************************************************************/
-IMG_INTERNAL
-PVRSRV_ERROR TLClientReserveStream(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT8 **ppui8Data,
-		IMG_UINT32 ui32Size);
-
-/**************************************************************************/ /*!
- @Function      TLClientStreamReserve2
- @Description   Reserves a region with given size in the stream. If the stream
-                is already reserved the function will return an error.
- @Input         hSrvHandle      Address of a pointer to a connection object
- @Input         hSD             Handle of the stream object to close
- @Output        ppui8Data       pointer to the buffer
- @Input         ui32Size        size of the data
- @Input         ui32SizeMin     minimum size of the data
- @Input         ui32Available   available space in buffer
- @Return
-*/ /***************************************************************************/
-IMG_INTERNAL
-PVRSRV_ERROR TLClientReserveStream2(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT8 **ppui8Data,
-		IMG_UINT32 ui32Size,
-		IMG_UINT32 ui32SizeMin,
-		IMG_UINT32 *pui32Available);
-
-/**************************************************************************/ /*!
- @Function      TLClientStreamCommit
- @Description   Commits previously reserved region in the stream and therefore
-                allows next reserves.
-                This function call has to be preceded by the call to
-                TLClientReserveStream or TLClientReserveStream2.
- @Input         hSrvHandle      Address of a pointer to a connection object
- @Input         hSD             Handle of the stream object to close
- @Input         ui32Size        Size of the data
- @Return
-*/ /***************************************************************************/
-IMG_INTERNAL
-PVRSRV_ERROR TLClientCommitStream(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT32 ui32Size);
 
 /**************************************************************************/ /*!
  @Function		TLClientAcquireData
@@ -210,19 +142,6 @@ IMG_INTERNAL
 PVRSRV_ERROR TLClientReleaseData(IMG_HANDLE hSrvHandle,
 		IMG_HANDLE hSD);
 
-/**************************************************************************/ /*!
- @Function      TLClientWriteData
- @Description   Writes data to the stream.
- @Input         hSrvHandle      Address of a pointer to a connection object
- @Input         hSD             Handle of the stream object to read
- @Input         ui32Size        Size of the data
- @Input         pui8Data        Pointer to data
-*/ /***************************************************************************/
-IMG_INTERNAL
-PVRSRV_ERROR TLClientWriteData(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT32 ui32Size,
-		IMG_BYTE *pui8Data);
 
 
 #endif /* TLCLIENT_H_ */

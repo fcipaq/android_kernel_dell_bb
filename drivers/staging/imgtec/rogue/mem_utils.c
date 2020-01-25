@@ -41,34 +41,35 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-/* This workaround is only *required* on ARM64. Avoid building or including
- * it by default on other architectures, unless the 'safe memcpy' test flag
- * is enabled. (The code should work on other architectures.)
+
+#if defined(__KERNEL__)
+#include "osfunc.h"
+#include <linux/string.h>
+#include <linux/version.h>
+#else
+#include "services.h"
+#include <string.h>
+#endif
+
+#if (defined(__arm64__) || defined(__aarch64__) || defined (PVRSRV_DEVMEM_TEST_SAFE_MEMSETCPY)) && !defined(__QNXNTO__)
+
+/*
+ * Make sure that a working kernel is used when compiling for ARM32 because memset() plus
+ * some compiler optimisations can lead to undefined behaviour.
  */
+#if defined(__KERNEL__)
+#if defined(LINUX) && defined(CONFIG_ARM) && (LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0))
+#error "PVRSRVDeviceMemSet() not usable with kernel versions < 3.9, check build config"
+#endif
+#endif
 
-#if defined(__arm64__) || defined(__aarch64__) || defined (PVRSRV_DEVMEM_TEST_SAFE_MEMSETCPY)
+#define ZERO_BUF_SIZE 1024
 
-/* NOTE: This C file is compiled with -ffreestanding to avoid pattern matching
- *       by the compiler to stdlib functions, and it must only use the below
- *       headers. Do not include any IMG or services headers in this file.
- */
-#include <stddef.h>
-
-/* Prototypes to suppress warnings in -ffreestanding mode */
-void DeviceMemCopy(void *pvDst, const void *pvSrc, size_t uSize);
-void DeviceMemSet(void *pvDst, unsigned char ui8Value, size_t uSize);
-
-/* This file is only intended to be used on platforms which use GCC or Clang,
- * due to its requirement on __attribute__((vector_size(n))), typeof() and
- * __SIZEOF__ macros.
- */
 #if defined(__GNUC__)
-
-#define MIN(a, b) \
- ({__typeof(a) _a = (a); __typeof(b) _b = (b); _a > _b ? _b : _a;})
-
 #if !defined(DEVICE_MEMSETCPY_ALIGN_IN_BYTES)
-#define DEVICE_MEMSETCPY_ALIGN_IN_BYTES __SIZEOF_LONG__
+/* In case build system doesn't define below constant define it here to
+ * avoid build failure. */
+#define DEVICE_MEMSETCPY_ALIGN_IN_BYTES 8 // by default align to 8 bytes
 #endif
 #if DEVICE_MEMSETCPY_ALIGN_IN_BYTES % 2 != 0
 #error "DEVICE_MEMSETCPY_ALIGN_IN_BYTES must be a power of 2"
@@ -76,238 +77,203 @@ void DeviceMemSet(void *pvDst, unsigned char ui8Value, size_t uSize);
 #if DEVICE_MEMSETCPY_ALIGN_IN_BYTES < 4
 #error "DEVICE_MEMSETCPY_ALIGN_IN_BYTES must be equal or greater than 4"
 #endif
-
-#if __SIZEOF_POINTER__ != __SIZEOF_LONG__
-#error No support for architectures where void* and long are sized differently
+#define PVRSRV_MEM_ALIGN __attribute__ ((aligned (DEVICE_MEMSETCPY_ALIGN_IN_BYTES)))
+#define PVRSRV_MEM_XBIT_ALIGN_MASK (DEVICE_MEMSETCPY_ALIGN_IN_BYTES - 1)
+#define PVRSRV_MEM_32BIT_ALIGN_MASK (0x3)
+#else
+#error "PVRSRV Alignment macros need to be defined for this compiler"
 #endif
 
-#if   __SIZEOF_LONG__ >  DEVICE_MEMSETCPY_ALIGN_IN_BYTES
-/* Meaningless, and harder to do correctly */
-# error Cannot handle DEVICE_MEMSETCPY_ALIGN_IN_BYTES < sizeof(long)
-typedef unsigned long block_t;
-#elif __SIZEOF_LONG__ <= DEVICE_MEMSETCPY_ALIGN_IN_BYTES
-typedef unsigned int block_t
-	__attribute__((vector_size(DEVICE_MEMSETCPY_ALIGN_IN_BYTES)));
-# if defined(__arm64__) || defined(__aarch64__)
-#  if   DEVICE_MEMSETCPY_ALIGN_IN_BYTES == 8
-#   define DEVICE_MEMSETCPY_ARM64
-#   define REGSZ "w"
-#   define REGCL "w"
-#   define BVCLB "r"
-#  elif DEVICE_MEMSETCPY_ALIGN_IN_BYTES == 16
-#   define DEVICE_MEMSETCPY_ARM64
-#   define REGSZ "x"
-#   define REGCL "x"
-#   define BVCLB "r"
-#  elif DEVICE_MEMSETCPY_ALIGN_IN_BYTES == 32
-#   if defined(__ARM_NEON_FP)
-#    define DEVICE_MEMSETCPY_ARM64
-#    define REGSZ "q"
-#    define REGCL "v"
-#    define BVCLB "w"
-#   endif
-#  endif
-#  if defined(DEVICE_MEMSETCPY_ARM64)
-#   if defined(DEVICE_MEMSETCPY_ARM64_NON_TEMPORAL)
-#    define NSHLD() __asm__ ("dmb nshld")
-#    define NSHST() __asm__ ("dmb nshst")
-#    define LDP "ldnp"
-#    define STP "stnp"
-#   else
-#    define NSHLD()
-#    define NSHST()
-#    define LDP "ldp"
-#    define STP "stp"
-#   endif
- typedef unsigned int block_half_t
-	__attribute__((vector_size(DEVICE_MEMSETCPY_ALIGN_IN_BYTES / 2)));
-#  endif
-# endif
-#endif
-
-__attribute__((visibility("hidden")))
-void DeviceMemCopy(void *pvDst, const void *pvSrc, size_t uSize)
+/******************************************************************************
+ Function Name      : OSDeviceMemCopy / PVRSRVDeviceMemCopy
+ Inputs             : pvDst - pointer to the destination memory region
+                      pvSrc - pointer to the source memory region
+                      uiSize - size of the memory region that will be copied
+ Outputs            :
+ Returns            :
+ Description        : This is a counterpart of standard memcpy function for
+                      uncached memory. The reason for this function is that
+                      when uncached memory is used and the pointers are not
+                      64-bit aligned on Aarch64 architecture a memory
+                      exception will be thrown. This applies both to user and
+                      kernel space.
+******************************************************************************/
+IMG_EXPORT void PVRSRVDeviceMemCopy(
+        void* pvDst,
+        const void* pvSrc,
+        size_t uiSize)
 {
-	volatile const char *pcSrc = pvSrc;
-	volatile char *pcDst = pvDst;
-	size_t uPreambleBytes;
-	int bBlockCopy = 0;
+	/* Use volatile to avoid compiler optimisations */
+	volatile IMG_BYTE * pbySrc = (IMG_BYTE*)pvSrc;
+	volatile IMG_BYTE * pbyDst = (IMG_BYTE*)pvDst;
+	size_t uiTailSize = uiSize;
 
-	size_t uSrcUnaligned = (size_t)pcSrc % sizeof(block_t);
-	size_t uDstUnaligned = (size_t)pcDst % sizeof(block_t);
-
-	if (!uSrcUnaligned && !uDstUnaligned)
+	/* If both pointers have same alignment we can optimise. */
+	if (((uintptr_t)pbySrc & PVRSRV_MEM_XBIT_ALIGN_MASK)
+	        == ((uintptr_t)pbyDst & PVRSRV_MEM_XBIT_ALIGN_MASK))
 	{
-		/* Neither pointer is unaligned. Optimal case. */
-		bBlockCopy = 1;
+		size_t uiAlignedSize;
+		IMG_UINT uiHeadSize;
+
+		uiHeadSize = (sizeof(void *)
+		        - ((uintptr_t)pbySrc & PVRSRV_MEM_XBIT_ALIGN_MASK))
+		        & PVRSRV_MEM_XBIT_ALIGN_MASK;
+
+		/* For 64bit aligned pointers we will almost always (not if uiSize is 0)
+		 * go in and use memcpy if the size is large enough. For other aligned
+		 * pointers if size is large enough we will copy first few bytes to
+		 * align those pointers to 64bit then use memcpy and after that copy
+		 * remaining bytes.
+		 * If uiSize is less then uiHeadSize we will skip to byte-by-byte
+		 * copy since we can't use memcpy in such case. */
+		if (uiSize > uiHeadSize)
+		{
+			uiSize -= uiHeadSize;
+			uiTailSize = uiSize & PVRSRV_MEM_XBIT_ALIGN_MASK;
+			uiAlignedSize = uiSize - uiTailSize;
+
+			/* Copy few leading bytes to align pointer to 64bit boundary. */
+			while (uiHeadSize--)
+			{
+				*pbyDst++ = *pbySrc++;
+			}
+
+			/* here pointers are already 64bit aligned so we can use memcpy. */
+			memcpy((void*)pbyDst, (void*)pbySrc, uiAlignedSize);
+
+			/* skip over copied data */
+			pbyDst += uiAlignedSize;
+			pbySrc += uiAlignedSize;
+		}
 	}
+	/* If pointers are 32bit aligned but not aligned in relation to each
+	 * other.*/
+	else if ((((uintptr_t)pbySrc | (uintptr_t)pbyDst)
+	        & PVRSRV_MEM_32BIT_ALIGN_MASK) == 0)
+	{
+		volatile IMG_UINT32 * pui32Src = (IMG_UINT32*)pbySrc;
+		volatile IMG_UINT32 * pui32Dst = (IMG_UINT32*)pbyDst;
+		size_t uiAlignedSize;
+
+		uiTailSize = uiSize & PVRSRV_MEM_32BIT_ALIGN_MASK;
+		uiAlignedSize = uiSize - uiTailSize;
+
+		/* do the 4 byte copy */
+		uiSize = uiSize >> 2;
+		while (uiSize--)
+		{
+			*pui32Dst++ = *pui32Src++;
+		}
+
+		pbyDst += uiAlignedSize;
+		pbySrc += uiAlignedSize;
+	}
+
+	/* Copy either remaining memory if optimisation was performed but
+	 * size was not aligned or all memory if we need to. */
+	while (uiTailSize--)
+	{
+		*pbyDst++ = *pbySrc++;
+	}
+
+}
+
+/******************************************************************************
+ Function Name      : OSDeviceMemSet / PVRSRVDeviceMemSet
+ Inputs             : pvDest - pointer to destination memory
+                      ui8Value - the 'set' value
+                      uiSize - size of the memory block
+ Outputs            :
+ Returns            :
+ Description        : This is a counterpart of standard memset function for
+                      uncached memory. The reason for this function is that
+                      when uncached memory is used and the pointer is not
+                      64-bit aligned on Aarch64 architecture an memory
+                      exception will be thrown. This applies both to user and
+                      kernel space.
+******************************************************************************/
+IMG_EXPORT void PVRSRVDeviceMemSet(
+        void *pvDest,
+        IMG_UINT8 ui8Value,
+        size_t uiSize)
+{
+	/* Use volatile to avoid compiler optimisations */
+	volatile IMG_BYTE * pbyDst = (IMG_BYTE*)pvDest;
+	static IMG_BYTE gZeroBuf[ZERO_BUF_SIZE] PVRSRV_MEM_ALIGN = { 0 };
+
+	/* Run workaround if one of the address or size is not aligned, or
+	 * we are zeroing */
+	if ((ui8Value == 0) || ((((size_t)pbyDst | uiSize) & PVRSRV_MEM_XBIT_ALIGN_MASK) != 0))
+	{
+		IMG_UINT32 uiTailSize;
+
+		/* Buffer address unaligned */
+		if ((size_t)pbyDst & PVRSRV_MEM_XBIT_ALIGN_MASK)
+		{
+			/* Increment the buffer pointer */
+			for (; uiSize > 0 && ((size_t)pbyDst & PVRSRV_MEM_XBIT_ALIGN_MASK); uiSize--)
+			{
+				*pbyDst++ = ui8Value;
+			}
+			/* Did loop stop because size is zero? */
+			if (uiSize == 0) return;
+		}
+
+		/* Set the remaining part of the buffer */
+		if (ui8Value)
+		{
+			/* Non-zero set */
+			uiTailSize = (uiSize & PVRSRV_MEM_XBIT_ALIGN_MASK);
+
+			memset((void*) pbyDst, (IMG_INT) ui8Value, (size_t) uiSize-uiTailSize);
+			pbyDst += uiSize-uiTailSize;
+		}
+		else
+		{
+			/* Zero set */
+			uiTailSize = (uiSize & PVRSRV_MEM_XBIT_ALIGN_MASK);
+			uiSize -= uiTailSize;
+
+			while (uiSize > 1024)
+			{
+				memcpy((void*) pbyDst, gZeroBuf, (size_t) ZERO_BUF_SIZE);
+				pbyDst +=ZERO_BUF_SIZE;
+				uiSize -= ZERO_BUF_SIZE;
+			}
+			memcpy((void*) pbyDst, gZeroBuf, (size_t) uiSize);
+			pbyDst += uiSize;
+		}
+
+		/* Handle any tail bytes, loop skipped in tail is 0 */
+		for (; uiTailSize > 0; uiTailSize--)
+		{
+			*pbyDst++ = ui8Value;
+		}
+	}
+	/* Alignment fine, non-zero set, no need to work around device memory
+	 * use with ARM64 libc */
 	else
 	{
-		if (uSrcUnaligned == uDstUnaligned)
-		{
-			/* Neither pointer is usefully aligned, but they are misaligned in
-			 * the same way, so we can copy a preamble in a slow way, then
-			 * optimize the rest.
-			 */
-			uPreambleBytes = MIN(sizeof(block_t) - uDstUnaligned, uSize);
-			uSize -= uPreambleBytes;
-			while (uPreambleBytes)
-			{
-				*pcDst++ = *pcSrc++;
-				uPreambleBytes--;
-			}
-
-			bBlockCopy = 1;
-		}
-		else if ((uSrcUnaligned | uDstUnaligned) % sizeof(int) == 0)
-		{
-			/* Both pointers are at least 32-bit aligned, and we assume that
-			 * the processor must handle all kinds of 32-bit load-stores.
-			 * NOTE: Could we optimize this with a non-temporal version?
-			 */
-			if (uSize >= sizeof(int))
-			{
-				volatile int *piSrc = (int *)pcSrc;
-				volatile int *piDst = (int *)pcDst;
-
-				while (uSize >= sizeof(int))
-				{
-					*piDst++ = *piSrc++;
-					uSize -= sizeof(int);
-				}
-
-				pcSrc = (char *)piSrc;
-				pcDst = (char *)piDst;
-			}
-		}
-	}
-
-	if (bBlockCopy && uSize >= sizeof(block_t))
-	{
-		volatile block_t *pSrc = (block_t *)pcSrc;
-		volatile block_t *pDst = (block_t *)pcDst;
-
-		NSHLD();
-
-		while (uSize >= sizeof(block_t))
-		{
-#if defined(DEVICE_MEMSETCPY_ARM64)
-			__asm__ (LDP " " REGSZ "0, " REGSZ "1, [%[pSrc]]\n\t"
-			         STP " " REGSZ "0, " REGSZ "1, [%[pDst]]"
-						:
-						: [pSrc] "r" (pSrc), [pDst] "r" (pDst)
-						: "memory", REGCL "0", REGCL "1");
-#else
-			*pDst = *pSrc;
-#endif
-			pDst++;
-			pSrc++;
-			uSize -= sizeof(block_t);
-		}
-
-		NSHST();
-
-		pcSrc = (char *)pSrc;
-		pcDst = (char *)pDst;
-	}
-
-	while (uSize)
-	{
-		*pcDst++ = *pcSrc++;
-		uSize--;
+		memset(pvDest, (IMG_INT) ui8Value, (size_t) uiSize);
 	}
 }
 
-__attribute__((visibility("hidden")))
-void DeviceMemSet(void *pvDst, unsigned char ui8Value, size_t uSize)
+#else /* (defined(__arm64__) || defined(__aarch64__) || defined (PVRSRV_DEVMEM_TEST_SAFE_MEMSETCPY)) && !defined(__QNXNTO__) */
+
+IMG_EXPORT void PVRSRVDeviceMemCopy(
+        void*       pvDst,
+        const void* pvSrc,
+        size_t      uiSize)
 {
-	volatile char *pcDst = pvDst;
-	size_t uPreambleBytes;
-
-	size_t uDstUnaligned = (size_t)pcDst % sizeof(block_t);
-
-	if (uDstUnaligned)
-	{
-		uPreambleBytes = MIN(sizeof(block_t) - uDstUnaligned, uSize);
-		uSize -= uPreambleBytes;
-		while (uPreambleBytes)
-		{
-			*pcDst++ = ui8Value;
-			uPreambleBytes--;
-		}
-	}
-
-	if (uSize >= sizeof(block_t))
-	{
-		volatile block_t *pDst = (block_t *)pcDst;
-#if defined(DEVICE_MEMSETCPY_ARM64)
-		block_half_t bValue;
-#else
-		block_t bValue;
-# endif
-		size_t i;
-
-		for (i = 0; i < sizeof(bValue) / sizeof(unsigned int); i++)
-			bValue[i] = ui8Value << 24U |
-			            ui8Value << 16U |
-			            ui8Value <<  8U |
-			            ui8Value;
-
-		NSHLD();
-
-		while (uSize >= sizeof(block_t))
-		{
-#if defined(DEVICE_MEMSETCPY_ARM64)
-			__asm__ (STP " %" REGSZ "[bValue], %" REGSZ "[bValue], [%[pDst]]"
-						:
-						: [bValue] BVCLB (bValue), [pDst] "r" (pDst)
-						: "memory");
-#else
-			*pDst = bValue;
-#endif
-			pDst++;
-			uSize -= sizeof(block_t);
-		}
-
-		NSHST();
-
-		pcDst = (char *)pDst;
-	}
-
-	while (uSize)
-	{
-		*pcDst++ = ui8Value;
-		uSize--;
-	}
+	memcpy(pvDst, pvSrc, uiSize);
 }
 
-#else /* !defined(__GNUC__) */
-
-/* Potentially very slow (but safe) fallbacks for non-GNU C compilers */
-
-void DeviceMemCopy(void *pvDst, const void *pvSrc, size_t uSize)
+IMG_EXPORT void PVRSRVDeviceMemSet(
+        void *pvDest,
+        IMG_UINT8 ui8Value,
+        size_t uiSize)
 {
-	volatile const char *pcSrc = pvSrc;
-	volatile char *pcDst = pvDst;
-
-	while (uSize)
-	{
-		*pcDst++ = *pcSrc++;
-		uSize--;
-	}
+	memset(pvDest, ui8Value, uiSize);
 }
 
-void DeviceMemSet(void *pvDst, unsigned char ui8Value, size_t uSize)
-{
-	volatile char *pcDst = pvDst;
-
-	while (uSize)
-	{
-		*pcDst++ = ui8Value;
-		uSize--;
-	}
-}
-
-#endif /* !defined(__GNUC__) */
-
-#endif /* defined(__arm64__) || defined(__aarch64__) || defined (PVRSRV_DEVMEM_TEST_SAFE_MEMSETCPY) */
+#endif /* (defined(__arm64__) || defined(__aarch64__) || defined (PVRSRV_DEVMEM_TEST_SAFE_MEMSETCPY))) && !defined(__QNXNTO__) */

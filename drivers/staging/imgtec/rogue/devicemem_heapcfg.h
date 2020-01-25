@@ -44,16 +44,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __DEVICEMEMHEAPCFG_H__
 #define __DEVICEMEMHEAPCFG_H__
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 
 
-/* FIXME: Find a better way of defining _PVRSRV_DEVICE_NODE_ */
 struct _PVRSRV_DEVICE_NODE_;
-/* FIXME: Find a better way of defining _CONNECTION_DATA_ */
 struct _CONNECTION_DATA_;
 
 
@@ -70,45 +66,40 @@ struct _CONNECTION_DATA_;
 /* blueprint for a single heap */
 typedef struct _DEVMEM_HEAP_BLUEPRINT_
 {
-	/* Name of this heap - for debug purposes, and perhaps for lookup
-	by name? */
-	const IMG_CHAR *pszName;
+    /* Name of this heap - for debug purposes, and perhaps for lookup
+       by name? */
+    const IMG_CHAR *pszName;
 
-	/* Virtual address of the beginning of the heap.  This _must_ be a
-	multiple of the data page size for the heap.  It is
-	_recommended_ that it be coarser than that - especially, it
-	should begin on a boundary appropriate to the MMU for the
-	device.  For Rogue, this is a Page Directory boundary, or 1GB
-	(virtual address a multiple of 0x0040000000). */
-	IMG_DEV_VIRTADDR sHeapBaseAddr;
+    /* Virtual address of the beginning of the heap.  This _must_ be a
+       multiple of the data page size for the heap.  It is
+       _recommended_ that it be coarser than that - especially, it
+       should begin on a boundary appropriate to the MMU for the
+       device.  For Rogue, this is a Page Directory boundary, or 1GB
+       (virtual address a multiple of 0x0040000000). */
+    IMG_DEV_VIRTADDR sHeapBaseAddr;
 
-	/* Length of the heap.  Given that the END address of the heap has
-	a similar restriction to that of the _beginning_ of the heap.
-	That is the heap length _must_ be a whole number of data pages.
-	Again, the recommendation is that it ends on a 1GB boundary.
-	Again, this is not essential, but we do know that (at the time
-	of writing) the current implementation of mmu_common.c is such
-	that no two heaps may share a page directory, thus the
-	remaining virtual space would be wasted if the length were not
-	a multiple of 1GB */
-	IMG_DEVMEM_SIZE_T uiHeapLength;
+    /* Length of the heap.  Given that the END address of the heap has
+       a similar restriction to that of the _beginning_ of the heap.
+       That is the heap length _must_ be a whole number of data pages.
+       Again, the recommendation is that it ends on a 1GB boundary.
+       Again, this is not essential, but we do know that (at the time
+       of writing) the current implementation of mmu_common.c is such
+       that no two heaps may share a page directory, thus the
+       remaining virtual space would be wasted if the length were not
+       a multiple of 1GB */
+    IMG_DEVMEM_SIZE_T uiHeapLength;
 
-	/* Data page size.  This is the page size that is going to get
-	programmed into the MMU, so it needs to be a valid one for the
-	device.  Importantly, the start address and length _must_ be
-	multiples of this page size.  Note that the page size is
-	specified as the log 2 relative to 1 byte (e.g. 12 indicates
-	4kB) */
-	IMG_UINT32 uiLog2DataPageSize;
+    /* Data page size.  This is the page size that is going to get
+       programmed into the MMU, so it needs to be a valid one for the
+       device.  Importantly, the start address and length _must_ be
+       multiples of this page size.  Note that the page size is
+       specified as the log 2 relative to 1 byte (e.g. 12 indicates
+       4kB) */
+    IMG_UINT32 uiLog2DataPageSize;
 
-	/* Import alignment.  Force imports to this heap to be
-	aligned to at least this value */
-	IMG_UINT32 uiLog2ImportAlignment;
-
-	/* Tiled heaps have an optimum byte-stride, this can be derived from
-	the heap alignment and tiling mode. This is abstracted here such that
-	Log2ByteStride = Log2Alignment - Log2TilingStrideFactor */
-	IMG_UINT32 uiLog2TilingStrideFactor;
+    /* Import alignment.  Force imports to this heap to be
+       aligned to at least this value */
+    IMG_UINT32 uiLog2ImportAlignment;
 } DEVMEM_HEAP_BLUEPRINT;
 
 /* entire named heap config */

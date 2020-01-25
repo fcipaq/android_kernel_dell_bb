@@ -47,8 +47,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgxmem.h"
 #include "rgxfwutils.h"
 #include "allocmem.h"
-#include "sync.h"
-#include "rgxhwperf.h"
 
 #if defined(SUPPORT_NATIVE_FENCE_SYNC)
 #include "pvr_sync.h"
@@ -80,11 +78,13 @@ PVRSRV_ERROR PVRSRVRGXCreateKickSyncContextKM(CONNECTION_DATA             * psCo
 
 	/* Prepare cleanup struct */
 	* ppsKickSyncContext = NULL;
-	psKickSyncContext = OSAllocZMem(sizeof(*psKickSyncContext));
+	psKickSyncContext = OSAllocMem(sizeof(* psKickSyncContext));
 	if (psKickSyncContext == NULL)
 	{
 		return PVRSRV_ERROR_OUT_OF_MEMORY;
 	}
+
+	OSMemSet(psKickSyncContext, 0, sizeof(*psKickSyncContext));
 
 	psKickSyncContext->psDeviceNode = psDeviceNode;
 
@@ -147,8 +147,7 @@ PVRSRV_ERROR PVRSRVRGXDestroyKickSyncContextKM(RGX_SERVER_KICKSYNC_CONTEXT * psK
 	eError = RGXFWRequestCommonContextCleanUp(psKickSyncContext->psDeviceNode,
 	                                          psKickSyncContext->psServerCommonContext,
 	                                          psKickSyncContext->psSync,
-	                                          RGXFWIF_DM_3D,
-	                                          PDUMP_FLAGS_NONE);
+	                                          RGXFWIF_DM_3D);
 
 	if (eError == PVRSRV_ERROR_RETRY)
 	{
@@ -182,19 +181,17 @@ PVRSRV_ERROR PVRSRVRGXDestroyKickSyncContextKM(RGX_SERVER_KICKSYNC_CONTEXT * psK
 
 IMG_EXPORT
 PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext,
-
-                                 IMG_UINT32                    ui32ClientCacheOpSeqNum,
-
+                                 
                                  IMG_UINT32                    ui32ClientFenceCount,
                                  SYNC_PRIMITIVE_BLOCK           ** pauiClientFenceUFOSyncPrimBlock,
                                  IMG_UINT32                  * paui32ClientFenceOffset,
                                  IMG_UINT32                  * paui32ClientFenceValue,
-
+                                 
                                  IMG_UINT32                    ui32ClientUpdateCount,
                                  SYNC_PRIMITIVE_BLOCK           ** pauiClientUpdateUFOSyncPrimBlock,
                                  IMG_UINT32                  * paui32ClientUpdateOffset,
                                  IMG_UINT32                  * paui32ClientUpdateValue,
-
+                                 
                                  IMG_UINT32                    ui32ServerSyncPrims,
                                  IMG_UINT32                  * paui32ServerSyncFlags,
                                  SERVER_SYNC_PRIMITIVE      ** pasServerSyncs,
@@ -204,7 +201,8 @@ PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext
                                  IMG_INT32                   * pi32UpdateFenceFD,
                                  IMG_CHAR                      szFenceName[32],
 
-                                 IMG_UINT32                    ui32ExtJobRef)
+                                 IMG_UINT32                    ui32ExtJobRef,
+                                 IMG_UINT32                    ui32IntJobRef)
 {
 	RGXFWIF_KCCB_CMD         sKickSyncKCCBCmd;
 	RGX_CCB_CMD_HELPER_DATA  asCmdHelperData[1];
@@ -215,12 +213,12 @@ PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext
 	PRGXFWIF_UFO_ADDR        *pauiClientUpdateUFOAddress;
 	IMG_INT32                i32UpdateFenceFD = -1;
 	IMG_UINT32               ui32JobId;
-	IMG_UINT32               ui32FWCtx = FWCommonContextGetFWAddress(psKickSyncContext->psServerCommonContext).ui32Addr;
 
 #if defined(SUPPORT_NATIVE_FENCE_SYNC)
 	/* Android fd sync update info */
 	struct pvr_sync_append_data *psFDFenceData = NULL;
 #endif
+	PVR_UNREFERENCED_PARAMETER(ui32IntJobRef);
 	
 	ui32JobId = OSAtomicIncrement(&psKickSyncContext->hJobId);
 
@@ -301,18 +299,16 @@ PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext
 	                                paui32ClientUpdateValue,
 	                                ui32ServerSyncPrims,
 	                                paui32ServerSyncFlags,
-	                                SYNC_FLAG_MASK_ALL,
 	                                pasServerSyncs,
 	                                0,
 	                                NULL,
 	                                NULL,
 	                                NULL,
 	                                NULL,
-	                                RGXFWIF_CCB_CMD_TYPE_NULL,
+	                                RGXFWIF_CCB_CMD_TYPE_3D,
 	                                ui32ExtJobRef,
 	                                ui32JobId,
-	                                PDUMP_FLAGS_NONE,
-	                                NULL,
+	                                IMG_FALSE,
 	                                "KickSync",
 	                                asCmdHelperData);
 	if (eError != PVRSRV_OK)
@@ -323,6 +319,7 @@ PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext
 	eError = RGXCmdHelperAcquireCmdCCB(IMG_ARR_NUM_ELEMS(asCmdHelperData), asCmdHelperData);
 	if (eError != PVRSRV_OK)
 	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXKickSync: Failed to acquire space for client CCB command"));
 		goto fail_cmdaquire;
 	}
 
@@ -354,36 +351,24 @@ PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKickSyncContext
 	sKickSyncKCCBCmd.uCmdData.sCmdKickData.psContext = FWCommonContextGetFWAddress(psKickSyncContext->psServerCommonContext);
 	sKickSyncKCCBCmd.uCmdData.sCmdKickData.ui32CWoffUpdate = RGXGetHostWriteOffsetCCB(FWCommonContextGetClientCCB(psKickSyncContext->psServerCommonContext));
 	sKickSyncKCCBCmd.uCmdData.sCmdKickData.ui32NumCleanupCtl = 0;
-	sKickSyncKCCBCmd.uCmdData.sCmdKickData.sWorkloadDataFWAddress.ui32Addr = 0;
-	sKickSyncKCCBCmd.uCmdData.sCmdKickData.ui32WorkEstCmdHeaderOffset = 0;
-	
-	/*
-	 * Submit the kicksync command to the firmware.
-	 */
-	RGX_HWPERF_HOST_ENQ(psKickSyncContext, OSGetCurrentClientProcessIDKM(),
-	                    ui32FWCtx, ui32ExtJobRef, ui32JobId,
-	                    RGX_HWPERF_KICK_TYPE_SYNC);
 
+	/*
+	 * Submit the compute command to the firmware.
+	 */
 	LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
 	{
 		eError2 = RGXScheduleCommand(psKickSyncContext->psDeviceNode->pvDevice,
 		                             RGXFWIF_DM_3D,
 		                             & sKickSyncKCCBCmd,
 		                             sizeof(sKickSyncKCCBCmd),
-		                             ui32ClientCacheOpSeqNum,
-		                             PDUMP_FLAGS_NONE);
+		                             IMG_FALSE);
 		if (eError2 != PVRSRV_ERROR_RETRY)
 		{
 			break;
 		}
 		OSWaitus(MAX_HW_TIME_US/WAIT_TRY_COUNT);
 	} END_LOOP_UNTIL_TIMEOUT();
-
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-		RGXHWPerfFTraceGPUEnqueueEvent(psKickSyncContext->psDeviceNode->pvDevice,
-					ui32FWCtx, ui32JobId, RGX_HWPERF_KICK_TYPE_SYNC);
-#endif
-
+	
 	if (eError2 != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,

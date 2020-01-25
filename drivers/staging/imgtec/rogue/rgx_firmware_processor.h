@@ -48,45 +48,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "km/rgxdefs_km.h"
 
+#if defined(RGX_FEATURE_META)
 #include "rgx_meta.h"
+#else
 #include "rgx_mips.h"
-
-/* Processor independent need to be defined here common for all processors */
-typedef enum
-{
-	FW_PERF_CONF_NONE = 0,
-	FW_PERF_CONF_ICACHE = 1,
-	FW_PERF_CONF_DCACHE = 2,
-	FW_PERF_CONF_POLLS = 3,
-	FW_PERF_CONF_CUSTOM_TIMER = 4,
-	FW_PERF_CONF_JTLB_INSTR = 5,
-	FW_PERF_CONF_INSTRUCTIONS = 6
-} FW_PERF_CONF;
-
-#if !defined(__KERNEL__)
-	#if defined(RGX_FEATURE_MIPS)
-
-		#define FW_CORE_ID_VALUE                                      RGXMIPSFW_CORE_ID_VALUE
-		#define RGXFW_PROCESSOR                                       RGXFW_PROCESSOR_MIPS
-
-		/* Firmware to host interrupts defines */
-		#define RGXFW_CR_IRQ_STATUS                                   RGX_CR_MIPS_WRAPPER_IRQ_STATUS
-		#define RGXFW_CR_IRQ_STATUS_EVENT_EN                          RGX_CR_MIPS_WRAPPER_IRQ_STATUS_EVENT_EN
-		#define RGXFW_CR_IRQ_CLEAR                                    RGX_CR_MIPS_WRAPPER_IRQ_CLEAR
-		#define RGXFW_CR_IRQ_CLEAR_MASK                               RGX_CR_MIPS_WRAPPER_IRQ_CLEAR_EVENT_EN
-
-	#else
-
-		#define RGXFW_PROCESSOR         RGXFW_PROCESSOR_META
-
-		/* Firmware to host interrupts defines */
-		#define RGXFW_CR_IRQ_STATUS           RGX_CR_META_SP_MSLVIRQSTATUS
-		#define RGXFW_CR_IRQ_STATUS_EVENT_EN  RGX_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_EN
-		#define RGXFW_CR_IRQ_CLEAR            RGX_CR_META_SP_MSLVIRQSTATUS
-		#define RGXFW_CR_IRQ_CLEAR_MASK       (RGX_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_CLRMSK & \
-													RGX_CR_META_SP_MSLVIRQSTATUS_MASKFULL)
-
-	#endif
 #endif
 
 #endif /* RGX_FIRMWARE_PROCESSOR_H */

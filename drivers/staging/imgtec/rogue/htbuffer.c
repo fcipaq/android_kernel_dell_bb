@@ -140,10 +140,14 @@ HTBControl(
 static PVRSRV_ERROR
 _HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, HTB_LOG_SFids SF, va_list args)
 {
-#if defined(__KERNEL__)
 	IMG_UINT32 i;
 	IMG_UINT32 ui32NumArgs = HTB_SF_PARAMNUM(SF);
 	IMG_UINT32 aui32Args[HTB_LOG_MAX_PARAMS];
+
+#if !defined(__KERNEL__)
+	PVR_ASSERT(0=="HTB Logging in UM is not yet supported");
+	return PVRSRV_ERROR_NOT_SUPPORTED;
+#endif
 
 	PVR_ASSERT(ui32NumArgs <= HTB_LOG_MAX_PARAMS);
 	ui32NumArgs = (ui32NumArgs>HTB_LOG_MAX_PARAMS)? HTB_LOG_MAX_PARAMS: ui32NumArgs;
@@ -155,16 +159,6 @@ _HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, HTB_L
 	}
 
 	return BridgeHTBLog(hSrvHandle, PID, ui32TimeStampus, SF, ui32NumArgs, aui32Args);
-#else
-	PVR_UNREFERENCED_PARAMETER(hSrvHandle);
-	PVR_UNREFERENCED_PARAMETER(PID);
-	PVR_UNREFERENCED_PARAMETER(ui32TimeStampus);
-	PVR_UNREFERENCED_PARAMETER(SF);
-	PVR_UNREFERENCED_PARAMETER(args);
-
-	PVR_ASSERT(0=="HTB Logging in UM is not yet supported");
-	return PVRSRV_ERROR_NOT_SUPPORTED;
-#endif
 }
 
 
@@ -188,7 +182,7 @@ _HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, HTB_L
 
 */ /**************************************************************************/
 IMG_INTERNAL PVRSRV_ERROR
-HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, IMG_UINT32 SF, ...)
+HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, HTB_LOG_SFids SF, ...)
 {
 	PVRSRV_ERROR eError;
 	va_list args;
@@ -211,7 +205,7 @@ HTBLog(IMG_HANDLE hSrvHandle, IMG_UINT32 PID, IMG_UINT32 ui32TimeStampus, IMG_UI
 
 */ /**************************************************************************/
 IMG_INTERNAL PVRSRV_ERROR
-HTBLogSimple(IMG_HANDLE hSrvHandle, IMG_UINT32 SF, ...)
+HTBLogSimple(IMG_HANDLE hSrvHandle, HTB_LOG_SFids SF, ...)
 {
 	PVRSRV_ERROR eError;
 	va_list args;

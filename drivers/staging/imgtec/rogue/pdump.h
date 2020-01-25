@@ -46,13 +46,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 typedef IMG_UINT32 PDUMP_FLAGS_T;
 
-#define PDUMP_FLAGS_NONE		0x00000000UL /*<! Output this entry with no special treatment i.e. output only if in frame range */
 
 #define PDUMP_FLAGS_DEINIT		    0x20000000UL /*<! Output this entry to the de-initialisation section */
 
 #define PDUMP_FLAGS_POWER		0x08000000UL /*<! Output this entry even when a power transition is ongoing */
 
-#define PDUMP_FLAGS_CONTINUOUS		PDUMP_CONT /*<! Defined in serviceS_km.h */
+#define PDUMP_FLAGS_CONTINUOUS		PVRSRV_PDUMP_FLAGS_CONTINUOUS /*<! Defined in serviceS_km.h */
 
 #define PDUMP_FLAGS_PERSISTENT		0x80000000UL /*<! Output this entry always regardless of app and range,
                                                       used by persistent processes e.g. compositor, window mgr etc/ */
@@ -75,6 +74,5 @@ typedef IMG_UINT32 PDUMP_FILEOFFSET_T;
 #define PDUMP_PARAM_N_FILE_NAME     "%%0%%_%02u.prm" /*!< Param filename used when PRM file split */
 #define PDUMP_PARAM_MAX_FILE_NAME   32               /*!< Max Size of parameter name used in out2.txt */
 
-#define PDUMP_IS_CONTINUOUS(flags) 	((flags & PDUMP_FLAGS_CONTINUOUS) != 0)
 
 #endif /* _SERVICES_PDUMP_H_ */

@@ -48,16 +48,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_types.h"
 #include "pvrsrv_error.h"
 #include "pdump.h"
-#include "devicemem.h"
 #include "devicemem_utils.h"
 #include "devicemem_pdump.h"
 #include "client_pdumpmm_bridge.h"
-#if defined(LINUX) && !defined(__KERNEL__)
-#include <stdio.h>
-#if defined(SUPPORT_ANDROID_PLATFORM)
-#include "android_utils.h"
-#endif
-#endif
 
 IMG_INTERNAL void
 DevmemPDumpLoadMem(DEVMEM_MEMDESC *psMemDesc,
@@ -156,7 +149,6 @@ DevmemPDumpLoadMemValue64(DEVMEM_MEMDESC *psMemDesc,
     PVR_ASSERT(eError == PVRSRV_OK);
 }
 
-/* FIXME: This should be server side only */
 IMG_INTERNAL PVRSRV_ERROR
 DevmemPDumpPageCatBaseToSAddr(DEVMEM_MEMDESC		*psMemDesc,
 							  IMG_DEVMEM_OFFSET_T	*puiMemOffset,
@@ -220,7 +212,6 @@ DevmemPDumpSaveToFile(DEVMEM_MEMDESC *psMemDesc,
 
 
 
-/* FIXME: Remove? */
 IMG_INTERNAL void
 DevmemPDumpSaveToFileVirtual(DEVMEM_MEMDESC *psMemDesc,
                              IMG_DEVMEM_OFFSET_T uiOffset,

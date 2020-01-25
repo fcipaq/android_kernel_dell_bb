@@ -59,6 +59,8 @@ PVRSRV_ERROR SrvInit(void);
 IMG_INTERNAL PVRSRV_ERROR RGXInit(SHARED_DEV_CONNECTION hServices);
 #endif
 
+IMG_INTERNAL void _ParseHTBAppHints(SHARED_DEV_CONNECTION hServices);
+
 #if defined (__cplusplus)
 }
 #endif

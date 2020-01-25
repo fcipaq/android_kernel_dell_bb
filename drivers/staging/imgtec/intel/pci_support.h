@@ -45,13 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
-#if defined(LINUX)
-#include <linux/pci.h>
-#define TO_PCI_COOKIE(dev) to_pci_dev((struct device *)(dev))
-#else
-#define TO_PCI_COOKIE(dev) (dev)
-#endif
-
 typedef enum _HOST_PCI_INIT_FLAGS_
 {
 	HOST_PCI_INIT_FLAG_BUS_MASTER	= 0x00000001,

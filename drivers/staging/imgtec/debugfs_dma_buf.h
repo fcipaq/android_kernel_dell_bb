@@ -1,8 +1,5 @@
-/* -*- mode: c; indent-tabs-mode: t; c-basic-offset: 8; tab-width: 8 -*- */
-/* vi: set ts=8 sw=8 sts=8: */
 /*************************************************************************/ /*!
 @File           debugfs_dma_buf.h
-@Codingstyle    LinuxKernel
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
 
@@ -41,6 +38,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
+/* vi: set ts=8: */
 
 #ifndef _DEBUGFS_DMA_BUF_H
 #define _DEBUGFS_DMA_BUF_H

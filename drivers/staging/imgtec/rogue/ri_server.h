@@ -94,13 +94,6 @@ PVRSRV_ERROR RIDumpAllKM(void);
 
 PVRSRV_ERROR RIDumpProcessKM(IMG_PID pid);
 
-#if defined(DEBUG)
-PVRSRV_ERROR RIDumpProcessListKM(PMR *hPMR,
-								 IMG_PID pid,
-								 IMG_UINT64 ui64Offset,
-								 IMG_DEV_VIRTADDR *psDevVAddr);
-#endif
-
 IMG_BOOL RIGetListEntryKM(IMG_PID pid,
 						  IMG_HANDLE **ppHandle,
 						  IMG_CHAR **ppszEntryString);

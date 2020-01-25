@@ -64,8 +64,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 
-
-
 /* ***************************************************************************
  * Server-side bridge entry points
  */
@@ -83,7 +81,6 @@ PVRSRVBridgePDumpTraceBuffer(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
 	psPDumpTraceBufferOUT->eError =
 		PVRSRVPDumpTraceBufferKM(psConnection, OSGetDevData(psConnection),
 					psPDumpTraceBufferIN->ui32PDumpFlags);
@@ -92,12 +89,8 @@ PVRSRVBridgePDumpTraceBuffer(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgePDumpSignatureBuffer(IMG_UINT32 ui32DispatchTableEntry,
@@ -105,7 +98,6 @@ PVRSRVBridgePDumpSignatureBuffer(IMG_UINT32 ui32DispatchTableEntry,
 					  PVRSRV_BRIDGE_OUT_PDUMPSIGNATUREBUFFER *psPDumpSignatureBufferOUT,
 					 CONNECTION_DATA *psConnection)
 {
-
 
 
 
@@ -121,12 +113,8 @@ PVRSRVBridgePDumpSignatureBuffer(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
-
-
 	return 0;
 }
-
 
 
 
@@ -162,3 +150,4 @@ PVRSRV_ERROR DeinitRGXPDUMPBridge(void)
 {
 	return PVRSRV_OK;
 }
+

@@ -50,8 +50,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "allocmem.h"
 #include "osfunc.h"
 #include "pvrsrv.h"
-#include "devicemem_server_utils.h"
 #include "physmem_lma.h"
+#include "pdump_physmem.h"
 #include "pdump_km.h"
 #include "pmr.h"
 #include "pmr_impl.h"
@@ -86,16 +86,16 @@ typedef struct _PMR_LMALLOCARRAY_DATA_ {
 	IMG_BOOL bOnDemand;
 
 	/*
+	  for pdump...
+	*/
+	IMG_BOOL bPDumpMalloced;
+	IMG_HANDLE hPDumpAllocInfo;
+
+	/*
 	  record at alloc time whether poisoning will be required when the
 	  PMR is freed.
 	*/
 	IMG_BOOL bPoisonOnFree;
-
-	/* Physical heap and arena pointers for this allocation */
-	PHYS_HEAP* psPhysHeap;
-	RA_ARENA* psArena;
-	PVRSRV_MEMALLOCFLAGS_T uiAllocFlags;
-
 } PMR_LMALLOCARRAY_DATA;
 
 static PVRSRV_ERROR _MapAlloc(PVRSRV_DEVICE_NODE *psDevNode, 
@@ -105,7 +105,6 @@ static PVRSRV_ERROR _MapAlloc(PVRSRV_DEVICE_NODE *psDevNode,
 							  PMR_FLAGS_T ulFlags,
 							  void **pvPtr)
 {
-	IMG_UINT32 ui32CPUCacheFlags = DevmemCPUCacheMode(psDevNode, ulFlags);
 	IMG_CPU_PHYADDR sCpuPAddr;
 	PHYS_HEAP *psPhysHeap;
 
@@ -120,7 +119,7 @@ static PVRSRV_ERROR _MapAlloc(PVRSRV_DEVICE_NODE *psDevNode,
 
 	PhysHeapDevPAddrToCpuPAddr(psPhysHeap, 1, &sCpuPAddr, psDevPAddr);
 
-	*pvPtr = OSMapPhysToLin(sCpuPAddr, uiSize, ui32CPUCacheFlags);
+	*pvPtr = OSMapPhysToLin(sCpuPAddr,	uiSize,	ulFlags);
 	if (*pvPtr == NULL)
 	{
 		return PVRSRV_ERROR_OUT_OF_MEMORY;
@@ -137,7 +136,7 @@ static void _UnMapAlloc(PVRSRV_DEVICE_NODE *psDevNode,
 						PMR_FLAGS_T ulFlags,
 						void *pvPtr)
 {
-	OSUnMapPhysToLin(pvPtr, uiSize, PVRSRV_CPU_CACHE_MODE(ulFlags));
+	OSUnMapPhysToLin(pvPtr, uiSize, 0);
 }
 
 static PVRSRV_ERROR
@@ -159,7 +158,7 @@ _PoisonAlloc(PVRSRV_DEVICE_NODE *psDevNode,
 					   psDevPAddr,
 					   uiAllocSize,
 					   bFwLocalAlloc,
-					   PVRSRV_MEMALLOCFLAG_CPU_UNCACHED,
+					   0,
 					   &pvKernLin);
 	if (eError != PVRSRV_OK)
 	{
@@ -200,19 +199,14 @@ _ZeroAlloc(PVRSRV_DEVICE_NODE *psDevNode,
 					   psDevPAddr,
 					   uiAllocSize,
 					   bFwLocalAlloc,
-					   PVRSRV_MEMALLOCFLAG_CPU_UNCACHED,
+					   0,
 					   &pvKernLin);
 	if (eError != PVRSRV_OK)
 	{
 		goto map_failed;
 	}
 
-	/* NOTE: 'CachedMemSet' means the operating system default memset, which
-	 *       we *assume* in the LMA code will be faster, and doesn't need to
-	 *       worry about ARM64.
-	 */
-	OSCachedMemSet(pvKernLin, 0, uiAllocSize);
-
+	OSMemSet(pvKernLin, 0, uiAllocSize);
 	_UnMapAlloc(psDevNode, uiAllocSize, bFwLocalAlloc, 0, pvKernLin);
 
 	return PVRSRV_OK;
@@ -233,7 +227,7 @@ _AllocLMPageArray(PVRSRV_DEVICE_NODE *psDevNode,
 			  PMR_SIZE_T uiChunkSize,
 			  IMG_UINT32 ui32NumPhysChunks,
 			  IMG_UINT32 ui32NumVirtChunks,
-			  IMG_UINT32 *pabMappingTable,
+			  IMG_BOOL *pabMappingTable,
 			  IMG_UINT32 uiLog2PageSize,
 			  IMG_BOOL bZero,
 			  IMG_BOOL bPoisonOnAlloc,
@@ -241,8 +235,6 @@ _AllocLMPageArray(PVRSRV_DEVICE_NODE *psDevNode,
 			  IMG_BOOL bContig,
 			  IMG_BOOL bOnDemand,
 			  IMG_BOOL bFwLocalAlloc,
-			  PHYS_HEAP* psPhysHeap,
-			  PVRSRV_MEMALLOCFLAGS_T uiAllocFlags,
 			  PMR_LMALLOCARRAY_DATA **ppsPageArrayDataPtr
 			  )
 {
@@ -267,12 +259,13 @@ _AllocLMPageArray(PVRSRV_DEVICE_NODE *psDevNode,
 		goto errorOnParam;
 	}
 
-	psPageArrayData = OSAllocZMem(sizeof(PMR_LMALLOCARRAY_DATA));
+	psPageArrayData = OSAllocMem(sizeof(PMR_LMALLOCARRAY_DATA));
 	if (psPageArrayData == NULL)
 	{
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		goto errorOnAllocArray;
 	}
+	OSMemSet(psPageArrayData, 0, sizeof(PMR_LMALLOCARRAY_DATA));
 
 	if (bContig)
 	{
@@ -311,9 +304,14 @@ _AllocLMPageArray(PVRSRV_DEVICE_NODE *psDevNode,
 		goto errorOnAllocAddr;
 	}
 
-	OSCachedMemSet(&psPageArrayData->pasDevPAddr[0], INVALID_PAGE, sizeof(IMG_DEV_PHYADDR)*
+	OSMemSet(&psPageArrayData->pasDevPAddr[0], INVALID_PAGE, sizeof(IMG_DEV_PHYADDR)*
 												psPageArrayData->uiTotalNumPages);
 
+	/* N.B.  We have a window of opportunity where a failure in
+	   createPMR the finalize function can be called before the PMR
+	   MALLOC and thus the hPDumpAllocInfo won't be set.  So we have
+	   to conditionally call the PDumpFree function. */
+	psPageArrayData->bPDumpMalloced = IMG_FALSE;
     psPageArrayData->iNumPagesAllocated = 0;
     psPageArrayData->bZeroOnAlloc = bZero;
 	psPageArrayData->bPoisonOnAlloc = bPoisonOnAlloc;
@@ -321,8 +319,6 @@ _AllocLMPageArray(PVRSRV_DEVICE_NODE *psDevNode,
  	psPageArrayData->bHasLMPages = IMG_FALSE;
  	psPageArrayData->bOnDemand = bOnDemand;
  	psPageArrayData->bFwLocalAlloc = bFwLocalAlloc;
- 	psPageArrayData->psPhysHeap = psPhysHeap;
- 	psPageArrayData->uiAllocFlags = uiAllocFlags;
 
 	*ppsPageArrayDataPtr = psPageArrayData;
 
@@ -346,25 +342,33 @@ static PVRSRV_ERROR
 _AllocLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData, IMG_UINT32 *pui32MapTable)
 {
 	PVRSRV_ERROR eError;
+	IMG_BOOL bAllocResult;
 	RA_BASE_T uiCardAddr;
 	RA_LENGTH_T uiActualSize;
 	IMG_UINT32 i,ui32Index=0;
 	IMG_UINT32 uiAllocSize;
 	IMG_UINT32 uiLog2AllocSize;
-	IMG_UINT32 uiRegionId;
 	PVRSRV_DEVICE_NODE *psDevNode;
 	IMG_BOOL bPoisonOnAlloc;
 	IMG_BOOL bZeroOnAlloc;
 	RA_ARENA *pArena;
 
 	PVR_ASSERT(NULL != psPageArrayData);
-	PVR_ASSERT(0 <= psPageArrayData->iNumPagesAllocated);
+    PVR_ASSERT(0 <= psPageArrayData->iNumPagesAllocated);
 
-	uiAllocSize = psPageArrayData->uiAllocSize;
-	uiLog2AllocSize = psPageArrayData->uiLog2AllocSize;
-	psDevNode = psPageArrayData->psDevNode;
-	bPoisonOnAlloc =  psPageArrayData->bPoisonOnAlloc;
-	bZeroOnAlloc =  psPageArrayData->bZeroOnAlloc;
+    uiAllocSize = psPageArrayData->uiAllocSize;
+    uiLog2AllocSize = psPageArrayData->uiLog2AllocSize;
+    psDevNode = psPageArrayData->psDevNode;
+    bPoisonOnAlloc = psPageArrayData->bPoisonOnAlloc;
+    bZeroOnAlloc = psPageArrayData->bZeroOnAlloc;
+    pArena = psDevNode->psLocalDevMemArena;
+
+    if(psPageArrayData->uiTotalNumPages < (psPageArrayData->iNumPagesAllocated + psPageArrayData->uiPagesToAlloc))
+    {
+    	PVR_DPF((PVR_DBG_ERROR,"Pages requested to allocate larger than original PMR alloc Size"));
+    	eError = PVRSRV_ERROR_PMR_BAD_MAPPINGTABLE_SIZE;
+    	return eError;
+    }
 
 #if defined(SUPPORT_PVRSRV_GPUVIRT)
 	if (psPageArrayData->bFwLocalAlloc)
@@ -373,43 +377,23 @@ _AllocLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData, IMG_UINT32 *pui32MapTable)
 		pArena = psDevNode->psKernelFwMemArena[psDevNode->uiKernelFwRAIdx];
 		psDevNode->uiKernelFwRAIdx = 0;
 	}
-	else
 #endif
-	{
-		/* Get suitable local memory region for this allocation */
-		uiRegionId = PhysHeapGetRegionId(psPageArrayData->psPhysHeap, psPageArrayData->uiAllocFlags);
-
-		PVR_ASSERT(uiRegionId < psDevNode->ui32NumOfLocalMemArenas);
-		pArena = psDevNode->apsLocalDevMemArenas[uiRegionId];
-	}
-
-	if(psPageArrayData->uiTotalNumPages < (psPageArrayData->iNumPagesAllocated + psPageArrayData->uiPagesToAlloc))
-	{
-		PVR_DPF((PVR_DBG_ERROR,"Pages requested to allocate larger than original PMR alloc Size"));
-		eError = PVRSRV_ERROR_PMR_BAD_MAPPINGTABLE_SIZE;
-		return eError;
-	}
-
-
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-	{
-		IMG_UINT32  ui32OSid=0, ui32OSidReg=0;
-		IMG_BOOL    bOSidAxiProt;
-		IMG_PID     pId;
-
-		pId=OSGetCurrentClientProcessIDKM();
-		RetrieveOSidsfromPidList(pId, &ui32OSid, &ui32OSidReg, &bOSidAxiProt);
-
-		pArena=psDevNode->psOSidSubArena[ui32OSid];
-		PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): Giving from OS slot %d",ui32OSid));
-	}
-#endif
-
-	psPageArrayData->psArena = pArena;
 
 	for(i=0;i<psPageArrayData->uiPagesToAlloc;i++)
 	{
 
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+{
+		IMG_UINT32  ui32OSid=0, ui32OSidReg=0;
+		IMG_PID     pId;
+
+		pId=OSGetCurrentClientProcessIDKM();
+		RetrieveOSidsfromPidList(pId, &ui32OSid, &ui32OSidReg);
+
+		pArena=psDevNode->psOSidSubArena[ui32OSid];
+		PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): Giving from OS slot %d",ui32OSid));
+}
+#endif
 		/*This part of index finding should happen before allocating page. Just avoiding intricate paths */
 		if(psPageArrayData->uiTotalNumPages == psPageArrayData->uiPagesToAlloc)
 		{
@@ -440,15 +424,15 @@ _AllocLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData, IMG_UINT32 *pui32MapTable)
 			}
 		}
 
-		eError = RA_Alloc(pArena,
-		                  uiAllocSize,
-		                  RA_NO_IMPORT_MULTIPLIER,
-		                  0,                       /* No flags */
-		                  1ULL << uiLog2AllocSize,
-		                  "LMA_Page_Alloc",
-		                  &uiCardAddr,
-		                  &uiActualSize,
-		                  NULL);                   /* No private handle */
+		bAllocResult = RA_Alloc(pArena,
+								uiAllocSize,
+								RA_NO_IMPORT_MULTIPLIER,
+								0,                                      /* No flags */
+								1ULL << uiLog2AllocSize,
+								&uiCardAddr,
+								&uiActualSize,
+								NULL);                      /* No private handle */
+
 
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
 {
@@ -456,7 +440,7 @@ _AllocLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData, IMG_UINT32 *pui32MapTable)
 }
 #endif
 
-		if (PVRSRV_OK != eError)
+		if (!bAllocResult)
 		{
 			PVR_DPF((PVR_DBG_ERROR,"Failed to Allocate the page @index:%d",ui32Index));
 			eError = PVRSRV_ERROR_PMR_FAILED_TO_ALLOC_PAGES;
@@ -544,7 +528,7 @@ PVR_DPF((PVR_DBG_ERROR,
 
 		if(ui32Index < psPageArrayData->uiTotalNumPages)
 		{
-			RA_Free(pArena, psPageArrayData->pasDevPAddr[ui32Index].uiAddr);
+			RA_Free(psDevNode->psLocalDevMemArena, psPageArrayData->pasDevPAddr[ui32Index].uiAddr);
 			psPageArrayData->pasDevPAddr[ui32Index].uiAddr = INVALID_PAGE;
 		}
 	}
@@ -569,10 +553,10 @@ _FreeLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData,IMG_UINT32 *pui32FreeIndices
 {
 	IMG_UINT32 uiAllocSize;
 	IMG_UINT32 i,ui32PagesToFree=0,ui32PagesFreed=0,ui32Index=0;
-	RA_ARENA *pArena = psPageArrayData->psArena;
+	PVRSRV_DEVICE_NODE *psDevNode = psPageArrayData->psDevNode;
+	RA_ARENA *pArena = psDevNode->psLocalDevMemArena;
 
 #if defined(SUPPORT_PVRSRV_GPUVIRT)
-	PVRSRV_DEVICE_NODE *psDevNode = psPageArrayData->psDevNode;
 	if (psPageArrayData->bFwLocalAlloc)
 	{
 		PVR_ASSERT(psDevNode->uiKernelFwRAIdx < RGXFW_NUM_OS);
@@ -612,6 +596,7 @@ _FreeLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData,IMG_UINT32 *pui32FreeIndices
 			}
 
 			RA_Free(pArena,	psPageArrayData->pasDevPAddr[ui32Index].uiAddr);
+			psPageArrayData->pasDevPAddr[ui32Index].uiAddr = INVALID_PAGE;
 
 #if defined(PVRSRV_ENABLE_PROCESS_STATS)
 #if !defined(PVRSRV_ENABLE_MEMORY_STATS)
@@ -619,11 +604,10 @@ _FreeLMPages(PMR_LMALLOCARRAY_DATA *psPageArrayData,IMG_UINT32 *pui32FreeIndices
 			PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_ALLOC_LMA_PAGES, uiAllocSize);
 #else
 			{
-				PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_LMA_PAGES, psPageArrayData->pasDevPAddr[ui32Index].uiAddr);
+				PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_LMA_PAGES, psPageArrayData->pasDevPAddr[i].uiAddr);
 			}
 #endif
 #endif
-			psPageArrayData->pasDevPAddr[ui32Index].uiAddr = INVALID_PAGE;
 		}
 	}
 	psPageArrayData->iNumPagesAllocated -= ui32PagesFreed;
@@ -656,6 +640,13 @@ PMRFinalizeLocalMem(PMR_IMPL_PRIVDATA pvPriv
 
 	psLMAllocArrayData = pvPriv;
 
+	/* Conditionally do the PDump free, because if CreatePMR failed we
+	   won't have done the PDump MALLOC.  */
+	if (psLMAllocArrayData->bPDumpMalloced)
+	{
+		PDumpFree(psLMAllocArrayData->hPDumpAllocInfo);
+	}
+
 	/*  We can't free pages until now. */
 	if (psLMAllocArrayData->bHasLMPages)
 	{
@@ -672,7 +663,8 @@ PMRFinalizeLocalMem(PMR_IMPL_PRIVDATA pvPriv
 /* callback function for locking the system physical page addresses.
    As we are LMA there is nothing to do as we control physical memory. */
 static PVRSRV_ERROR
-PMRLockSysPhysAddressesLocalMem(PMR_IMPL_PRIVDATA pvPriv)
+PMRLockSysPhysAddressesLocalMem(PMR_IMPL_PRIVDATA pvPriv,
+							 IMG_UINT32 uiLog2DevPageSize)
 {
 
     PVRSRV_ERROR eError;
@@ -689,6 +681,8 @@ PMRLockSysPhysAddressesLocalMem(PMR_IMPL_PRIVDATA pvPriv)
     		return eError;
     	}
     }
+
+	PVR_UNREFERENCED_PARAMETER(uiLog2DevPageSize);
 
 	return PVRSRV_OK;
 
@@ -720,7 +714,6 @@ PMRUnlockSysPhysAddressesLocalMem(PMR_IMPL_PRIVDATA pvPriv
 /* N.B.  It is assumed that PMRLockSysPhysAddressesLocalMem() is called _before_ this function! */
 static PVRSRV_ERROR
 PMRSysPhysAddrLocalMem(PMR_IMPL_PRIVDATA pvPriv,
-					   IMG_UINT32 ui32Log2PageSize,
 					   IMG_UINT32 ui32NumOfPages,
 					   IMG_DEVMEM_OFFSET_T *puiOffset,
 					   IMG_BOOL *pbValid,
@@ -732,16 +725,6 @@ PMRSysPhysAddrLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 	IMG_UINT64 uiAllocIndex;
 	IMG_DEVMEM_OFFSET_T uiInAllocOffset;
 	PMR_LMALLOCARRAY_DATA *psLMAllocArrayData = pvPriv;
-
-	if (psLMAllocArrayData->uiLog2AllocSize < ui32Log2PageSize)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-		         "%s: Requested physical addresses from PMR "
-		         "for incompatible contiguity %u!",
-		         __FUNCTION__,
-		         ui32Log2PageSize));
-		return PVRSRV_ERROR_PMR_INCOMPATIBLE_CONTIGUITY;
-	}
 
 	uiNumAllocs = psLMAllocArrayData->uiTotalNumPages;
 	if (uiNumAllocs > 1)
@@ -789,7 +772,8 @@ PMRAcquireKernelMappingDataLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 	PMR_LMALLOCARRAY_DATA *psLMAllocArrayData = NULL;
 	void *pvKernLinAddr = NULL;
 	IMG_UINT32 ui32PageIndex = 0;
-	size_t uiOffsetMask = uiOffset;
+
+	PVR_UNREFERENCED_PARAMETER(ulFlags);
 
 	psLMAllocArrayData = pvPriv;
 
@@ -809,7 +793,6 @@ PMRAcquireKernelMappingDataLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 
 		/* Locate the desired physical page to map in */
 		ui32PageIndex = uiOffset >> psLMAllocArrayData->uiLog2AllocSize;
-		uiOffsetMask = (1U << psLMAllocArrayData->uiLog2AllocSize) - 1;
 	}
 
 	PVR_ASSERT(ui32PageIndex < psLMAllocArrayData->uiTotalNumPages);
@@ -821,7 +804,7 @@ PMRAcquireKernelMappingDataLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 						ulFlags,
 						&pvKernLinAddr);
 
-	*ppvKernelAddressOut = ((IMG_CHAR *) pvKernLinAddr) + (uiOffset & uiOffsetMask);
+	*ppvKernelAddressOut = ((IMG_CHAR *) pvKernLinAddr) + (uiOffset & ((1U << psLMAllocArrayData->uiLog2AllocSize) - 1));
 	*phHandleOut = pvKernLinAddr;
 
 	return eError;
@@ -901,7 +884,7 @@ CopyBytesLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 								&psLMAllocArrayData->pasDevPAddr[uiAllocIndex],
 								psLMAllocArrayData->uiAllocSize,
 								psLMAllocArrayData->bFwLocalAlloc,
-								PVRSRV_MEMALLOCFLAG_CPU_UNCACHED,
+								0,
 								&pvMapping);
 			if (eError != PVRSRV_OK)
 			{
@@ -930,7 +913,7 @@ CopyBytesLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 								&psLMAllocArrayData->pasDevPAddr[0],
 								psLMAllocArrayData->uiAllocSize,
 								psLMAllocArrayData->bFwLocalAlloc,
-								PVRSRV_MEMALLOCFLAG_CPU_UNCACHED,
+								0,
 								&pvMapping);
 			if (eError != PVRSRV_OK)
 			{
@@ -958,11 +941,7 @@ static void ReadLocalMem(IMG_UINT8 *pcBuffer,
 						 IMG_UINT8 *pcPMR,
 						 size_t uiSize)
 {
-	/* NOTE: 'CachedMemCopy' means the operating system default memcpy, which
-	 *       we *assume* in the LMA code will be faster, and doesn't need to
-	 *       worry about ARM64.
-	 */
-	OSCachedMemCopy(pcBuffer, pcPMR, uiSize);
+	OSMemCopy(pcBuffer, pcPMR, uiSize);
 }
 
 static PVRSRV_ERROR
@@ -984,11 +963,7 @@ static void WriteLocalMem(IMG_UINT8 *pcBuffer,
 						  IMG_UINT8 *pcPMR,
 						  size_t uiSize)
 {
-	/* NOTE: 'CachedMemCopy' means the operating system default memcpy, which
-	 *       we *assume* in the LMA code will be faster, and doesn't need to
-	 *       worry about ARM64.
-	 */
-	OSCachedMemCopy(pcPMR, pcBuffer, uiSize);
+	OSMemCopy(pcPMR, pcBuffer, uiSize);
 }
 
 static PVRSRV_ERROR
@@ -1014,79 +989,59 @@ PMRWriteBytesLocalMem(PMR_IMPL_PRIVDATA pvPriv,
 */ /**************************************************************************/
 static PVRSRV_ERROR
 PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
-                           const PMR *psPMR,
-                           IMG_UINT32 ui32AllocPageCount,
-                           IMG_UINT32 *pai32AllocIndices,
-                           IMG_UINT32 ui32FreePageCount,
-                           IMG_UINT32 *pai32FreeIndices,
-                           IMG_UINT32 uiFlags)
+		const PMR *psPMR,
+		IMG_UINT32 ui32AllocPageCount,
+		IMG_UINT32 *pai32AllocIndices,
+		IMG_UINT32 ui32FreePageCount,
+		IMG_UINT32 *pai32FreeIndices,
+		IMG_UINT32	uiFlags,
+		IMG_UINT32	*pui32Status)
 {
-	PVRSRV_ERROR eError = PVRSRV_ERROR_INVALID_PARAMS;
-
-	IMG_UINT32 ui32AdtnlAllocPages = 0;
-	IMG_UINT32 ui32AdtnlFreePages = 0;
-	IMG_UINT32 ui32CommonRequstCount = 0;
-	IMG_UINT32 ui32Loop = 0;
-	IMG_UINT32 ui32Index = 0;
-	IMG_UINT32 uiAllocpgidx;
-	IMG_UINT32 uiFreepgidx;
-
+	IMG_UINT32 ui32AdtnlAllocPages=0, ui32AdtnlFreePages=0,ui32CommonRequstCount=0,ui32Loop=0;
 	PMR_LMALLOCARRAY_DATA *psPMRPageArrayData = (PMR_LMALLOCARRAY_DATA *)pPriv;
 	IMG_DEV_PHYADDR sPhyAddr;
-
+	PVRSRV_ERROR eError = PVRSRV_ERROR_INVALID_PARAMS;
+	IMG_UINT32	ui32Index = 0,uiAllocpgidx,uiFreepgidx;
 #if defined(DEBUG)
-	IMG_BOOL bPoisonFail = IMG_FALSE;
-	IMG_BOOL bZeroFail = IMG_FALSE;
+	IMG_BOOL bPoisonFail=IMG_FALSE, bZeroFail = IMG_FALSE;
 #endif
 
-	/* Fetch the Page table array represented by the PMR */
+	/*Fetch the Page table array represented by the PMR */
 	IMG_DEV_PHYADDR *psPageArray = psPMRPageArrayData->pasDevPAddr;
 	PMR_MAPPING_TABLE *psPMRMapTable = PMR_GetMappigTable(psPMR);
 
-	/* The incoming request is classified into two operations independent of
-	 * each other: alloc & free pages.
-	 * These operations can be combined with two mapping operations as well
-	 * which are GPU & CPU space mappings.
-	 *
-	 * From the alloc and free page requests, the net amount of pages to be
-	 * allocated or freed is computed. Pages that were requested to be freed
-	 * will be reused to fulfil alloc requests.
-	 *
-	 * The order of operations is:
-	 * 1. Allocate new pages from the OS
-	 * 2. Move the free pages from free request to alloc positions.
-	 * 3. Free the rest of the pages not used for alloc
-	 *
-	 * Alloc parameters are validated at the time of allocation
-	 * and any error will be handled then. */
+	/*The incoming request is classified in to two operations alloc & free pages, independent of each other
+	 * These operations can be combined with two mapping operations as well which are GPU & CPU space mapping
+	 * From the alloc and free page requests, net pages to be allocated or freed is computed.
+	 * And hence the order of operations are done in the following steps.
+	 * 1. Allocate net pages
+	 * 2. Move the free pages from free request to common alloc requests.
+	 * 3. Free net pages
+	 * */
 
-	if (SPARSE_RESIZE_BOTH == (uiFlags & SPARSE_RESIZE_BOTH))
+	if(SPARSE_RESIZE_BOTH == (uiFlags & SPARSE_RESIZE_BOTH))
 	{
-		ui32CommonRequstCount = (ui32AllocPageCount > ui32FreePageCount) ?
-				ui32FreePageCount : ui32AllocPageCount;
-
-		PDUMP_PANIC(SPARSEMEM_SWAP, "Request to swap alloc & free pages not supported");
+		ui32CommonRequstCount = (ui32AllocPageCount > ui32FreePageCount)?ui32FreePageCount:ui32AllocPageCount;
+#ifdef PDUMP
+		PDUMP_PANIC(RGX, SPARSEMEM_SWAP, "Request to swap alloc & free pages not supported ");
+#endif
 	}
-
-	if (SPARSE_RESIZE_ALLOC == (uiFlags & SPARSE_RESIZE_ALLOC))
+	if(SPARSE_RESIZE_ALLOC == (uiFlags & SPARSE_RESIZE_ALLOC))
 	{
 		ui32AdtnlAllocPages = ui32AllocPageCount - ui32CommonRequstCount;
-	}
-	else
+	}else
 	{
 		ui32AllocPageCount = 0;
 	}
-
-	if (SPARSE_RESIZE_FREE == (uiFlags & SPARSE_RESIZE_FREE))
+	if(SPARSE_RESIZE_FREE == (uiFlags & SPARSE_RESIZE_FREE))
 	{
 		ui32AdtnlFreePages = ui32FreePageCount - ui32CommonRequstCount;
-	}
-	else
+	}else
 	{
 		ui32FreePageCount = 0;
 	}
 
-	if (0 == (ui32CommonRequstCount || ui32AdtnlAllocPages || ui32AdtnlFreePages))
+	if(0 == (ui32CommonRequstCount || ui32AdtnlAllocPages || ui32AdtnlFreePages))
 	{
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
 		return eError;
@@ -1094,24 +1049,22 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 
 	{
 		/* Validate the free page indices */
-		if (ui32FreePageCount)
+		if(ui32FreePageCount)
 		{
-			if (NULL != pai32FreeIndices)
+			if(NULL != pai32FreeIndices)
 			{
-				for (ui32Loop = 0; ui32Loop < ui32FreePageCount; ui32Loop++)
+				for(ui32Loop=0; ui32Loop<ui32FreePageCount; ui32Loop++)
 				{
 					uiFreepgidx = pai32FreeIndices[ui32Loop];
-
-					if (uiFreepgidx > psPMRPageArrayData->uiTotalNumPages)
+					if((uiFreepgidx > psPMRPageArrayData->uiTotalNumPages))
 					{
 						eError = PVRSRV_ERROR_DEVICEMEM_OUT_OF_RANGE;
-						goto e0;
+						goto SparseMemChangeFailed;
 					}
-
-					if (INVALID_PAGE == psPageArray[uiFreepgidx].uiAddr)
+					if(INVALID_PAGE == psPageArray[uiFreepgidx].uiAddr)
 					{
 						eError = PVRSRV_ERROR_INVALID_PARAMS;
-						goto e0;
+						goto SparseMemChangeFailed;
 					}
 				}
 			}else{
@@ -1121,75 +1074,65 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 		}
 
 		/*The following block of code verifies any issues with common alloc page indices */
-		for (ui32Loop = ui32AdtnlAllocPages; ui32Loop < ui32AllocPageCount; ui32Loop++)
+		for(ui32Loop=ui32AdtnlAllocPages; ui32Loop<ui32AllocPageCount; ui32Loop++)
 		{
 			uiAllocpgidx = pai32AllocIndices[ui32Loop];
-			if (uiAllocpgidx > psPMRPageArrayData->uiTotalNumPages)
+			if((uiAllocpgidx > psPMRPageArrayData->uiTotalNumPages))
 			{
 				eError = PVRSRV_ERROR_DEVICEMEM_OUT_OF_RANGE;
-				goto e0;
+				goto SparseMemChangeFailed;
 			}
-
-			if (SPARSE_REMAP_MEM != (uiFlags & SPARSE_REMAP_MEM))
+			if(SPARSE_REMAP_MEM != (uiFlags & SPARSE_REMAP_MEM))
 			{
-				if ((INVALID_PAGE != psPageArray[uiAllocpgidx].uiAddr) ||
+				if((INVALID_PAGE != psPageArray[uiAllocpgidx].uiAddr) || \
 						(TRANSLATION_INVALID != psPMRMapTable->aui32Translation[uiAllocpgidx]))
 				{
 					eError = PVRSRV_ERROR_INVALID_PARAMS;
-					goto e0;
+					goto SparseMemChangeFailed;
 				}
-			}
-			else
-			{
-				if ((INVALID_PAGE ==  psPageArray[uiAllocpgidx].uiAddr) ||
-				    (TRANSLATION_INVALID == psPMRMapTable->aui32Translation[uiAllocpgidx]))
+			}else{
+				if(((INVALID_PAGE ==  psPageArray[uiAllocpgidx].uiAddr) || \
+						(TRANSLATION_INVALID == psPMRMapTable->aui32Translation[uiAllocpgidx])))
 				{
 					eError = PVRSRV_ERROR_INVALID_PARAMS;
-					goto e0;
+					goto SparseMemChangeFailed;
 				}
 			}
 		}
 
-
+		/*Allocate the net additional pages computed */
 		ui32Loop = 0;
-
-		/* Allocate new pages */
-		if (0 != ui32AdtnlAllocPages)
+		if(0 != ui32AdtnlAllocPages)
 		{
-			/* Say how many pages to allocate */
+			/*Alloc pages*/
+			/*Say how many pages to allocate */
 			psPMRPageArrayData->uiPagesToAlloc = ui32AdtnlAllocPages;
 
 			eError = _AllocLMPages(psPMRPageArrayData, pai32AllocIndices);
-			if (PVRSRV_OK != eError)
+			if(PVRSRV_OK != eError)
 			{
-				PVR_DPF((PVR_DBG_ERROR,
-				         "%s: New Addtl Allocation of pages failed",
-				         __FUNCTION__));
-				goto e0;
+				PVR_DPF((PVR_DBG_ERROR, "%s: New Addtl Allocation of pages failed", __FUNCTION__));
+				goto SparseMemChangeFailed;
 			}
-
-			/* Mark the corresponding pages of translation table as valid */
-			for (ui32Loop = 0; ui32Loop < ui32AdtnlAllocPages; ui32Loop++)
+			/*Mark the corresponding pages of translation table as valid */
+			for(ui32Loop=0;ui32Loop<ui32AdtnlAllocPages;ui32Loop++)
 			{
 				psPMRMapTable->aui32Translation[pai32AllocIndices[ui32Loop]] = pai32AllocIndices[ui32Loop];
 			}
 		}
 
+		/*Move the corresponding free pages to alloc request */
 		ui32Index = ui32Loop;
-
-		/* Move the corresponding free pages to alloc request */
-		for (ui32Loop = 0; ui32Loop < ui32CommonRequstCount; ui32Loop++, ui32Index++)
+		for(ui32Loop=0; ui32Loop<ui32CommonRequstCount; ui32Loop++,ui32Index++)
 		{
 
 			uiAllocpgidx = pai32AllocIndices[ui32Index];
 			uiFreepgidx =  pai32FreeIndices[ui32Loop];
 			sPhyAddr = psPageArray[uiAllocpgidx];
 			psPageArray[uiAllocpgidx] = psPageArray[uiFreepgidx];
-
-			/* Is remap mem used in real world scenario? Should it be turned to a
-			 *  debug feature? The condition check needs to be out of loop, will be
-			 *  done at later point though after some analysis */
-			if (SPARSE_REMAP_MEM != (uiFlags & SPARSE_REMAP_MEM))
+			/*is remap mem used in real world scenario, should it be turned toa a debug feature ?
+			 * The condition check need to be out of look, for later though */
+			if(SPARSE_REMAP_MEM != (uiFlags & SPARSE_REMAP_MEM))
 			{
 				psPMRMapTable->aui32Translation[uiFreepgidx] = TRANSLATION_INVALID;
 				psPMRMapTable->aui32Translation[uiAllocpgidx] = uiAllocpgidx;
@@ -1202,20 +1145,21 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 				psPMRMapTable->aui32Translation[uiAllocpgidx] = uiAllocpgidx;
 			}
 
-			/* Be sure to honour the attributes associated with the allocation
-			 * such as zeroing, poisoning etc. */
+			/*Be sure to honour the attributes associated with the allocation
+			 * such as zeroing, poisoning etc
+			 * */
 			if (psPMRPageArrayData->bPoisonOnAlloc)
 			{
 				eError = _PoisonAlloc(psPMRPageArrayData->psDevNode,
-				                      &psPMRPageArrayData->pasDevPAddr[uiAllocpgidx],
-				                      psPMRPageArrayData->bFwLocalAlloc,
-				                      psPMRPageArrayData->uiAllocSize,
-				                      _AllocPoison,
-				                      _AllocPoisonSize);
-
-				/* Consider this as a soft failure and go ahead but log error to kernel log */
-				if (eError != PVRSRV_OK)
+						  	  &psPMRPageArrayData->pasDevPAddr[uiAllocpgidx],
+						  	  psPMRPageArrayData->bFwLocalAlloc,
+						  	  psPMRPageArrayData->uiAllocSize,
+							  _AllocPoison,
+							  _AllocPoisonSize);
+				/*Consider this as a soft failure and go ahead but log error to kernel log */
+				if (eError !=PVRSRV_OK)
 				{
+					*pui32Status = PVRSRV_ERROR_PMR_PAGE_POISONING_FAILED;
 #if defined(DEBUG)
 					bPoisonFail = IMG_TRUE;
 #endif
@@ -1226,12 +1170,13 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 				if (psPMRPageArrayData->bZeroOnAlloc)
 				{
 					eError = _ZeroAlloc(psPMRPageArrayData->psDevNode,
-					                    &psPMRPageArrayData->pasDevPAddr[uiAllocpgidx],
-					                    psPMRPageArrayData->bFwLocalAlloc,
-					                    psPMRPageArrayData->uiAllocSize);
-					/* Consider this as a soft failure and go ahead but log error to kernel log */
-					if (eError != PVRSRV_OK)
+										&psPMRPageArrayData->pasDevPAddr[uiAllocpgidx],
+										psPMRPageArrayData->bFwLocalAlloc,
+										psPMRPageArrayData->uiAllocSize);
+					/*Consider this as a soft failure and go ahead but log error to kernel log */
+					if (eError !=PVRSRV_OK)
 					{
+						*pui32Status = PVRSRV_ERROR_PMR_PAGE_POISONING_FAILED;
 #if defined(DEBUG)
 						/*Don't think we need to zero  any pages further*/
 						bZeroFail = IMG_TRUE;
@@ -1242,12 +1187,11 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 		}
 
 		/*Free the additional free pages */
-		if (0 != ui32AdtnlFreePages)
+		if(0 != ui32AdtnlFreePages)
 		{
 			ui32Index = ui32Loop;
 			_FreeLMPages(psPMRPageArrayData, &pai32FreeIndices[ui32Loop], ui32AdtnlFreePages);
 			ui32Loop = 0;
-
 			while(ui32Loop++ < ui32AdtnlFreePages)
 			{
 				/*Set the corresponding mapping table entry to invalid address */
@@ -1271,8 +1215,7 @@ PMRChangeSparseMemLocalMem(PMR_IMPL_PRIVDATA pPriv,
 
 	/* Update the PMR memory holding information */
 	eError = PVRSRV_OK;
-
-e0:
+SparseMemChangeFailed:
 		return eError;
 
 }
@@ -1284,12 +1227,13 @@ e0:
 */ /**************************************************************************/
 static
 PVRSRV_ERROR PMRChangeSparseMemCPUMapLocalMem(PMR_IMPL_PRIVDATA pPriv,
-                                              const PMR *psPMR,
-                                              IMG_UINT64 sCpuVAddrBase,
-                                              IMG_UINT32 ui32AllocPageCount,
-                                              IMG_UINT32 *pai32AllocIndices,
-                                              IMG_UINT32 ui32FreePageCount,
-                                              IMG_UINT32 *pai32FreeIndices)
+								const PMR *psPMR,
+								IMG_UINT64 sCpuVAddrBase,
+								IMG_UINT32	ui32AllocPageCount,
+								IMG_UINT32	*pai32AllocIndices,
+								IMG_UINT32	ui32FreePageCount,
+								IMG_UINT32	*pai32FreeIndices,
+								IMG_UINT32	*pui32Status)
 {
 	IMG_DEV_PHYADDR *psPageArray;
 	PMR_LMALLOCARRAY_DATA *psPMRPageArrayData = (PMR_LMALLOCARRAY_DATA *)pPriv;
@@ -1299,25 +1243,27 @@ PVRSRV_ERROR PMRChangeSparseMemCPUMapLocalMem(PMR_IMPL_PRIVDATA pPriv,
 
 	/*Get the base address of the heap */
 	PMR_CpuPhysAddr(psPMR,
-	                psPMRPageArrayData->uiLog2AllocSize,
-	                1,
-	                0,	/* offset zero here mean first page in the PMR */
-	                &sCpuAddrPtr,
-	                &bValid);
+			psPMRPageArrayData->uiLog2AllocSize,
+            1,
+            0,	/* offset zero here mean first page in the PMR */
+            &sCpuAddrPtr,
+            &bValid);
 
-	/* Phys address of heap is computed here by subtracting the offset of this page
-	 * basically phys address of any page = Base address of heap + offset of the page */
+	/* Phys address of heap is computed here by substracting the offset of this page
+	 * basically phys address of any page = Base address of heap + offset of the page
+	 */
 	sCpuAddrPtr.uiAddr -= psPMRPageArrayData->pasDevPAddr[0].uiAddr;
-	psPageArray = psPMRPageArrayData->pasDevPAddr;
 
+	psPageArray = psPMRPageArrayData->pasDevPAddr;
 	return OSChangeSparseMemCPUAddrMap((void **)psPageArray,
-	                                   sCpuVABase,
-	                                   sCpuAddrPtr,
-	                                   ui32AllocPageCount,
-	                                   pai32AllocIndices,
-	                                   ui32FreePageCount,
-	                                   pai32FreeIndices,
-	                                   IMG_TRUE);
+											sCpuVABase,
+											((uintptr_t)(sCpuAddrPtr.uiAddr)),
+											ui32AllocPageCount,
+											pai32AllocIndices,
+											ui32FreePageCount,
+											pai32FreeIndices,
+											pui32Status,
+											IMG_TRUE);
 }
 
 
@@ -1328,16 +1274,12 @@ static PMR_IMPL_FUNCTAB _sPMRLMAFuncTab = {
 	&PMRUnlockSysPhysAddressesLocalMem,
 	/* pfnDevPhysAddr */
 	&PMRSysPhysAddrLocalMem,
+	/* pfnPDumpSymbolicAddr */
+	NULL,
 	/* pfnAcquireKernelMappingData */
 	&PMRAcquireKernelMappingDataLocalMem,
 	/* pfnReleaseKernelMappingData */
 	&PMRReleaseKernelMappingDataLocalMem,
-#if defined(INTEGRITY_OS)
-	/* pfnMapMemoryObject */
-    NULL,
-	/* pfnUnmapMemoryObject */
-    NULL,
-#endif
 	/* pfnReadBytes */
 	&PMRReadBytesLocalMem,
 	/* pfnWriteBytes */
@@ -1365,41 +1307,60 @@ PhysmemNewLocalRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 							IMG_UINT32 *pui32MappingTable,
 							IMG_UINT32 uiLog2PageSize,
 							PVRSRV_MEMALLOCFLAGS_T uiFlags,
-							const IMG_CHAR *pszAnnotation,
 							PMR **ppsPMRPtr)
 {
 	PVRSRV_ERROR eError;
 	PVRSRV_ERROR eError2;
 	PMR *psPMR = NULL;
 	PMR_LMALLOCARRAY_DATA *psPrivData = NULL;
+	IMG_HANDLE hPDumpAllocInfo = NULL;
 	PMR_FLAGS_T uiPMRFlags;
 	PHYS_HEAP *psPhysHeap;
 	IMG_BOOL bZero;
 	IMG_BOOL bPoisonOnAlloc;
 	IMG_BOOL bPoisonOnFree;
-	IMG_BOOL bOnDemand;
+	IMG_BOOL bOnDemand = ((uiFlags & PVRSRV_MEMALLOCFLAG_NO_OSPAGES_ON_ALLOC) > 0);
 	IMG_BOOL bContig;
-	IMG_BOOL bFwLocalAlloc;
-	IMG_BOOL bCpuLocalAlloc;
+	IMG_BOOL bFwLocalAlloc = uiFlags & PVRSRV_MEMALLOCFLAG_FW_LOCAL ? IMG_TRUE : IMG_FALSE;
 
-	if (PVRSRV_CHECK_KERNEL_CPU_MAPPABLE(uiFlags) &&
-		(ui32NumPhysChunks == ui32NumVirtChunks))
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_ZERO_ON_ALLOC)
 	{
-		bContig = IMG_TRUE;
+		bZero = IMG_TRUE;
+	}
+	else
+	{
+		bZero = IMG_FALSE;
+	}
+
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_POISON_ON_ALLOC)
+	{
+		bPoisonOnAlloc = IMG_TRUE;
+	}
+	else
+	{
+		bPoisonOnAlloc = IMG_FALSE;
+	}
+
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_POISON_ON_FREE)
+	{
+		bPoisonOnFree = IMG_TRUE;
+	}
+	else
+	{
+		bPoisonOnFree = IMG_FALSE;
+	}
+
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_KERNEL_CPU_MAPPABLE)
+	{
+		bContig = (ui32NumPhysChunks == ui32NumVirtChunks)?IMG_TRUE:IMG_FALSE;
 	}
 	else
 	{
 		bContig = IMG_FALSE;
 	}
 
-	bOnDemand = PVRSRV_CHECK_ON_DEMAND(uiFlags) ? IMG_TRUE : IMG_FALSE;
-	bFwLocalAlloc = PVRSRV_CHECK_FW_LOCAL(uiFlags) ? IMG_TRUE : IMG_FALSE;
-	bCpuLocalAlloc = PVRSRV_CHECK_CPU_LOCAL(uiFlags) ? IMG_TRUE : IMG_FALSE;
-	bZero = PVRSRV_CHECK_ZERO_ON_ALLOC(uiFlags) ? IMG_TRUE : IMG_FALSE;
-	bPoisonOnAlloc = PVRSRV_CHECK_POISON_ON_ALLOC(uiFlags) ? IMG_TRUE : IMG_FALSE;
-	bPoisonOnFree = PVRSRV_CHECK_POISON_ON_FREE(uiFlags) ? IMG_TRUE : IMG_FALSE;
-
-	if (bZero && bPoisonOnAlloc)
+	if ((uiFlags & PVRSRV_MEMALLOCFLAG_ZERO_ON_ALLOC) &&
+		(uiFlags & PVRSRV_MEMALLOCFLAG_POISON_ON_ALLOC))
 	{
 		/* Zero on Alloc and Poison on Alloc are mutually exclusive */
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
@@ -1414,47 +1375,21 @@ PhysmemNewLocalRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 		? OSGetPageShift()
 		: uiLog2PageSize;
 
-	/* In case we have a non-sparse allocation tolerate bad requests and round up.
-	 * For sparse allocations the users have to make sure to meet the right
-	 * requirements. */
-	if (ui32NumPhysChunks == ui32NumVirtChunks &&
-		ui32NumVirtChunks == 1)
-	{
-		/* Round up allocation size to at least a full OSGetPageSize() */
-		uiSize = PVR_ALIGN(uiSize, OSGetPageSize());
-		uiChunkSize = uiSize;
-	}
-
-	if (bFwLocalAlloc)
-	{
-		psPhysHeap = psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL];
-	}
-	else if (bCpuLocalAlloc)
-	{
-		psPhysHeap = psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL];
-	}
-	else
-	{
-		psPhysHeap = psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL];
-	}
-
 	/* Create Array structure that holds the physical pages */
 	eError = _AllocLMPageArray(psDevNode,
-	                           uiChunkSize * ui32NumVirtChunks,
-	                           uiChunkSize,
-	                           ui32NumPhysChunks,
-	                           ui32NumVirtChunks,
-	                           pui32MappingTable,
-	                           uiLog2PageSize,
-	                           bZero,
-	                           bPoisonOnAlloc,
-	                           bPoisonOnFree,
-	                           bContig,
-	                           bOnDemand,
-	                           bFwLocalAlloc,
-	                           psPhysHeap,
-	                           uiFlags,
-	                           &psPrivData);
+						   uiChunkSize * ui32NumVirtChunks,
+						   uiChunkSize,
+                           ui32NumPhysChunks,
+                           ui32NumVirtChunks,
+                           pui32MappingTable,
+						   uiLog2PageSize,
+						   bZero,
+						   bPoisonOnAlloc,
+						   bPoisonOnFree,
+						   bContig,
+						   bOnDemand,
+						   bFwLocalAlloc,
+						   &psPrivData);
 	if (eError != PVRSRV_OK)
 	{
 		goto errorOnAllocPageArray;
@@ -1488,9 +1423,17 @@ PhysmemNewLocalRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
     	PDUMPCOMMENT("Deferred Allocation PMR (LMA)");
     }
 
+    if (bFwLocalAlloc)
+    {
+		psPhysHeap = psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL];
+    }
+    else
+    {
+    	psPhysHeap = psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL];
+    }
 
-	eError = PMRCreatePMR(psDevNode,
-						  psPhysHeap,
+
+	eError = PMRCreatePMR(psPhysHeap,
 						  uiSize,
                           uiChunkSize,
                           ui32NumPhysChunks,
@@ -1498,23 +1441,25 @@ PhysmemNewLocalRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
                           pui32MappingTable,
 						  uiLog2PageSize,
 						  uiPMRFlags,
-						  pszAnnotation,
+						  "PMRLMA",
 						  &_sPMRLMAFuncTab,
 						  psPrivData,
-						  PMR_TYPE_LMA,
 						  &psPMR,
+						  &hPDumpAllocInfo,
 						  IMG_FALSE);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "PhysmemNewLocalRamBackedPMR: Unable to create PMR (status=%d)", eError));
 		goto errorOnCreate;
 	}
+
+	psPrivData->hPDumpAllocInfo = hPDumpAllocInfo;
+	psPrivData->bPDumpMalloced = IMG_TRUE;
 
 	*ppsPMRPtr = psPMR;
 	return PVRSRV_OK;
 
 errorOnCreate:
-	if(!bOnDemand && psPrivData->bHasLMPages)
+	if(!bOnDemand)
 	{
 		eError2 = _FreeLMPages(psPrivData, NULL,0);
 		PVR_ASSERT(eError2 == PVRSRV_OK);
@@ -1537,7 +1482,6 @@ struct PidOSidCouplingList
 	IMG_PID     pId;
 	IMG_UINT32  ui32OSid;
 	IMG_UINT32	ui32OSidReg;
-    IMG_BOOL    bOSidAxiProt;
 
 	struct PidOSidCouplingList *psNext;
 };
@@ -1546,12 +1490,11 @@ typedef struct PidOSidCouplingList PidOSidCouplingList;
 static PidOSidCouplingList *psPidOSidHead=NULL;
 static PidOSidCouplingList *psPidOSidTail=NULL;
 
-void InsertPidOSidsCoupling(IMG_PID pId, IMG_UINT32 ui32OSid, IMG_UINT32 ui32OSidReg, IMG_BOOL bOSidAxiProt)
+void InsertPidOSidsCoupling(IMG_PID pId, IMG_UINT32 ui32OSid, IMG_UINT32 ui32OSidReg)
 {
 	PidOSidCouplingList *psTmp;
 
-    PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): Inserting (PID/ OSid/ OSidReg/ IsSecure) (%d/ %d/ %d/ %s) into list",
-                 pId,ui32OSid, ui32OSidReg, (bOSidAxiProt)?"Yes":"No"));
+	PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): Inserting (PID/ OSid/ OSidReg) (%d/ %d/ %d) into list",pId,ui32OSid, ui32OSidReg));
 
 	psTmp=OSAllocMem(sizeof(PidOSidCouplingList));
 
@@ -1564,7 +1507,6 @@ void InsertPidOSidsCoupling(IMG_PID pId, IMG_UINT32 ui32OSid, IMG_UINT32 ui32OSi
 	psTmp->pId=pId;
 	psTmp->ui32OSid=ui32OSid;
 	psTmp->ui32OSidReg=ui32OSidReg;
-    psTmp->bOSidAxiProt = bOSidAxiProt;
 
 	psTmp->psNext=NULL;
 	if (psPidOSidHead==NULL)
@@ -1581,7 +1523,7 @@ void InsertPidOSidsCoupling(IMG_PID pId, IMG_UINT32 ui32OSid, IMG_UINT32 ui32OSi
 	return ;
 }
 
-void RetrieveOSidsfromPidList(IMG_PID pId, IMG_UINT32 *pui32OSid, IMG_UINT32 *pui32OSidReg, IMG_BOOL *pbOSidAxiProt)
+void RetrieveOSidsfromPidList(IMG_PID pId, IMG_UINT32 *pui32OSid, IMG_UINT32 * pui32OSidReg)
 {
 	PidOSidCouplingList *psTmp;
 
@@ -1589,9 +1531,8 @@ void RetrieveOSidsfromPidList(IMG_PID pId, IMG_UINT32 *pui32OSid, IMG_UINT32 *pu
 	{
 		if (psTmp->pId==pId)
 		{
-            (*pui32OSid)     = psTmp->ui32OSid;
-            (*pui32OSidReg)  = psTmp->ui32OSidReg;
-            (*pbOSidAxiProt) = psTmp->bOSidAxiProt;
+			(*pui32OSid) = psTmp->ui32OSid;
+			(*pui32OSidReg) = psTmp->ui32OSidReg;
 
 			return ;
 		}
@@ -1599,12 +1540,10 @@ void RetrieveOSidsfromPidList(IMG_PID pId, IMG_UINT32 *pui32OSid, IMG_UINT32 *pu
 
 	(*pui32OSid)=0;
 	(*pui32OSidReg)=0;
-    (*pbOSidAxiProt) = IMG_FALSE;
-
 	return ;
 }
 
-void RemovePidOSidCoupling(IMG_PID pId)
+void    RemovePidOSidCoupling(IMG_PID pId)
 {
 	PidOSidCouplingList *psTmp, *psPrev=NULL;
 

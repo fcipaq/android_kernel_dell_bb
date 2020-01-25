@@ -1,10 +1,10 @@
 /*************************************************************************/ /*!
 @File
-@Title          Display class external
+@Title          Device class external
+@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @Description    Defines DC specific structures which are externally visible
                 (i.e. visible to clients of services), but are also required
                 within services.
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -48,73 +48,24 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "img_types.h"
 
-/*!
- * Maximum size of the display name in DC_DISPLAY_INFO
- */
 #define DC_NAME_SIZE	50
-
-/*!
- * This contains information about a display.
- * The structure can be queried by services from the display driver via a
- * registered callback.
- *
- *   Structure: #_DC_DISPLAY_INFO_
- *   Typedef: ::DC_DISPLAY_INFO
- */
 typedef struct _DC_DISPLAY_INFO_
 {
-	IMG_CHAR		szDisplayName[DC_NAME_SIZE];	/*!< Display identifier string */
-	IMG_UINT32		ui32MinDisplayPeriod;			/*!< Minimum number of VSync periods */
-	IMG_UINT32		ui32MaxDisplayPeriod;			/*!< Maximum number of VSync periods */
-	IMG_UINT32		ui32MaxPipes;					/*!< Maximum number of pipes for this display */
-	IMG_BOOL		bUnlatchedSupported;			/*!< Can the device be unlatched? */
+	IMG_CHAR		szDisplayName[DC_NAME_SIZE];
+	IMG_UINT32		ui32MinDisplayPeriod;
+	IMG_UINT32		ui32MaxDisplayPeriod;
+	IMG_UINT32		ui32MaxPipes;
+	IMG_BOOL		bUnlatchedSupported;
 } DC_DISPLAY_INFO;
 
-/*!
- * When services imports a buffer from the display driver it has to fill
- * this structure to inform services about the buffer properties.
- *
- *   Structure: #_DC_BUFFER_IMPORT_INFO_
- *   Typedef: ::DC_BUFFER_IMPORT_INFO
- */
 typedef struct _DC_BUFFER_IMPORT_INFO_
 {
-	IMG_UINT32		ePixFormat;			/*!< Enum value of type IMG_PIXFMT for the pixel format */
-	IMG_UINT32		ui32BPP;			/*!< Bits per pixel */
-	IMG_UINT32		ui32Width[3];		/*!< Width of the different channels (defined by ePixFormat) */
-	IMG_UINT32		ui32Height[3];		/*!< Height of the different channels (defined by ePixFormat) */
-	IMG_UINT32		ui32ByteStride[3];	/*!< Byte stride of the different channels (defined by ePixFormat) */
-	IMG_UINT32		ui32PrivData[3];	/*!< Private data of the display for each of the channels */
+	IMG_UINT32		ePixFormat;
+	IMG_UINT32		ui32BPP;
+	IMG_UINT32		ui32Width[3];
+	IMG_UINT32		ui32Height[3];
+	IMG_UINT32		ui32ByteStride[3];
+	IMG_UINT32		ui32PrivData[3];
 } DC_BUFFER_IMPORT_INFO;
-
-
-/*!
- * Configuration details of the frame buffer compression module
- *
- *   Structure: #_DC_FBC_CREATE_INFO_
- *   Typedef: ::DC_FBC_CREATE_INFO
- */
-typedef struct _DC_FBC_CREATE_INFO_
-{
-	IMG_UINT32		ui32FBCWidth;	/*!< Pixel width that the FBC module is working on */
-	IMG_UINT32		ui32FBCHeight;	/*!< Pixel height that the FBC module is working on */
-	IMG_UINT32		ui32FBCStride;	/*!< Pixel stride that the FBC module is working on */
-	IMG_UINT32		ui32Size;		/*!< Size of the buffer to create */
-} DC_FBC_CREATE_INFO;
-
-/*!
- * DC buffer details like frame buffer compression and surface properties
- *
- *   Structure: #_DC_BUFFER_CREATE_INFO_
- *   Typedef: ::DC_BUFFER_CREATE_INFO
- */
-typedef struct _DC_BUFFER_CREATE_INFO_
-{
-	PVRSRV_SURFACE_INFO		sSurface;	/*!< Surface properties, specified by user */
-	IMG_UINT32				ui32BPP;	/*!< Bits per pixel */
-	union {
-		DC_FBC_CREATE_INFO 	sFBC;
-	} u;								/*!< Frame buffer compressed specific data */
-} DC_BUFFER_CREATE_INFO;
 
 #endif /* _DC_EXTERNAL_H_ */

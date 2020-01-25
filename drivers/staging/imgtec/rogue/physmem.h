@@ -65,13 +65,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 @Input 				bInitPage				Flag to control initialisation
 @Input         		pszDevSpace             PDUMP memory space in which the
 											allocation is to be done
-@Input 				pszSymbolicAddress		Symbolic name of the allocation
+@Input 				pszSymbolicAddress		Symboic name of the allocation
 @Input 				phHandlePtr				PDUMP handle to the allocation
 @Output      	    psMemHandle             Handle to the allocated memory
 @Output    		    psDevPhysAddr           Device Physical address of allocated
 											page
 
-@Return         PVRSRV_OK if the allocation is successful
+@Return         PVRSRV_OK if the alloction is successfull
 */
 /*****************************************************************************/
 extern PVRSRV_ERROR DevPhysMemAlloc(PVRSRV_DEVICE_NODE *psDevNode,
@@ -149,8 +149,6 @@ PhysmemNewRamBackedPMR(CONNECTION_DATA * psConnection,
                        IMG_UINT32 *pui32MappingTable,
                        IMG_UINT32 uiLog2PageSize,
                        PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                       IMG_UINT32 uiAnnotationLength,
-                       const IMG_CHAR *pszAnnotation,
                        PMR **ppsPMROut);
 
 
@@ -179,8 +177,6 @@ PhysmemNewRamBackedLockedPMR(CONNECTION_DATA * psConnection,
                              IMG_UINT32 *pui32MappingTable,
                              IMG_UINT32 uiLog2PageSize,
                              PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                             IMG_UINT32 uiAnnotationLength,
-                             const IMG_CHAR *pszAnnotation,
                              PMR **ppsPMRPtr);
 
 #endif /* _SRVSRV_PHYSMEM_H_ */

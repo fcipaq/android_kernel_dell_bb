@@ -53,6 +53,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define FATAL_ERROR_DETECTION_POLL_MS  (10000)
 #define WAIT_TRY_COUNT                 (10000)
 
+#define SYS_DEVICE_COUNT 3 /* RGX, DISPLAY (external), BUFFER (external) */
+
+#if defined(SUPPORT_TRUSTED_DEVICE)
+#define SYS_PHYS_HEAP_COUNT		2
+#else
+#define SYS_PHYS_HEAP_COUNT		1
+#endif
+
 #define SYS_RGX_DEV_VENDOR_ID		0x8086
 #define SYS_RGX_DEV_DEVICE_ID		0x1180
 
@@ -65,5 +73,19 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 * Core Clock Speed in Hz
 */
 #define RGX_CORE_CLOCK_SPEED_DEFAULT	(400000000)
+
+#if defined(__linux__)
+#define SYS_RGX_DEV_NAME    "Merrifield"
+#if defined(SUPPORT_DRM)
+/*
+ * Use the static bus ID for the platform DRM device.
+ */
+#if defined(PVR_DRM_DEV_BUS_ID)
+#define	SYS_RGX_DEV_DRM_BUS_ID	PVR_DRM_DEV_BUS_ID
+#else
+#define SYS_RGX_DEV_DRM_BUS_ID	"platform:Merrifield"
+#endif	/* defined(PVR_DRM_DEV_BUS_ID) */
+#endif	/* defined(SUPPORT_DRM) */
+#endif
 
 #endif	/* !defined(__SYSINFO_H__) */

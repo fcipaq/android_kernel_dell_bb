@@ -60,7 +60,6 @@ typedef struct _DEVMEMINT_HEAP_ DEVMEMINT_HEAP;
 
 typedef struct _DEVMEMINT_RESERVATION_ DEVMEMINT_RESERVATION;
 typedef struct _DEVMEMINT_MAPPING_ DEVMEMINT_MAPPING;
-typedef struct _DEVMEMINT_PF_NOTIFY_ DEVMEMINT_PF_NOTIFY;
 
 
 /**************************************************************************/ /*!
@@ -176,8 +175,18 @@ DevmemIntCtxCreate(CONNECTION_DATA *psConnection,
                    /* devnode / perproc etc */
                    IMG_BOOL bKernelMemoryCtx,
                    DEVMEMINT_CTX **ppsDevmemCtxPtr,
-                   IMG_HANDLE *hPrivData,
-                   IMG_UINT32 *pui32CPUCacheLineSize);
+                   IMG_HANDLE *hPrivData);
+
+/* Same as DevmemIntCtxCreate but additionally carries the
+ * CPU cache line size back to the user */
+extern PVRSRV_ERROR
+DevmemIntCtxCreateCLS(CONNECTION_DATA *psConnection,
+                      PVRSRV_DEVICE_NODE *psDeviceNode,
+                      IMG_BOOL bKernelMemoryCtx,
+                      DEVMEMINT_CTX **ppsDevmemCtxPtr,
+                      IMG_HANDLE *hPrivData,
+                      IMG_UINT32 *pui32CPUCacheLineSize);
+
 /*
  * DevmemIntCtxDestroy()
  *
@@ -328,9 +337,9 @@ extern PVRSRV_ERROR
 DevmemIntUnreserveRange(DEVMEMINT_RESERVATION *psDevmemReservation);
 
 /*************************************************************************/ /*!
-@Function       DevmemIntChangeSparse
+@Function       DeviceMemChangeSparseServer
 @Description    Changes the sparse allocations of a PMR by allocating and freeing
-                pages and changing their corresponding CPU and GPU mappings.
+				pages and changing their corresponding CPU and GPU mappings.
 
 @input          psDevmemHeap          Pointer to the heap we map on
 @input          psPMR                 The PMR we want to map
@@ -351,49 +360,31 @@ DevmemIntUnreserveRange(DEVMEMINT_RESERVATION *psDevmemReservation);
 @Return         PVRSRV_ERROR failure code
 */ /**************************************************************************/
 extern PVRSRV_ERROR
-DevmemIntChangeSparse(DEVMEMINT_HEAP *psDevmemHeap,
-                      PMR *psPMR,
-                      IMG_UINT32 ui32AllocPageCount,
-                      IMG_UINT32 *pai32AllocIndices,
-                      IMG_UINT32 ui32FreePageCount,
-                      IMG_UINT32 *pai32FreeIndices,
-                      SPARSE_MEM_RESIZE_FLAGS uiSparseFlags,
-                      PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                      IMG_DEV_VIRTADDR sDevVAddrBase,
-                      IMG_UINT64 sCpuVAddrBase);
+DeviceMemChangeSparseServer(DEVMEMINT_HEAP *psDevmemHeap,
+					PMR *psPMR,
+					IMG_UINT32 ui32AllocPageCount,
+					IMG_UINT32 *pai32AllocIndices,
+					IMG_UINT32 ui32FreePageCount,
+					IMG_UINT32 *pai32FreeIndices,
+					SPARSE_MEM_RESIZE_FLAGS uiSparseFlags,
+					PVRSRV_MEMALLOCFLAGS_T uiFlags,
+					IMG_DEV_VIRTADDR sDevVAddrBase,
+					IMG_UINT64 sCpuVAddrBase,
+					IMG_UINT32 *pui32Status);
+
+/*
+ * SLCFlushInvalRequest()
+ *
+ * Schedules an SLC Flush & Invalidate on the firmware if required.
+ * If the request is performed depends on the caching attributes
+ * of the allocation and hence depends on the underlying PMR
+ */
+extern PVRSRV_ERROR
+DevmemSLCFlushInvalRequest(PVRSRV_DEVICE_NODE *psDeviceNode, PMR *psPmr);
 
 extern PVRSRV_ERROR
-DevmemIntIsVDevAddrValid(CONNECTION_DATA * psConnection,
-                         PVRSRV_DEVICE_NODE *psDevNode,
-                         DEVMEMINT_CTX *psDevMemContext,
+DevmemIntIsVDevAddrValid(DEVMEMINT_CTX *psDevMemContext,
                          IMG_DEV_VIRTADDR sDevAddr);
-
-/*************************************************************************/ /*!
-@Function       DevmemIntRegisterPFNotify
-@Description    Registers a PID to be notified when a page fault occurs on a
-                specific device memory context.
-@Input          psDevmemCtx    The context to be notified about.
-@Input          ui32PID        The PID of the process that would like to be
-                               notified.
-@Input          bRegister      If true, register. If false, de-register.
-@Return         PVRSRV_ERROR.
-*/ /**************************************************************************/
-IMG_EXPORT PVRSRV_ERROR
-DevmemIntRegisterPFNotifyKM(DEVMEMINT_CTX *psDevmemCtx,
-                            IMG_INT32     ui32PID,
-                            IMG_BOOL      bRegister);
-
-/*************************************************************************/ /*!
-@Function       DevmemIntPFNotify
-@Description    Notifies any processes that have registered themselves to be
-                notified when a page fault happens on a specific device memory
-                context.
-@Input          *psDevNode           The device node.
-@Input          ui64FaultedPCAddress The page catalogue address that faulted.
-@Return         PVRSRV_ERROR
-*/ /**************************************************************************/
-PVRSRV_ERROR DevmemIntPFNotify(PVRSRV_DEVICE_NODE *psDevNode,
-                               IMG_UINT64         ui64FaultedPCAddress);
 
 #if defined(PDUMP)
 /*
@@ -402,16 +393,14 @@ PVRSRV_ERROR DevmemIntPFNotify(PVRSRV_DEVICE_NODE *psDevNode,
  * Writes out PDump "SAB" commands with the data found in memory at
  * the given virtual address.
  */
-/* FIXME: uiArraySize shouldn't be here, and is an
-   artefact of the bridging */
 extern PVRSRV_ERROR
 DevmemIntPDumpSaveToFileVirtual(DEVMEMINT_CTX *psDevmemCtx,
                                 IMG_DEV_VIRTADDR sDevAddrStart,
                                 IMG_DEVMEM_SIZE_T uiSize,
                                 IMG_UINT32 uiArraySize,
                                 const IMG_CHAR *pszFilename,
-                                IMG_UINT32 ui32FileOffset,
-                                IMG_UINT32 ui32PDumpFlags);
+								IMG_UINT32 ui32FileOffset,
+								IMG_UINT32 ui32PDumpFlags);
 
 extern IMG_UINT32
 DevmemIntMMUContextID(DEVMEMINT_CTX *psDevMemContext);

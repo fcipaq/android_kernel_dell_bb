@@ -44,17 +44,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "sync_server.h"
 #include "sync_server_internal.h"
 #include "allocmem.h"
-#include "device.h"
 #include "devicemem.h"
 #include "devicemem_pdump.h"
 #include "osfunc.h"
 #include "pdump.h"
 #include "pvr_debug.h"
-#include "pvr_notifier.h"
 #include "pdump_km.h"
 #include "sync.h"
 #include "sync_internal.h"
 #include "pvrsrv.h"
+#include "debug_request_ids.h"
 #include "connection_server.h"
 #include "htbuffer.h"
 #include "rgxhwperf.h"
@@ -66,9 +65,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined(SUPPORT_EXTRA_METASP_DEBUG)
 #include "rgxdebug.h"
 #endif
-
-/* Max number of syncs allowed in a sync prim op */
-#define SYNC_PRIM_OP_MAX_SYNCS 1024
 
 struct _SYNC_PRIMITIVE_BLOCK_
 {
@@ -85,7 +81,6 @@ struct _SYNC_PRIMITIVE_BLOCK_
 
 struct _SERVER_SYNC_PRIMITIVE_
 {
-	PVRSRV_DEVICE_NODE		*psDevNode;
 	PVRSRV_CLIENT_SYNC_PRIM *psSync;
 	IMG_UINT32				ui32NextOp;
 	IMG_UINT32				ui32RefCount;
@@ -157,7 +152,6 @@ enum SYNC_RECORD_TYPE
 
 struct SYNC_RECORD
 {
-	PVRSRV_DEVICE_NODE		*psDevNode;
 	SYNC_PRIMITIVE_BLOCK	*psServerSyncPrimBlock;	/*!< handle to _SYNC_PRIMITIVE_BLOCK_ */
 	IMG_UINT32				ui32SyncOffset; 		/*!< offset to sync in block */
 	IMG_UINT32				ui32FwBlockAddr;
@@ -167,9 +161,19 @@ struct SYNC_RECORD
 	DLLIST_NODE				sNode;
 	IMG_CHAR				szClassName[SYNC_MAX_CLASS_NAME_LEN];
 };
+
+static POS_LOCK g_hSyncRecordListLock;
+static DLLIST_NODE g_sSyncRecordList;
+static unsigned g_uiFreedSyncRecordIdx = 0;
+static struct SYNC_RECORD * g_apsFreedSyncRecords[PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN] = {0};
+static IMG_HANDLE g_hSyncRecordNotify;
 #endif /* #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING) */
 
 static IMG_UINT32 g_ServerSyncUID = 0;
+
+POS_LOCK g_hListLock;
+static DLLIST_NODE g_sAllServerSyncs;
+IMG_HANDLE g_hNotify;
 
 #define SYNC_REQUESTOR_UNKNOWN 0
 static IMG_UINT32 g_ui32NextSyncRequestorID = 1;
@@ -339,25 +343,17 @@ SyncAddrListPopulate(SYNC_ADDR_LIST *psList,
 
 #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING)
 PVRSRV_ERROR
-PVRSRVSyncRecordAddKM(CONNECTION_DATA *psConnection,
-					  PVRSRV_DEVICE_NODE *psDevNode,
-					  SYNC_RECORD_HANDLE *phRecord,
-					  SYNC_PRIMITIVE_BLOCK *hServerSyncPrimBlock,
-					  IMG_UINT32 ui32FwBlockAddr,
-					  IMG_UINT32 ui32SyncOffset,
-					  IMG_BOOL bServerSync,
-					  IMG_UINT32 ui32ClassNameSize,
-					  const IMG_CHAR *pszClassName)
+PVRSRVSyncRecordAddKM(
+			SYNC_RECORD_HANDLE * phRecord,
+			SYNC_PRIMITIVE_BLOCK * hServerSyncPrimBlock,
+			IMG_UINT32 ui32FwBlockAddr,
+			IMG_UINT32 ui32SyncOffset,
+			IMG_BOOL bServerSync,
+			IMG_UINT32 ui32ClassNameSize,
+			const IMG_CHAR *pszClassName)
 {
 	struct SYNC_RECORD * psSyncRec;
 	PVRSRV_ERROR eError = PVRSRV_OK;
-
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-	RGX_HWPERF_HOST_ALLOC(SYNC,
-	                      ui32FwBlockAddr + ui32SyncOffset,
-	                      pszClassName,
-	                      ui32ClassNameSize);
 
 	if (!phRecord)
 	{
@@ -372,7 +368,6 @@ PVRSRVSyncRecordAddKM(CONNECTION_DATA *psConnection,
 		goto fail_alloc;
 	}
 
-	psSyncRec->psDevNode = psDevNode;
 	psSyncRec->psServerSyncPrimBlock = hServerSyncPrimBlock;
 	psSyncRec->ui32SyncOffset = ui32SyncOffset;
 	psSyncRec->ui32FwBlockAddr = ui32FwBlockAddr;
@@ -394,9 +389,9 @@ PVRSRVSyncRecordAddKM(CONNECTION_DATA *psConnection,
 		psSyncRec->szClassName[0] = 0;
 	}
 
-	OSLockAcquire(psDevNode->hSyncServerRecordLock);
-	dllist_add_to_head(&psDevNode->sSyncServerRecordList, &psSyncRec->sNode);
-	OSLockRelease(psDevNode->hSyncServerRecordLock);
+	OSLockAcquire(g_hSyncRecordListLock);
+	dllist_add_to_head(&g_sSyncRecordList, &psSyncRec->sNode);
+	OSLockRelease(g_hSyncRecordListLock);
 
 	*phRecord = (SYNC_RECORD_HANDLE)psSyncRec;
 
@@ -410,28 +405,23 @@ PVRSRVSyncRecordRemoveByHandleKM(
 {
 	struct SYNC_RECORD **ppFreedSync;
 	struct SYNC_RECORD *pSync = (struct SYNC_RECORD*)hRecord;
-	PVRSRV_DEVICE_NODE *psDevNode = pSync->psDevNode;
 
 	if (!hRecord)
 	{
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
 
-	OSLockAcquire(psDevNode->hSyncServerRecordLock);
-
-	RGX_HWPERF_HOST_FREE(SYNC, pSync->ui32FwBlockAddr + pSync->ui32SyncOffset);
+	OSLockAcquire(g_hSyncRecordListLock);
 
 	dllist_remove_node(&pSync->sNode);
 
-	if (psDevNode->uiSyncServerRecordFreeIdx >= PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN)
+	if (g_uiFreedSyncRecordIdx >= PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: freed sync record index out of range",
-				 __func__));
-		psDevNode->uiSyncServerRecordFreeIdx = 0;
+		PVR_DPF((PVR_DBG_ERROR, "%s: g_uiFreedSyncRecordIdx out of range", __FUNCTION__));
+		g_uiFreedSyncRecordIdx = 0;
 	}
-	ppFreedSync = &psDevNode->apsSyncServerRecordsFreed[psDevNode->uiSyncServerRecordFreeIdx];
-	psDevNode->uiSyncServerRecordFreeIdx =
-		(psDevNode->uiSyncServerRecordFreeIdx + 1) % PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN;
+	ppFreedSync = &g_apsFreedSyncRecords[g_uiFreedSyncRecordIdx];
+	g_uiFreedSyncRecordIdx = (g_uiFreedSyncRecordIdx + 1) % PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN;
 
 	if (*ppFreedSync)
 	{
@@ -441,25 +431,22 @@ PVRSRVSyncRecordRemoveByHandleKM(
 	pSync->ui64OSTime = OSClockns64();
 	*ppFreedSync = pSync;
 
-	OSLockRelease(psDevNode->hSyncServerRecordLock);
+	OSLockRelease(g_hSyncRecordListLock);
 
 	return PVRSRV_OK;
 }
 #else
 PVRSRV_ERROR
-PVRSRVSyncRecordAddKM(CONNECTION_DATA *psConnection,
-					  PVRSRV_DEVICE_NODE *psDevNode,
-					  SYNC_RECORD_HANDLE *phRecord,
-					  SYNC_PRIMITIVE_BLOCK *hServerSyncPrimBlock,
-					  IMG_UINT32 ui32FwBlockAddr,
-					  IMG_UINT32 ui32SyncOffset,
-					  IMG_BOOL bServerSync,
-					  IMG_UINT32 ui32ClassNameSize,
-					  const IMG_CHAR *pszClassName)
+PVRSRVSyncRecordAddKM(
+			SYNC_RECORD_HANDLE * phRecord,
+			SYNC_PRIMITIVE_BLOCK * hServerSyncPrimBlock,
+			IMG_UINT32 ui32FwBlockAddr,
+			IMG_UINT32 ui32SyncOffset,
+			IMG_BOOL bServerSync,
+			IMG_UINT32 ui32ClassNameSize,
+			const IMG_CHAR *pszClassName)
 {
 	*phRecord = NULL;
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-	PVR_UNREFERENCED_PARAMETER(psDevNode);
 	PVR_UNREFERENCED_PARAMETER(phRecord);
 	PVR_UNREFERENCED_PARAMETER(hServerSyncPrimBlock);
 	PVR_UNREFERENCED_PARAMETER(ui32FwBlockAddr);
@@ -477,26 +464,6 @@ PVRSRVSyncRecordRemoveByHandleKM(
 	return PVRSRV_OK;
 }
 #endif /* #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING) */
-
-PVRSRV_ERROR
-PVRSRVSyncAllocEventKM(
-			IMG_BOOL bServerSync,
-			IMG_UINT32 ui32FWAddr,
-			IMG_UINT32 ui32ClassNameSize,
-			const IMG_CHAR *pszClassName)
-{
-	RGX_HWPERF_HOST_ALLOC(SYNC, ui32FWAddr, pszClassName, ui32ClassNameSize);
-
-	return PVRSRV_OK;
-}
-
-PVRSRV_ERROR
-PVRSRVSyncFreeEventKM(IMG_UINT32 ui32FWAddr)
-{
-	RGX_HWPERF_HOST_FREE(SYNC, ui32FWAddr);
-
-	return PVRSRV_OK;
-}
 
 static
 void _SyncConnectionRef(SYNC_CONNECTION_DATA *psSyncConnectionData)
@@ -704,17 +671,11 @@ PVRSRVFreeSyncPrimitiveBlockKM(SYNC_PRIMITIVE_BLOCK *psSyncBlk)
 	return PVRSRV_OK;
 }
 
-static INLINE IMG_BOOL _CheckSyncIndex(SYNC_PRIMITIVE_BLOCK *psSyncBlk,
-							IMG_UINT32 ui32Index)
-{
-	return ((ui32Index * sizeof(IMG_UINT32)) < psSyncBlk->ui32BlockSize);
-}
-
 PVRSRV_ERROR
 PVRSRVSyncPrimSetKM(SYNC_PRIMITIVE_BLOCK *psSyncBlk, IMG_UINT32 ui32Index,
 					IMG_UINT32 ui32Value)
 {
-	if(_CheckSyncIndex(psSyncBlk, ui32Index))
+	if((ui32Index * sizeof(IMG_UINT32)) < psSyncBlk->ui32BlockSize)
 	{
 		psSyncBlk->pui32LinAddr[ui32Index] = ui32Value;
 		return PVRSRV_OK;
@@ -738,8 +699,8 @@ PVRSRVServerSyncPrimSetKM(SERVER_SYNC_PRIMITIVE *psServerSync, IMG_UINT32 ui32Va
 	return PVRSRV_OK;
 }
 
-static void
-_ServerSyncRef(SERVER_SYNC_PRIMITIVE *psSync)
+void
+ServerSyncRef(SERVER_SYNC_PRIMITIVE *psSync)
 {
 	IMG_UINT32 ui32RefCount;
 
@@ -751,10 +712,9 @@ _ServerSyncRef(SERVER_SYNC_PRIMITIVE *psSync)
 						__FUNCTION__, psSync, ui32RefCount);
 }
 
-static void
-_ServerSyncUnref(SERVER_SYNC_PRIMITIVE *psSync)
+void
+ServerSyncUnref(SERVER_SYNC_PRIMITIVE *psSync)
 {
-	PVRSRV_DEVICE_NODE *psDevNode = psSync->psDevNode;
 	IMG_UINT32 ui32RefCount;
 
 	OSLockAcquire(psSync->hLock);
@@ -763,23 +723,17 @@ _ServerSyncUnref(SERVER_SYNC_PRIMITIVE *psSync)
 
 	if (ui32RefCount == 0)
 	{
-		IMG_UINT32 ui32SyncAddr;
-
-		(void)SyncPrimGetFirmwareAddr(psSync->psSync, &ui32SyncAddr);
 		SYNC_REFCOUNT_PRINT("%s: Server sync %p, refcount = %d",
-			__FUNCTION__, psSync, ui32RefCount);
-		HTBLOGK(HTB_SF_SYNC_SERVER_UNREF, ui32SyncAddr);
+							__FUNCTION__, psSync, ui32RefCount);
+		HTBLOGK(HTB_SF_SYNC_SERVER_UNREF, SyncPrimGetFirmwareAddr(psSync->psSync));
 
 		/* Remove the sync from the global list */
-		OSLockAcquire(psDevNode->hSyncServerListLock);
+		OSLockAcquire(g_hListLock);
 		dllist_remove_node(&psSync->sNode);
-		OSLockRelease(psDevNode->hSyncServerListLock);
+		OSLockRelease(g_hListLock);
 
 		OSLockDestroy(psSync->hLock);
-		/* safe to ignore return value as an error indicates
-		 * the sync is either already freed or not a sync
-		 */
-		(void)SyncPrimFree(psSync->psSync);
+		SyncPrimFree(psSync->psSync);
 		OSFreeMem(psSync);
 	}
 	else
@@ -791,11 +745,11 @@ _ServerSyncUnref(SERVER_SYNC_PRIMITIVE *psSync)
 
 PVRSRV_ERROR
 PVRSRVServerSyncAllocKM(CONNECTION_DATA * psConnection,
-			PVRSRV_DEVICE_NODE *psDevNode,
-			SERVER_SYNC_PRIMITIVE **ppsSync,
-			IMG_UINT32 *pui32SyncPrimVAddr,
-			IMG_UINT32 ui32ClassNameSize,
-			const IMG_CHAR *pszClassName)
+                        PVRSRV_DEVICE_NODE *psDevNode,
+						SERVER_SYNC_PRIMITIVE **ppsSync,
+						IMG_UINT32 *pui32SyncPrimVAddr,
+						IMG_UINT32 ui32ClassNameSize,
+						const IMG_CHAR *pszClassName)
 {
 	SERVER_SYNC_PRIMITIVE *psNewSync;
 	PVRSRV_ERROR eError;
@@ -840,13 +794,8 @@ PVRSRVServerSyncAllocKM(CONNECTION_DATA * psConnection,
 		goto fail_lock_create;
 	}
 
-	eError = SyncPrimSet(psNewSync->psSync, 0);
-	if (eError != PVRSRV_OK)
-	{
-		goto fail_sync_op;
-	}
+	SyncPrimSet(psNewSync->psSync, 0);
 
-	psNewSync->psDevNode = psDevNode;
 	psNewSync->ui32NextOp = 0;
 	psNewSync->ui32RefCount = 1;
 	psNewSync->ui32UID = g_ServerSyncUID++;
@@ -855,24 +804,16 @@ PVRSRVServerSyncAllocKM(CONNECTION_DATA * psConnection,
 	psNewSync->ui32LastHWUpdate = 0x0bad592c;
 	psNewSync->bPDumped = IMG_FALSE;
 
-	eError = SyncPrimGetFirmwareAddr(psNewSync->psSync, pui32SyncPrimVAddr);
-	if (PVRSRV_OK != eError)
-	{
-		goto fail_sync_op;
-	}
-
 	/* Add the sync to the global list */
-	OSLockAcquire(psDevNode->hSyncServerListLock);
-	dllist_add_to_head(&psDevNode->sSyncServerSyncsList, &psNewSync->sNode);
-	OSLockRelease(psDevNode->hSyncServerListLock);
+	OSLockAcquire(g_hListLock);
+	dllist_add_to_head(&g_sAllServerSyncs, &psNewSync->sNode);
+	OSLockRelease(g_hListLock);
 
+	*pui32SyncPrimVAddr = SyncPrimGetFirmwareAddr(psNewSync->psSync);
 	HTBLOGK(HTB_SF_SYNC_SERVER_ALLOC, *pui32SyncPrimVAddr);
 	SYNC_UPDATES_PRINT("%s: sync: %p, fwaddr: %8.8X", __FUNCTION__, psNewSync, *pui32SyncPrimVAddr);
 	*ppsSync = psNewSync;
 	return PVRSRV_OK;
-
-fail_sync_op:
-	OSLockDestroy(psNewSync->hLock);
 
 fail_lock_create:
 	SyncPrimFree(psNewSync->psSync);
@@ -885,42 +826,30 @@ fail_sync_alloc:
 PVRSRV_ERROR
 PVRSRVServerSyncFreeKM(SERVER_SYNC_PRIMITIVE *psSync)
 {
-	_ServerSyncUnref(psSync);
+	ServerSyncUnref(psSync);
 	return PVRSRV_OK;
 }
 
 PVRSRV_ERROR
 PVRSRVServerSyncGetStatusKM(IMG_UINT32 ui32SyncCount,
-			SERVER_SYNC_PRIMITIVE **papsSyncs,
-			IMG_UINT32 *pui32UID,
-			IMG_UINT32 *pui32FWAddr,
-			IMG_UINT32 *pui32CurrentOp,
-			IMG_UINT32 *pui32NextOp)
+							SERVER_SYNC_PRIMITIVE **papsSyncs,
+							IMG_UINT32 *pui32UID,
+							IMG_UINT32 *pui32FWAddr,
+							IMG_UINT32 *pui32CurrentOp,
+							IMG_UINT32 *pui32NextOp)
 {
-	IMG_UINT32 i, ui32SyncAddr;
-	PVRSRV_ERROR eError = PVRSRV_OK;
-	PVRSRV_ERROR eReturn = PVRSRV_OK;
+	IMG_UINT32 i;
 
 	for (i=0;i<ui32SyncCount;i++)
 	{
 		PVRSRV_CLIENT_SYNC_PRIM *psClientSync = papsSyncs[i]->psSync;
 
-		eError = SyncPrimGetFirmwareAddr(psClientSync, &ui32SyncAddr);
-		if (PVRSRV_OK != eError)
-		{
-			pui32FWAddr[i] = 0;
-			pui32CurrentOp[i] = 0;
-			eReturn = eError;
-		}
-		else
-		{
-			pui32FWAddr[i] = ui32SyncAddr;
-			pui32CurrentOp[i] = *psClientSync->pui32LinAddr;
-		}
-		pui32NextOp[i] = papsSyncs[i]->ui32NextOp;
 		pui32UID[i] = papsSyncs[i]->ui32UID;
+		pui32FWAddr[i] = SyncPrimGetFirmwareAddr(psClientSync);
+		pui32CurrentOp[i] = *psClientSync->pui32LinAddr;
+		pui32NextOp[i] = papsSyncs[i]->ui32NextOp;
 	}
-	return eReturn;
+	return PVRSRV_OK;
 }
 
 #if defined(SUPPORT_INSECURE_EXPORT) || defined(SUPPORT_SECURE_EXPORT)
@@ -938,7 +867,7 @@ _PVRSRVSyncPrimServerExportKM(SERVER_SYNC_PRIMITIVE *psSync,
 		goto e0;
 	}
 
-	_ServerSyncRef(psSync);
+	ServerSyncRef(psSync);
 
 	psNewExport->psSync = psSync;
 	*ppsExport = psNewExport;
@@ -951,44 +880,32 @@ e0:
 static PVRSRV_ERROR
 _PVRSRVSyncPrimServerUnexportKM(SERVER_SYNC_EXPORT *psExport)
 {
-	_ServerSyncUnref(psExport->psSync);
+	ServerSyncUnref(psExport->psSync);
 
 	OSFreeMem(psExport);
 
 	return PVRSRV_OK;
 }
 
-static PVRSRV_ERROR
-_PVRSRVSyncPrimServerImportKM(PVRSRV_DEVICE_NODE *psDevNode,
-							  SERVER_SYNC_EXPORT *psExport,
+static void
+_PVRSRVSyncPrimServerImportKM(SERVER_SYNC_EXPORT *psExport,
 							  SERVER_SYNC_PRIMITIVE **ppsSync,
 							  IMG_UINT32 *pui32SyncPrimVAddr)
 {
-	SERVER_SYNC_PRIMITIVE *psSync = psExport->psSync;
-	PVRSRV_ERROR eError;
+	ServerSyncRef(psExport->psSync);
 
-	if (psSync->psDevNode != psDevNode)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: server sync invalid for this device\n",
-				 __func__));
-		return PVRSRV_ERROR_PMR_NOT_PERMITTED;
-	}
-
-	_ServerSyncRef(psSync);
-
-	*ppsSync = psSync;
-	eError = SyncPrimGetFirmwareAddr(psSync->psSync,
-			pui32SyncPrimVAddr);
-	return eError;
+	*ppsSync = psExport->psSync;
+	*pui32SyncPrimVAddr = SyncPrimGetFirmwareAddr(psExport->psSync->psSync);
 }
 #endif /* defined(SUPPORT_INSECURE_EXPORT) || defined(SUPPORT_SECURE_EXPORT) */
 
 #if defined(SUPPORT_INSECURE_EXPORT)
 PVRSRV_ERROR
 PVRSRVSyncPrimServerExportKM(SERVER_SYNC_PRIMITIVE *psSync,
-				SERVER_SYNC_EXPORT **ppsExport)
+							SERVER_SYNC_EXPORT **ppsExport)
 {
-	return _PVRSRVSyncPrimServerExportKM(psSync, ppsExport);
+	return _PVRSRVSyncPrimServerExportKM(psSync,
+										 ppsExport);
 }
 
 PVRSRV_ERROR
@@ -998,16 +915,15 @@ PVRSRVSyncPrimServerUnexportKM(SERVER_SYNC_EXPORT *psExport)
 }
 
 PVRSRV_ERROR
-PVRSRVSyncPrimServerImportKM(CONNECTION_DATA *psConnection,
-							 PVRSRV_DEVICE_NODE *psDevNode,
-							 SERVER_SYNC_EXPORT *psExport,
-							 SERVER_SYNC_PRIMITIVE **ppsSync,
-							 IMG_UINT32 *pui32SyncPrimVAddr)
+PVRSRVSyncPrimServerImportKM(SERVER_SYNC_EXPORT *psExport,
+							SERVER_SYNC_PRIMITIVE **ppsSync,
+							IMG_UINT32 *pui32SyncPrimVAddr)
 {
-	PVR_UNREFERENCED_PARAMETER(psConnection);
+	_PVRSRVSyncPrimServerImportKM(psExport,
+								  ppsSync,
+								  pui32SyncPrimVAddr);
 
-	return _PVRSRVSyncPrimServerImportKM(psDevNode, psExport, ppsSync,
-										 pui32SyncPrimVAddr);
+	return PVRSRV_OK;
 }
 #endif /* defined(SUPPORT_INSECURE_EXPORT) */
 
@@ -1051,7 +967,6 @@ e0:
 	return eError;
 }
 
-/* FIXME: This is the same as the non-secure version. */
 PVRSRV_ERROR
 PVRSRVSyncPrimServerSecureUnexportKM(SERVER_SYNC_EXPORT *psExport)
 {
@@ -1060,16 +975,12 @@ PVRSRVSyncPrimServerSecureUnexportKM(SERVER_SYNC_EXPORT *psExport)
 }
 
 PVRSRV_ERROR
-PVRSRVSyncPrimServerSecureImportKM(CONNECTION_DATA *psConnection,
-								   PVRSRV_DEVICE_NODE *psDevNode,
-								   IMG_SECURE_TYPE hSecure,
+PVRSRVSyncPrimServerSecureImportKM(IMG_SECURE_TYPE hSecure,
 								   SERVER_SYNC_PRIMITIVE **ppsSync,
 								   IMG_UINT32 *pui32SyncPrimVAddr)
 {
 	PVRSRV_ERROR eError;
 	SERVER_SYNC_EXPORT *psImport;
-
-	PVR_UNREFERENCED_PARAMETER(psConnection);
 
 	/* Retrieve the data from the secure import */
 	eError = OSSecureImport(hSecure, (void **) &psImport);
@@ -1078,9 +989,13 @@ PVRSRVSyncPrimServerSecureImportKM(CONNECTION_DATA *psConnection,
 		goto e0;
 	}
 
-	eError = _PVRSRVSyncPrimServerImportKM(psDevNode, psImport, ppsSync,
-										   pui32SyncPrimVAddr);
+	_PVRSRVSyncPrimServerImportKM(psImport,
+								  ppsSync,
+								  pui32SyncPrimVAddr);
+	return PVRSRV_OK;
+
 e0:
+	PVR_ASSERT(eError != PVRSRV_OK);
 	return eError;
 }
 #endif /* defined(SUPPORT_SECURE_EXPORT) */
@@ -1105,7 +1020,7 @@ _ServerSyncTakeOperation(SERVER_SYNC_PRIMITIVE *psSync,
 {
 	IMG_BOOL bInCaptureRange;
 
-	/* Only advance the pending if an update is required */
+	/* Only advance the pending if the an update is required */
 	if (bUpdate)
 	{
 		*pui32FenceValue = psSync->ui32NextOp++;
@@ -1125,15 +1040,10 @@ _ServerSyncTakeOperation(SERVER_SYNC_PRIMITIVE *psSync,
 	if (!psSync->bPDumped && bInCaptureRange)
 	{
 #if defined(PDUMP)
-		{
-			IMG_UINT32 ui32SyncAddr;
-			(void)SyncPrimGetFirmwareAddr(psSync->psSync, &ui32SyncAddr);
-			PDumpCommentWithFlags(0,
-				"Dump initial sync state (0x%p, FW VAddr = 0x%08x) = 0x%08x\n",
-				psSync,
-				ui32SyncAddr,
-				*psSync->psSync->pui32LinAddr);
-		}
+		PDumpCommentWithFlags(0, "Dump initial sync state (0x%p, FW VAddr = 0x%08x) = 0x%08x\n",
+				   psSync,
+				   SyncPrimGetFirmwareAddr(psSync->psSync),
+				   *psSync->psSync->pui32LinAddr);
 #endif
 
 		SyncPrimPDump(psSync->psSync);
@@ -1159,14 +1069,14 @@ PVRSRVServerSyncQueueSWOpKM(SERVER_SYNC_PRIMITIVE *psSync,
 						  IMG_BOOL *pbFenceRequired)
 {
 
-	_ServerSyncRef(psSync);
+	ServerSyncRef(psSync);
 
 	/*
-		_ServerSyncRef will acquire and release the lock but we need to
+		ServerSyncRef will acquire and release the lock but we need to
 		reacquire here to ensure the state that we're modifying below
 		will be consistent with itself. But it doesn't matter if another
 		thread acquires the lock in between as we've ensured the sync
-		won't go away
+		wont go away
 	*/
 	OSLockAcquire(psSync->hLock);
 	_ServerSyncTakeOperation(psSync,
@@ -1176,8 +1086,8 @@ PVRSRVServerSyncQueueSWOpKM(SERVER_SYNC_PRIMITIVE *psSync,
 
 	/*
 		The caller want to know if a fence command is required
-		i.e. was the last operation done on this sync done by
-		the same sync requester
+		i.e. was the last operation done on this sync done by the
+		the same sync requestor
 	*/
 	if (pbFenceRequired)
 	{
@@ -1252,16 +1162,11 @@ PVRSRVServerSyncQueueHWOpKM(SERVER_SYNC_PRIMITIVE *psSync,
 
 	if (psSync->bSWOperation)
 	{
-#if defined(PDUMP)
-		{
-			IMG_UINT32 ui32SyncAddr;
-			(void)SyncPrimGetFirmwareAddr(psSync->psSync, &ui32SyncAddr);
-			PDumpCommentWithFlags(0,
-				"Wait for HW ops and dummy update for SW ops (0x%p, FW VAddr = 0x%08x, value = 0x%08x)\n",
-				psSync,
-				ui32SyncAddr,
-				*pui32FenceValue);
-		}
+#if defined(PDUMP)		
+		PDumpCommentWithFlags(0, "Wait for HW ops and dummy update for SW ops (0x%p, FW VAddr = 0x%08x, value = 0x%08x)\n",
+				   psSync,
+				   SyncPrimGetFirmwareAddr(psSync->psSync),
+				   *pui32FenceValue);
 #endif
 
 		if (psSync->bSWOpStartedInCaptRange)
@@ -1306,7 +1211,7 @@ ServerSyncCompleteOp(SERVER_SYNC_PRIMITIVE *psSync,
 		*psSync->psSync->pui32LinAddr = ui32UpdateValue;
 	}
 
-	_ServerSyncUnref(psSync);
+	ServerSyncUnref(psSync);
 }
 
 IMG_UINT32 ServerSyncGetId(SERVER_SYNC_PRIMITIVE *psSync)
@@ -1314,10 +1219,9 @@ IMG_UINT32 ServerSyncGetId(SERVER_SYNC_PRIMITIVE *psSync)
 	return psSync->ui32UID;
 }
 
-PVRSRV_ERROR
-ServerSyncGetFWAddr(SERVER_SYNC_PRIMITIVE *psSync, IMG_UINT32 *pui32SyncAddr)
+IMG_UINT32 ServerSyncGetFWAddr(SERVER_SYNC_PRIMITIVE *psSync)
 {
-	return SyncPrimGetFirmwareAddr(psSync->psSync, pui32SyncAddr);
+	return SyncPrimGetFirmwareAddr(psSync->psSync);
 }
 
 IMG_UINT32 ServerSyncGetValue(SERVER_SYNC_PRIMITIVE *psSync)
@@ -1338,22 +1242,19 @@ static void _ServerSyncState(PDLLIST_NODE psNode,
 
 	if (*psSync->psSync->pui32LinAddr != psSync->ui32NextOp)
 	{
-		IMG_UINT32 ui32SyncAddr;
-
-		(void)ServerSyncGetFWAddr(psSync, &ui32SyncAddr);
 #if !defined(SUPPORT_EXTRA_METASP_DEBUG)
 		PVR_DUMPDEBUG_LOG("\tPending server sync (ID = %d, FWAddr = 0x%08x): Current = 0x%08x, NextOp = 0x%08x (%s)",
-				psSync->ui32UID,
-				ui32SyncAddr,
-		                ServerSyncGetValue(psSync),
-		                psSync->ui32NextOp,
-		                psSync->szClassName);
+		                   psSync->ui32UID,
+		                   ServerSyncGetFWAddr(psSync),
+		                   ServerSyncGetValue(psSync),
+		                   psSync->ui32NextOp,
+		                   psSync->szClassName);
 #else
 		PVR_DUMPDEBUG_LOG("\tPending server sync (ID = %d, FWAddr = 0x%08x): Value (Host) = 0x%08x, Value (FW) = 0x%08x, NextOp = 0x%08x (%s)",
 		                   psSync->ui32UID,
-				   ui32SyncAddr,
+		                   ServerSyncGetFWAddr(psSync),
 		                   ServerSyncGetValue(psSync),
-		                   RGXReadWithSP(ui32SyncAddr),
+		                   RGXReadWithSP(ServerSyncGetFWAddr(psSync)),
 		                   psSync->ui32NextOp,
 		                   psSync->szClassName);
 #endif
@@ -1365,18 +1266,19 @@ static void _ServerSyncDebugRequest(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
 					DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
 					void *pvDumpDebugFile)
 {
-	PVRSRV_DEVICE_NODE *psDevNode = (PVRSRV_DEVICE_NODE *)hDebugRequestHandle;
 	DLLIST_NODE *psNode, *psNext;
 
+	PVR_UNREFERENCED_PARAMETER(hDebugRequestHandle);
+	
 	if (ui32VerbLevel == DEBUG_REQUEST_VERBOSITY_HIGH)
 	{
-		PVR_DUMPDEBUG_LOG("------[ Pending Server Syncs ]------");
-		OSLockAcquire(psDevNode->hSyncServerListLock);
-		dllist_foreach_node(&psDevNode->sSyncServerSyncsList, psNode, psNext)
+		PVR_DUMPDEBUG_LOG("Dumping all pending server syncs");
+		OSLockAcquire(g_hListLock);
+		dllist_foreach_node(&g_sAllServerSyncs, psNode, psNext)
 		{
 			_ServerSyncState(psNode, pfnDumpDebugPrintf, pvDumpDebugFile);
 		}
-		OSLockRelease(psDevNode->hSyncServerListLock);
+		OSLockRelease(g_hListLock);
 	}
 }
 
@@ -1399,12 +1301,6 @@ PVRSRVSyncPrimOpCreateKM(IMG_UINT32 ui32SyncBlockCount,
 	IMG_CHAR *pcPtr;
 	PVRSRV_ERROR eError;
 
-	if((ui32ClientSyncCount + ui32ServerSyncCount) > SYNC_PRIM_OP_MAX_SYNCS)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Too many syncs specified", __func__));
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
 	/* Allocate space for all the sync block list */
 	ui32BlockAllocSize = ui32SyncBlockCount * (sizeof(SYNC_PRIMITIVE_BLOCK *));
 
@@ -1420,7 +1316,7 @@ PVRSRVSyncPrimOpCreateKM(IMG_UINT32 ui32SyncBlockCount,
 							 ui32ServerAllocSize +
 							 ui32ClientAllocSize;
 
-	psNewCookie = OSAllocZMem(ui32TotalAllocSize);
+	psNewCookie = OSAllocMem(ui32TotalAllocSize);
 	pcPtr = (IMG_CHAR *) psNewCookie;
 
 	if (!psNewCookie)
@@ -1428,6 +1324,7 @@ PVRSRVSyncPrimOpCreateKM(IMG_UINT32 ui32SyncBlockCount,
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		goto e0;
 	}
+	OSMemSet(psNewCookie, 0, ui32TotalAllocSize);
 
 	/* Setup the pointers */
 	pcPtr += sizeof(SERVER_OP_COOKIE);
@@ -1470,54 +1367,18 @@ PVRSRVSyncPrimOpCreateKM(IMG_UINT32 ui32SyncBlockCount,
 			ui32ServerSyncCount, ui32ClientSyncCount);
 
 	/* Copy all the data into our server cookie */
-	OSCachedMemCopy(psNewCookie->papsSyncPrimBlock,
+	OSMemCopy(psNewCookie->papsSyncPrimBlock,
 			  papsSyncPrimBlock,
 			  sizeof(SYNC_PRIMITIVE_BLOCK *) * ui32SyncBlockCount);
 
-	/* Copy the sync block and sync indices.
-	 *
-	 * Each index must be verified:
-	 * Each Sync Block index must be within the range of the number of sync block
-	 * pointers received. All those pointers are valid, as verified by the bridge.
-	 * And each Sync index must be valid for the Sync Block it relates to.
-	 */
-	for(i = 0; i < ui32ClientSyncCount; i++)
-	{
-		SYNC_PRIMITIVE_BLOCK *psSyncBlock;
+	OSMemCopy(psNewCookie->paui32SyncBlockIndex,
+			  paui32SyncBlockIndex,
+			  sizeof(IMG_UINT32) * ui32ClientSyncCount);
+	OSMemCopy(psNewCookie->paui32Index,
+			  paui32Index,
+			  sizeof(IMG_UINT32) * ui32ClientSyncCount);
 
-		/* first copy the sync block index and ensure it is in range */
-
-		if(paui32SyncBlockIndex[i] >= ui32SyncBlockCount)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: Sync block index %u is out of range",
-										__func__,
-										paui32SyncBlockIndex[i]));
-			eError = PVRSRV_ERROR_INVALID_PARAMS;
-			goto err_range;
-		}
-
-		psNewCookie->paui32SyncBlockIndex[i] = paui32SyncBlockIndex[i];
-
-		/* now copy the sync index and ensure it is a valid index within
-		 * the corresponding sync block (note the sync block index was
-		 * verified above
-		 */
-
-		psSyncBlock = psNewCookie->papsSyncPrimBlock[paui32SyncBlockIndex[i]];
-
-		if(_CheckSyncIndex(psSyncBlock, paui32Index[i]) == IMG_FALSE)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: Sync index %u is out of range",
-										__func__,
-										paui32Index[i]));
-			eError = PVRSRV_ERROR_INVALID_PARAMS;
-			goto err_range;
-		}
-
-		psNewCookie->paui32Index[i] = paui32Index[i];
-	}
-
-	OSCachedMemCopy(psNewCookie->papsServerSync,
+	OSMemCopy(psNewCookie->papsServerSync,
 			  papsServerSync,
 			  sizeof(SERVER_SYNC_PRIMITIVE *) *ui32ServerSyncCount);
 
@@ -1532,14 +1393,12 @@ PVRSRVSyncPrimOpCreateKM(IMG_UINT32 ui32SyncBlockCount,
 
 	for (i=0;i<ui32ServerSyncCount;i++)
 	{
-		_ServerSyncRef(psNewCookie->papsServerSync[i]);
+		ServerSyncRef(psNewCookie->papsServerSync[i]);
 	}
 
 	*ppsServerCookie = psNewCookie;
 	return PVRSRV_OK;
 
-err_range:
-	OSFreeMem(psNewCookie);
 e0:
 	return eError;
 }
@@ -1558,7 +1417,7 @@ PVRSRVSyncPrimOpTakeKM(SERVER_OP_COOKIE *psServerCookie,
 	if ((ui32ClientSyncCount != psServerCookie->ui32ClientSyncCount) ||
 		(ui32ServerSyncCount != psServerCookie->ui32ServerSyncCount))
 	{
-		/* The bridge layer should have stopped us getting here but check in case */
+		/* The bridge layer should have stopped us getting here but check incase */
 		PVR_DPF((PVR_DBG_ERROR, "%s: Invalid sync counts", __FUNCTION__));
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
@@ -1576,13 +1435,13 @@ PVRSRVSyncPrimOpTakeKM(SERVER_OP_COOKIE *psServerCookie,
 		For client syncs all we need to do is save the values
 		that we've been passed
 	*/
-	OSCachedMemCopy(psServerCookie->paui32Flags,
+	OSMemCopy(psServerCookie->paui32Flags,
 			  paui32Flags,
 			  sizeof(IMG_UINT32) * ui32ClientSyncCount);
-	OSCachedMemCopy(psServerCookie->paui32FenceValue,
+	OSMemCopy(psServerCookie->paui32FenceValue,
 			  paui32FenceValue,
 			  sizeof(IMG_UINT32) * ui32ClientSyncCount);
-	OSCachedMemCopy(psServerCookie->paui32UpdateValue,
+	OSMemCopy(psServerCookie->paui32UpdateValue,
 			  paui32UpdateValue,
 			  sizeof(IMG_UINT32) * ui32ClientSyncCount);
 
@@ -1593,7 +1452,7 @@ PVRSRVSyncPrimOpTakeKM(SERVER_OP_COOKIE *psServerCookie,
 	{
 		/*
 			Take op can only take one operation at a time so we can't
-			optimise away fences so just report the requester as unknown
+			optimise away fences so just report the requestor as unknown
 		*/
 		PVRSRVServerSyncQueueSWOpKM(psServerCookie->papsServerSync[i],
 								  &psServerCookie->paui32ServerFenceValue[i],
@@ -1688,10 +1547,7 @@ PVRSRV_ERROR _SyncPrimOpComplete(SERVER_OP_COOKIE *psServerCookie)
 
 		if (bUpdate)
 		{
-			IMG_UINT32 ui32SyncAddr;
-
-			(void)ServerSyncGetFWAddr(psServerCookie->papsServerSync[i], &ui32SyncAddr);
-			asUFOData[ui32UFOIdx].sUpdate.ui32FWAddr = ui32SyncAddr;
+			asUFOData[ui32UFOIdx].sUpdate.ui32FWAddr = ServerSyncGetFWAddr(psServerCookie->papsServerSync[i]);
 			asUFOData[ui32UFOIdx].sUpdate.ui32OldValue = ServerSyncGetValue(psServerCookie->papsServerSync[i]);
 			asUFOData[ui32UFOIdx].sUpdate.ui32NewValue = psServerCookie->paui32ServerUpdateValue[i];
 			ui32UFOIdx++;
@@ -1753,7 +1609,7 @@ PVRSRVSyncPrimOpDestroyKM(SERVER_OP_COOKIE *psServerCookie)
 
 	for (i = 0; i < psServerCookie->ui32ServerSyncCount; i++)
 	{
-		_ServerSyncUnref(psServerCookie->papsServerSync[i]);
+		ServerSyncUnref(psServerCookie->papsServerSync[i]);
 	}
 
 	HTBLOGK(HTB_SF_SYNC_PRIM_OP_DESTROY, psServerCookie);
@@ -1932,8 +1788,11 @@ void SyncConnectionPDumpSyncBlocks(SYNC_CONNECTION_DATA *psSyncConnectionData)
 }
 
 #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING)
-void SyncRecordLookup(PVRSRV_DEVICE_NODE *psDevNode, IMG_UINT32 ui32FwAddr,
-					  IMG_CHAR * pszSyncInfo, size_t len)
+void SyncRecordLookup(
+	IMG_UINT32 ui32FwAddr,
+	IMG_CHAR * pszSyncInfo,
+	size_t len
+)
 {
 	DLLIST_NODE *psNode, *psNext;
 	IMG_INT iEnd;
@@ -1943,10 +1802,10 @@ void SyncRecordLookup(PVRSRV_DEVICE_NODE *psDevNode, IMG_UINT32 ui32FwAddr,
 		return;
 	}
 
-	OSLockAcquire(psDevNode->hSyncServerRecordLock);
+	OSLockAcquire(g_hSyncRecordListLock);
 	pszSyncInfo[0] = '\0';
 
-	dllist_foreach_node(&psDevNode->sSyncServerRecordList, psNode, psNext)
+	dllist_foreach_node(&g_sSyncRecordList, psNode, psNext)
 	{
 		struct SYNC_RECORD *psSyncRec =
 			IMG_CONTAINER_OF(psNode, struct SYNC_RECORD, sNode);
@@ -1973,7 +1832,7 @@ void SyncRecordLookup(PVRSRV_DEVICE_NODE *psDevNode, IMG_UINT32 ui32FwAddr,
 		}
 	}
 
-	OSLockRelease(psDevNode->hSyncServerRecordLock);
+	OSLockRelease(g_hSyncRecordListLock);
 }
 
 #define NS_IN_S (1000000000UL)
@@ -2024,7 +1883,6 @@ static void _SyncRecordRequest(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
 					DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
 					void *pvDumpDebugFile)
 {
-	PVRSRV_DEVICE_NODE *psDevNode = (PVRSRV_DEVICE_NODE *)hDebugRequestHandle;
 	IMG_UINT64 ui64TimeNowS;
 	IMG_UINT32 ui32TimeNowF;
 	IMG_UINT64 ui64TimeNow = OSClockns64();
@@ -2032,16 +1890,18 @@ static void _SyncRecordRequest(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
 
 	ui64TimeNowS = OSDivide64(ui64TimeNow, NS_IN_S, &ui32TimeNowF);
 
+	PVR_UNREFERENCED_PARAMETER(hDebugRequestHandle);
+
 	if (ui32VerbLevel == DEBUG_REQUEST_VERBOSITY_HIGH)
 	{
-		IMG_UINT32 i;
-		OSLockAcquire(psDevNode->hSyncServerRecordLock);
+		unsigned i;
+		OSLockAcquire(g_hSyncRecordListLock);
 
 		PVR_DUMPDEBUG_LOG("Dumping all allocated syncs @ %05llu.%09u", ui64TimeNowS, ui32TimeNowF);
 		PVR_DUMPDEBUG_LOG("\t%-6s %-5s %-15s %-17s %-14s (%s)",
 					"Type", "PID", "Time Delta (s)", "Address", "Value", "Annotation");
 
-		dllist_foreach_node(&psDevNode->sSyncServerRecordList, psNode, psNext)
+		dllist_foreach_node(&g_sSyncRecordList, psNode, psNext)
 		{
 			struct SYNC_RECORD *psSyncRec =
 				IMG_CONTAINER_OF(psNode, struct SYNC_RECORD, sNode);
@@ -2051,14 +1911,14 @@ static void _SyncRecordRequest(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
 		PVR_DUMPDEBUG_LOG("Dumping all recently freed syncs @ %05llu.%09u", ui64TimeNowS, ui32TimeNowF);
 		PVR_DUMPDEBUG_LOG("\t%-6s %-5s %-15s %-17s %-14s (%s)",
 					"Type", "PID", "Time Delta (s)", "Address", "Value", "Annotation");
-		for (i = DECREMENT_WITH_WRAP(psDevNode->uiSyncServerRecordFreeIdx, PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN);
-			 i != psDevNode->uiSyncServerRecordFreeIdx;
-			 i = DECREMENT_WITH_WRAP(i, PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN))
+		for(i = DECREMENT_WITH_WRAP(g_uiFreedSyncRecordIdx, PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN);
+				i != g_uiFreedSyncRecordIdx;
+				i = DECREMENT_WITH_WRAP(i, PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN))
 		{
-			if (psDevNode->apsSyncServerRecordsFreed[i])
+			if (g_apsFreedSyncRecords[i])
 			{
-				_SyncRecordPrint(psDevNode->apsSyncServerRecordsFreed[i],
-								 ui64TimeNow, pfnDumpDebugPrintf, pvDumpDebugFile);
+				_SyncRecordPrint(g_apsFreedSyncRecords[i],
+				                 ui64TimeNow, pfnDumpDebugPrintf, pvDumpDebugFile);
 			}
 			else
 			{
@@ -2066,27 +1926,26 @@ static void _SyncRecordRequest(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
 			}
 		}
 
-		OSLockRelease(psDevNode->hSyncServerRecordLock);
+		OSLockRelease(g_hSyncRecordListLock);
 	}
 }
 #undef NS_IN_S
 
-static PVRSRV_ERROR SyncRecordListInit(PVRSRV_DEVICE_NODE *psDevNode)
+static PVRSRV_ERROR SyncRecordListInit(void)
 {
 	PVRSRV_ERROR eError;
 
-	eError = OSLockCreate(&psDevNode->hSyncServerRecordLock, LOCK_TYPE_NONE);
+	eError = OSLockCreate(&g_hSyncRecordListLock, LOCK_TYPE_NONE);
 	if (eError != PVRSRV_OK)
 	{
 		goto fail_lock_create;
 	}
-	dllist_init(&psDevNode->sSyncServerRecordList);
+	dllist_init(&g_sSyncRecordList);
 
-	eError = PVRSRVRegisterDbgRequestNotify(&psDevNode->hSyncServerRecordNotify,
-											psDevNode,
+	eError = PVRSRVRegisterDbgRequestNotify(&g_hSyncRecordNotify,
 											_SyncRecordRequest,
 											DEBUG_REQUEST_SERVERSYNC,
-											psDevNode);
+											NULL);
 
 	if (eError != PVRSRV_OK)
 	{
@@ -2096,64 +1955,34 @@ static PVRSRV_ERROR SyncRecordListInit(PVRSRV_DEVICE_NODE *psDevNode)
 	return PVRSRV_OK;
 
 fail_dbg_register:
-	OSLockDestroy(psDevNode->hSyncServerRecordLock);
+	OSLockDestroy(g_hSyncRecordListLock);;
 fail_lock_create:
 	return eError;
 }
-
-static void SyncRecordListDeinit(PVRSRV_DEVICE_NODE *psDevNode)
-{
-	DLLIST_NODE *psNode, *psNext;
-	int i;
-
-	OSLockAcquire(psDevNode->hSyncServerRecordLock);
-	dllist_foreach_node(&psDevNode->sSyncServerRecordList, psNode, psNext)
-	{
-		struct SYNC_RECORD *pSyncRec =
-			IMG_CONTAINER_OF(psNode, struct SYNC_RECORD, sNode);
-
-		dllist_remove_node(psNode);
-		OSFreeMem(pSyncRec);
-	}
-
-	for (i = 0; i < PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN; i++)
-	{
-		if (psDevNode->apsSyncServerRecordsFreed[i])
-		{
-			OSFreeMem(psDevNode->apsSyncServerRecordsFreed[i]);
-			psDevNode->apsSyncServerRecordsFreed[i] = NULL;
-		}
-	}
-	OSLockRelease(psDevNode->hSyncServerRecordLock);
-
-	PVRSRVUnregisterDbgRequestNotify(psDevNode->hSyncServerRecordNotify);
-	OSLockDestroy(psDevNode->hSyncServerRecordLock);
-}
 #endif /* #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING) */
 
-PVRSRV_ERROR ServerSyncInit(PVRSRV_DEVICE_NODE *psDevNode)
+PVRSRV_ERROR ServerSyncInit(void)
 {
 	PVRSRV_ERROR eError;
 
-	eError = OSLockCreate(&psDevNode->hSyncServerListLock, LOCK_TYPE_NONE);
+	eError = OSLockCreate(&g_hListLock, LOCK_TYPE_NONE);
 	if (eError != PVRSRV_OK)
 	{
 		goto fail_lock_create;
 	}
-	dllist_init(&psDevNode->sSyncServerSyncsList);
+	dllist_init(&g_sAllServerSyncs);
 
-	eError = PVRSRVRegisterDbgRequestNotify(&psDevNode->hSyncServerNotify,
-											psDevNode,
+	eError = PVRSRVRegisterDbgRequestNotify(&g_hNotify,
 											_ServerSyncDebugRequest,
 											DEBUG_REQUEST_SERVERSYNC,
-											psDevNode);
+											NULL);
 	if (eError != PVRSRV_OK)
 	{
 		goto fail_dbg_register;
 	}
 
 #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING)
-	eError = SyncRecordListInit(psDevNode);
+	eError = SyncRecordListInit();
 	if (eError != PVRSRV_OK)
 	{
 		goto fail_record_list;
@@ -2164,23 +1993,41 @@ PVRSRV_ERROR ServerSyncInit(PVRSRV_DEVICE_NODE *psDevNode)
 
 #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING)
 fail_record_list:
-	PVRSRVUnregisterDbgRequestNotify(psDevNode->hSyncServerNotify);
+	PVRSRVUnregisterDbgRequestNotify(g_hNotify);
 #endif
 fail_dbg_register:
-	OSLockDestroy(psDevNode->hSyncServerListLock);
+	OSLockDestroy(g_hListLock);;
 fail_lock_create:
 	return eError;
 }
 
-void ServerSyncDeinit(PVRSRV_DEVICE_NODE *psDevNode)
+void ServerSyncDeinit(void)
 {
-	PVRSRVUnregisterDbgRequestNotify(psDevNode->hSyncServerNotify);
-	psDevNode->hSyncServerNotify = NULL;
-
-	OSLockDestroy(psDevNode->hSyncServerListLock);
-	psDevNode->hSyncServerListLock = NULL;
-
+	PVRSRVUnregisterDbgRequestNotify(g_hNotify);
+	OSLockDestroy(g_hListLock);
 #if defined(PVRSRV_ENABLE_FULL_SYNC_TRACKING)
-	SyncRecordListDeinit(psDevNode);
+	{
+		int i;
+		DLLIST_NODE *psNode, *psNext;
+		OSLockAcquire(g_hSyncRecordListLock);
+		dllist_foreach_node(&g_sSyncRecordList, psNode, psNext)
+		{
+			struct SYNC_RECORD *pSyncRec =
+				IMG_CONTAINER_OF(psNode, struct SYNC_RECORD, sNode);
+			dllist_remove_node(psNode);
+			OSFreeMem(pSyncRec);
+		}
+		for (i=0; i < PVRSRV_FULL_SYNC_TRACKING_HISTORY_LEN; i++)
+		{
+			if (g_apsFreedSyncRecords[i])
+			{
+				OSFreeMem(g_apsFreedSyncRecords[i]);
+				g_apsFreedSyncRecords[i] = NULL;
+			}
+		}
+		OSLockRelease(g_hSyncRecordListLock);
+		PVRSRVUnregisterDbgRequestNotify(g_hSyncRecordNotify);
+		OSLockDestroy(g_hSyncRecordListLock);
+	}
 #endif
 }

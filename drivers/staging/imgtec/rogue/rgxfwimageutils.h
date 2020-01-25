@@ -46,10 +46,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* The routines declared here are built on top of an abstraction layer to
  * hide DDK/OS-specific details in case they are used outside of the DDK
- * (e.g. when DRM security is enabled).
- * Any new dependency should be added to rgxlayer.h.
- * Any new code should be built on top of the existing abstraction layer,
- * which should be extended when necessary. */
+ * (e.g. when security v1 is enabled).
+ * Any new dependency should be added to rgxlayer.h. */
 #include "rgxlayer.h"
 
 
@@ -64,14 +62,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  @Input        puiFWDataAllocSize : Returned data size
  @Input        puiFWCorememCodeAllocSize : Returned coremem code size (0 if N/A)
 
- @Return       PVRSRV_ERROR
+ @Return       void
 
 ******************************************************************************/
 IMG_INTERNAL
-PVRSRV_ERROR RGXGetFWImageAllocSize(const void *hPrivate,
-                                    IMG_DEVMEM_SIZE_T *puiFWCodeAllocSize,
-                                    IMG_DEVMEM_SIZE_T *puiFWDataAllocSize,
-                                    IMG_DEVMEM_SIZE_T *puiFWCorememCodeAllocSize);
+void RGXGetFWImageAllocSize(IMG_DEVMEM_SIZE_T *puiFWCodeAllocSize,
+                            IMG_DEVMEM_SIZE_T *puiFWDataAllocSize,
+                            IMG_DEVMEM_SIZE_T *puiFWCorememCodeAllocSize);
 
 /*!
 *******************************************************************************
@@ -99,7 +96,7 @@ PVRSRV_ERROR RGXGetFWImageAllocSize(const void *hPrivate,
  @Input        ui32MainThreadID     : ID of the FW thread in use
                                       (only meaningful if ui32NumThreads == 1)
 
- @Return       PVRSRV_ERROR
+ @Return       void
 
 ******************************************************************************/
 IMG_INTERNAL

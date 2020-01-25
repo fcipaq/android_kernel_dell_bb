@@ -59,14 +59,13 @@ PVRSRV_ERROR PVRSRVRGXSetBreakpointKM(CONNECTION_DATA    * psConnection,
                                       IMG_UINT32           ui32HandlerAddr,
                                       IMG_UINT32           ui32DataMaster)
 {
-	PVRSRV_RGXDEV_INFO	*psDevInfo = psDeviceNode->pvDevice;
 	DEVMEM_MEMDESC		*psFWMemContextMemDesc = RGXGetFWMemDescFromMemoryContextHandle(hMemCtxPrivData);
 	PVRSRV_ERROR 		eError = PVRSRV_OK;
 	RGXFWIF_KCCB_CMD 	sBPCmd;
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	
-	if (psDevInfo->bBPSet == IMG_TRUE)
+	if (psDeviceNode->psDevConfig->bBPSet == IMG_TRUE)
 		return PVRSRV_ERROR_BP_ALREADY_SET;
 	
 	sBPCmd.eCmdType = RGXFWIF_KCCB_CMD_BP;
@@ -81,12 +80,11 @@ PVRSRV_ERROR PVRSRVRGXSetBreakpointKM(CONNECTION_DATA    * psConnection,
 				0 , 
 				RFW_FWADDR_NOREF_FLAG);
 		
-	eError = RGXScheduleCommand(psDevInfo,
+	eError = RGXScheduleCommand(psDeviceNode->pvDevice,
 				eFWDataMaster,
 				&sBPCmd,
 				sizeof(sBPCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXSetBreakpointKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -94,15 +92,15 @@ PVRSRV_ERROR PVRSRVRGXSetBreakpointKM(CONNECTION_DATA    * psConnection,
 	}
 
 	/* Wait for FW to complete */
-	eError = RGXWaitForFWOp(psDevInfo, eFWDataMaster, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, eFWDataMaster, psDeviceNode->psSyncPrim, IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRGXSetBreakpointKM: Wait for completion aborted with error (%u)", eError));
 		return eError;
 	}
 
-	psDevInfo->eBPDM = eFWDataMaster;
-	psDevInfo->bBPSet = IMG_TRUE;
+	psDeviceNode->psDevConfig->eBPDM = eFWDataMaster;
+	psDeviceNode->psDevConfig->bBPSet = IMG_TRUE;
 	
 	return eError;
 }
@@ -111,10 +109,10 @@ PVRSRV_ERROR PVRSRVRGXClearBreakpointKM(CONNECTION_DATA    * psConnection,
                                         PVRSRV_DEVICE_NODE * psDeviceNode,
                                         IMG_HANDLE           hMemCtxPrivData)
 {
-	PVRSRV_RGXDEV_INFO	*psDevInfo = psDeviceNode->pvDevice;
 	DEVMEM_MEMDESC		*psFWMemContextMemDesc = RGXGetFWMemDescFromMemoryContextHandle(hMemCtxPrivData);
 	PVRSRV_ERROR 		eError = PVRSRV_OK;
 	RGXFWIF_KCCB_CMD 	sBPCmd;
+	RGXFWIF_DM			eDataMaster = psDeviceNode->psDevConfig->eBPDM;
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	
@@ -129,12 +127,11 @@ PVRSRV_ERROR PVRSRVRGXClearBreakpointKM(CONNECTION_DATA    * psConnection,
 				0 , 
 				RFW_FWADDR_NOREF_FLAG);
 
-	eError = RGXScheduleCommand(psDevInfo,
-				psDevInfo->eBPDM,
+	eError = RGXScheduleCommand(psDeviceNode->pvDevice,
+				eDataMaster,
 				&sBPCmd,
 				sizeof(sBPCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXClearBreakpointKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -142,14 +139,14 @@ PVRSRV_ERROR PVRSRVRGXClearBreakpointKM(CONNECTION_DATA    * psConnection,
 	}
 
 	/* Wait for FW to complete */
-	eError = RGXWaitForFWOp(psDevInfo, psDevInfo->eBPDM, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, eDataMaster, psDeviceNode->psSyncPrim, IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRGXClearBreakpointKM: Wait for completion aborted with error (%u)", eError));
 		return eError;
 	}
 
-	psDevInfo->bBPSet = IMG_FALSE;
+	psDeviceNode->psDevConfig->bBPSet = IMG_FALSE;
 	
 	return eError;
 }
@@ -158,14 +155,14 @@ PVRSRV_ERROR PVRSRVRGXEnableBreakpointKM(CONNECTION_DATA    * psConnection,
                                          PVRSRV_DEVICE_NODE * psDeviceNode,
                                          IMG_HANDLE           hMemCtxPrivData)
 {
-	PVRSRV_RGXDEV_INFO	*psDevInfo = psDeviceNode->pvDevice;
 	DEVMEM_MEMDESC		*psFWMemContextMemDesc = RGXGetFWMemDescFromMemoryContextHandle(hMemCtxPrivData);
 	PVRSRV_ERROR 		eError = PVRSRV_OK;
 	RGXFWIF_KCCB_CMD 	sBPCmd;
+	RGXFWIF_DM			eDataMaster = psDeviceNode->psDevConfig->eBPDM;
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 
-	if (psDevInfo->bBPSet == IMG_FALSE)
+	if (psDeviceNode->psDevConfig->bBPSet == IMG_FALSE)
 		return PVRSRV_ERROR_BP_NOT_SET;
 	
 	sBPCmd.eCmdType = RGXFWIF_KCCB_CMD_BP;
@@ -177,12 +174,11 @@ PVRSRV_ERROR PVRSRVRGXEnableBreakpointKM(CONNECTION_DATA    * psConnection,
 				0 , 
 				RFW_FWADDR_NOREF_FLAG);
 
-	eError = RGXScheduleCommand(psDevInfo,
-				psDevInfo->eBPDM,
+	eError = RGXScheduleCommand(psDeviceNode->pvDevice,
+				eDataMaster,
 				&sBPCmd,
 				sizeof(sBPCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXEnableBreakpointKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -190,7 +186,7 @@ PVRSRV_ERROR PVRSRVRGXEnableBreakpointKM(CONNECTION_DATA    * psConnection,
 	}
 
 	/* Wait for FW to complete */
-	eError = RGXWaitForFWOp(psDevInfo, psDevInfo->eBPDM, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, eDataMaster, psDeviceNode->psSyncPrim, IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRGXEnableBreakpointKM: Wait for completion aborted with error (%u)", eError));
@@ -204,14 +200,14 @@ PVRSRV_ERROR PVRSRVRGXDisableBreakpointKM(CONNECTION_DATA    * psConnection,
                                           PVRSRV_DEVICE_NODE * psDeviceNode,
                                           IMG_HANDLE           hMemCtxPrivData)
 {
-	PVRSRV_RGXDEV_INFO	*psDevInfo = psDeviceNode->pvDevice;
 	DEVMEM_MEMDESC		*psFWMemContextMemDesc = RGXGetFWMemDescFromMemoryContextHandle(hMemCtxPrivData);
 	PVRSRV_ERROR 		eError = PVRSRV_OK;
 	RGXFWIF_KCCB_CMD 	sBPCmd;
+	RGXFWIF_DM			eDataMaster = psDeviceNode->psDevConfig->eBPDM;
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	
-	if (psDevInfo->bBPSet == IMG_FALSE)
+	if (psDeviceNode->psDevConfig->bBPSet == IMG_FALSE)
 		return PVRSRV_ERROR_BP_NOT_SET;
 	
 	sBPCmd.eCmdType = RGXFWIF_KCCB_CMD_BP;
@@ -223,12 +219,11 @@ PVRSRV_ERROR PVRSRVRGXDisableBreakpointKM(CONNECTION_DATA    * psConnection,
 				0 , 
 				RFW_FWADDR_NOREF_FLAG);
 	
-	eError = RGXScheduleCommand(psDevInfo,
-				psDevInfo->eBPDM,
+	eError = RGXScheduleCommand(psDeviceNode->pvDevice,
+				eDataMaster,
 				&sBPCmd,
 				sizeof(sBPCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXDisableBreakpointKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -236,7 +231,7 @@ PVRSRV_ERROR PVRSRVRGXDisableBreakpointKM(CONNECTION_DATA    * psConnection,
 	}
 
 	/* Wait for FW to complete */
-	eError = RGXWaitForFWOp(psDevInfo, psDevInfo->eBPDM, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, eDataMaster, psDeviceNode->psSyncPrim, IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRGXDisableBreakpointKM: Wait for completion aborted with error (%u)", eError));
@@ -265,8 +260,7 @@ PVRSRV_ERROR PVRSRVRGXOverallocateBPRegistersKM(CONNECTION_DATA    * psConnectio
 				RGXFWIF_DM_GP,
 				&sBPCmd,
 				sizeof(sBPCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXOverallocateBPRegistersKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -274,7 +268,7 @@ PVRSRV_ERROR PVRSRVRGXOverallocateBPRegistersKM(CONNECTION_DATA    * psConnectio
 	}
 
 	/* Wait for FW to complete */
-	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+	eError = RGXWaitForFWOp(psDeviceNode->pvDevice, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRGXOverallocateBPRegistersKM: Wait for completion aborted with error (%u)", eError));

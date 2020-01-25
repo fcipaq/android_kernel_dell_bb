@@ -48,12 +48,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvrsrv.h"
 #include "pmr.h"
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)) || defined(SUPPORT_ION) || defined(KERNEL_HAS_DMABUF_VMAP_MMAP)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) || defined(SUPPORT_ION) || defined(KERNEL_HAS_DMABUF_VMAP_MMAP)
 
-#include <linux/err.h>
-#include <linux/slab.h>
-#include <linux/dma-buf.h>
-#include <linux/scatterlist.h>
+#if defined(SUPPORT_DRM)
+#include "pvr_drm.h"
+#endif
 
 #include "img_types.h"
 #include "pvr_debug.h"
@@ -62,16 +61,29 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "allocmem.h"
 #include "osfunc.h"
+#include "pdump_physmem.h"
 #include "pmr_impl.h"
 #include "hash.h"
 #include "private_data.h"
 #include "module_common.h"
 
+#if defined(SUPPORT_DRM)
+#include <drm/drmP.h>
+#endif
+
 #if defined(PVR_RI_DEBUG)
 #include "ri_server.h"
 #endif
 
-#include "kernel_compatibility.h"
+#include <linux/err.h>
+#include <linux/slab.h>
+#include <linux/dma-buf.h>
+#include <linux/scatterlist.h>
+
+#if defined(CHROMIUMOS_WORKAROUNDS_KERNEL318)
+#define dma_buf_begin_cpu_access(A,B,C,D) dma_buf_begin_cpu_access(A,D)
+#define dma_buf_end_cpu_access(A,B,C,D)   dma_buf_end_cpu_access(A,D)
+#endif
 
 /*
  * dma_buf_ops
@@ -138,12 +150,12 @@ typedef struct _PMR_DMA_BUF_DATA_
 	struct dma_buf_attachment *psAttachment;
 	PFN_DESTROY_DMABUF_PMR pfnDestroy;
 	IMG_BOOL bPoisonOnFree;
+	IMG_HANDLE hPDumpAllocInfo;
 
 	/* Modified by PMR lock/unlock */
 	struct sg_table *psSgTable;
 	IMG_DEV_PHYADDR *pasDevPhysAddr;
-	IMG_UINT32 ui32PhysPageCount;
-	IMG_UINT32 ui32VirtPageCount;
+	IMG_UINT32 ui32PageCount;
 } PMR_DMA_BUF_DATA;
 
 /* Start size of the g_psDmaBufHash hash table */
@@ -191,27 +203,24 @@ static void _Poison(void *pvKernAddr,
 static PVRSRV_ERROR PMRFinalizeDmaBuf(PMR_IMPL_PRIVDATA pvPriv)
 {
 	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
-	struct dma_buf_attachment *psAttachment = psPrivData->psAttachment;
-	struct dma_buf *psDmaBuf = psAttachment->dmabuf;
-	struct sg_table *psSgTable = psPrivData->psSgTable;
+	struct dma_buf *psDmaBuf = psPrivData->psAttachment->dmabuf;
 	PVRSRV_ERROR eError;
 
-	psPrivData->ui32PhysPageCount = 0;
-
-	dma_buf_unmap_attachment(psAttachment, psSgTable, DMA_BIDIRECTIONAL);
-
+	if (psPrivData->hPDumpAllocInfo)
+	{
+		PDumpFree(psPrivData->hPDumpAllocInfo);
+		psPrivData->hPDumpAllocInfo = NULL;
+	}
 
 	if (psPrivData->bPoisonOnFree)
 	{
 		void *pvKernAddr;
 		int i, err;
 
-		err = dma_buf_begin_cpu_access(psDmaBuf, DMA_FROM_DEVICE);
+		err = dma_buf_begin_cpu_access(psDmaBuf, 0, psDmaBuf->size, DMA_FROM_DEVICE);
 		if (err)
 		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to begin cpu access for free poisoning (err=%d)",
-					 __func__, err));
+			PVR_DPF((PVR_DBG_ERROR, "%s: Failed to begin cpu access for free poisoning", __func__));
 			PVR_ASSERT(IMG_FALSE);
 			goto exit;
 		}
@@ -221,9 +230,7 @@ static PVRSRV_ERROR PMRFinalizeDmaBuf(PMR_IMPL_PRIVDATA pvPriv)
 			pvKernAddr = dma_buf_kmap(psDmaBuf, i);
 			if (IS_ERR_OR_NULL(pvKernAddr))
 			{
-				PVR_DPF((PVR_DBG_ERROR,
-						 "%s: Failed to poison allocation before free (err=%ld)",
-						 __func__, pvKernAddr ? PTR_ERR(pvKernAddr) : -ENOMEM));
+				PVR_DPF((PVR_DBG_ERROR, "%s: Failed to poison allocation before free", __func__));
 				PVR_ASSERT(IMG_FALSE);
 				goto exit_end_access;
 			}
@@ -234,9 +241,7 @@ static PVRSRV_ERROR PMRFinalizeDmaBuf(PMR_IMPL_PRIVDATA pvPriv)
 		}
 
 exit_end_access:
-		do {
-			err = dma_buf_end_cpu_access(psDmaBuf, DMA_TO_DEVICE);
-		} while (err == -EAGAIN || err == -EINTR);
+		dma_buf_end_cpu_access(psDmaBuf, 0, psDmaBuf->size, DMA_TO_DEVICE);
 	}
 
 exit:
@@ -249,26 +254,100 @@ exit:
 		}
 	}
 
-	OSFreeMem(psPrivData->pasDevPhysAddr);
 	OSFreeMem(psPrivData);
 
 	return PVRSRV_OK;
 }
 
-static PVRSRV_ERROR PMRLockPhysAddressesDmaBuf(PMR_IMPL_PRIVDATA pvPriv)
+static PVRSRV_ERROR PMRLockPhysAddressesDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
+					       IMG_UINT32 uiLog2DevPageSize)
 {
-	PVR_UNREFERENCED_PARAMETER(pvPriv);
+	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
+	struct dma_buf_attachment *psAttachment = psPrivData->psAttachment;
+	IMG_DEV_PHYADDR *pasDevPhysAddr = NULL;
+	IMG_UINT32 ui32PageCount = 0;
+	struct scatterlist *sg;
+	struct sg_table *table;
+	PVRSRV_ERROR eError;
+	IMG_UINT32 i;
+
+	table = dma_buf_map_attachment(psAttachment, DMA_BIDIRECTIONAL);
+	if (!table)
+	{
+		eError = PVRSRV_ERROR_INVALID_PARAMS;
+		goto fail_map;
+	}
+
+	/*
+	 * We do a two pass process, 1st workout how many pages there
+	 * are, 2nd fill in the data.
+	 */
+	for_each_sg(table->sgl, sg, table->nents, i)
+	{
+		ui32PageCount += PAGE_ALIGN(pvr_sg_length(sg)) / PAGE_SIZE;
+	}
+
+	if (WARN_ON(!ui32PageCount))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to lock dmabuf with no pages",
+				 __func__));
+		eError = PVRSRV_ERROR_INVALID_PARAMS;
+		goto fail_page_count;
+	}
+
+	pasDevPhysAddr = OSAllocMem(sizeof(*pasDevPhysAddr) * ui32PageCount);
+	if (!pasDevPhysAddr)
+	{
+		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+		goto fail_alloc;
+	}
+
+	ui32PageCount = 0;
+
+	for_each_sg(table->sgl, sg, table->nents, i)
+	{
+		IMG_UINT32 j;
+
+		for (j = 0; j < pvr_sg_length(sg); j += PAGE_SIZE)
+		{
+			/* Pass 2: Get the page data */
+			pasDevPhysAddr[ui32PageCount].uiAddr = sg_dma_address(sg) + j;
+			ui32PageCount++;
+		}
+	}
+
+	psPrivData->pasDevPhysAddr = pasDevPhysAddr;
+	psPrivData->ui32PageCount = ui32PageCount;
+	psPrivData->psSgTable = table;
+
 	return PVRSRV_OK;
+
+fail_alloc:
+fail_page_count:
+	dma_buf_unmap_attachment(psAttachment, table, DMA_BIDIRECTIONAL);
+
+fail_map:
+	PVR_ASSERT(eError!= PVRSRV_OK);
+	return eError;
 }
 
 static PVRSRV_ERROR PMRUnlockPhysAddressesDmaBuf(PMR_IMPL_PRIVDATA pvPriv)
 {
-	PVR_UNREFERENCED_PARAMETER(pvPriv);
+	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
+	struct dma_buf_attachment *psAttachment = psPrivData->psAttachment;
+	struct sg_table *psSgTable = psPrivData->psSgTable;
+
+	OSFreeMem(psPrivData->pasDevPhysAddr);
+
+	psPrivData->pasDevPhysAddr = NULL;
+	psPrivData->ui32PageCount = 0;
+
+	dma_buf_unmap_attachment(psAttachment, psSgTable, DMA_BIDIRECTIONAL);
+
 	return PVRSRV_OK;
 }
 
 static PVRSRV_ERROR PMRDevPhysAddrDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
-					 IMG_UINT32 ui32Log2PageSize,
 					 IMG_UINT32 ui32NumOfPages,
 					 IMG_DEVMEM_OFFSET_T *puiOffset,
 					 IMG_BOOL *pbValid,
@@ -277,11 +356,6 @@ static PVRSRV_ERROR PMRDevPhysAddrDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
 	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
 	IMG_UINT32 ui32PageIndex;
 	IMG_UINT32 idx;
-
-	if (ui32Log2PageSize != PAGE_SHIFT)
-	{
-		return PVRSRV_ERROR_PMR_INCOMPATIBLE_CONTIGUITY;
-	}
 
 	for (idx=0; idx < ui32NumOfPages; idx++)
 	{
@@ -292,12 +366,13 @@ static PVRSRV_ERROR PMRDevPhysAddrDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
 			ui32PageIndex = puiOffset[idx] >> PAGE_SHIFT;
 			ui32InPageOffset = puiOffset[idx] - ((IMG_DEVMEM_OFFSET_T)ui32PageIndex << PAGE_SHIFT);
 
-
-			PVR_ASSERT(ui32PageIndex < psPrivData->ui32VirtPageCount);
+			PVR_ASSERT(ui32PageIndex < psPrivData->ui32PageCount);
 			PVR_ASSERT(ui32InPageOffset < PAGE_SIZE);
+
 			psDevPAddr[idx].uiAddr = psPrivData->pasDevPhysAddr[ui32PageIndex].uiAddr + ui32InPageOffset;
 		}
 	}
+
 	return PVRSRV_OK;
 }
 
@@ -315,15 +390,7 @@ PMRAcquireKernelMappingDataDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
 	PVRSRV_ERROR eError;
 	int err;
 
-	if (psPrivData->ui32PhysPageCount != psPrivData->ui32VirtPageCount)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Kernel mappings for sparse DMABufs "
-				"are not allowed!", __func__));
-		eError = PVRSRV_ERROR_PMR_NO_KERNEL_MAPPING;
-		goto fail;
-	}
-
-	err = dma_buf_begin_cpu_access(psDmaBuf, DMA_BIDIRECTIONAL);
+	err = dma_buf_begin_cpu_access(psDmaBuf, 0, psDmaBuf->size, DMA_BIDIRECTIONAL);
 	if (err)
 	{
 		eError = PVRSRV_ERROR_PMR_NO_KERNEL_MAPPING;
@@ -343,9 +410,7 @@ PMRAcquireKernelMappingDataDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
 	return PVRSRV_OK;
 
 fail_kmap:
-	do {
-		err = dma_buf_end_cpu_access(psDmaBuf, DMA_BIDIRECTIONAL);
-	} while (err == -EAGAIN || err == -EINTR);
+	dma_buf_end_cpu_access(psDmaBuf, 0, psDmaBuf->size, DMA_BIDIRECTIONAL);
 
 fail:
 	PVR_ASSERT(eError != PVRSRV_OK);
@@ -358,31 +423,22 @@ static void PMRReleaseKernelMappingDataDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
 	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
 	struct dma_buf *psDmaBuf = psPrivData->psAttachment->dmabuf;
 	void *pvKernAddr = hHandle;
-	int err;
 
 	dma_buf_vunmap(psDmaBuf, pvKernAddr);
 
-	do {
-		err = dma_buf_end_cpu_access(psDmaBuf, DMA_BIDIRECTIONAL);
-	} while (err == -EAGAIN || err == -EINTR);
+	dma_buf_end_cpu_access(psDmaBuf, 0, psDmaBuf->size, DMA_BIDIRECTIONAL);
 }
 
 static PVRSRV_ERROR PMRMMapDmaBuf(PMR_IMPL_PRIVDATA pvPriv,
-                                  PMR *psPMR,
-                                  PMR_MMAP_DATA pOSMMapData)
+				  const PMR *psPMR,
+				  PMR_MMAP_DATA pOSMMapData)
 {
 	PMR_DMA_BUF_DATA *psPrivData = pvPriv;
 	struct dma_buf *psDmaBuf = psPrivData->psAttachment->dmabuf;
 	struct vm_area_struct *psVma = pOSMMapData;
 	int err;
 
-	if (psPrivData->ui32PhysPageCount != psPrivData->ui32VirtPageCount)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				"%s: Not possible to MMAP sparse DMABufs",
-				__func__));
-		return PVRSRV_ERROR_NOT_IMPLEMENTED;
-	}
+	PVR_UNREFERENCED_PARAMETER(psPMR);
 
 	err = dma_buf_mmap(psDmaBuf, psVma, 0);
 	if (err)
@@ -409,78 +465,80 @@ static PMR_IMPL_FUNCTAB _sPMRDmaBufFuncTab =
  *****************************************************************************/
 
 PVRSRV_ERROR
-PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
-                                PHYS_HEAP *psHeap,
-                                struct dma_buf_attachment *psAttachment,
-                                PFN_DESTROY_DMABUF_PMR pfnDestroy,
-                                PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                                IMG_DEVMEM_SIZE_T uiChunkSize,
-                                IMG_UINT32 ui32NumPhysChunks,
-                                IMG_UINT32 ui32NumVirtChunks,
-                                IMG_UINT32 *pui32MappingTable,
-                                PMR **ppsPMRPtr)
+PhysmemCreateNewDmaBufBackedPMR(PHYS_HEAP *psHeap,
+				struct dma_buf_attachment *psAttachment,
+				PFN_DESTROY_DMABUF_PMR pfnDestroy,
+				PVRSRV_MEMALLOCFLAGS_T uiFlags,
+				PMR **ppsPMRPtr)
 {
 	struct dma_buf *psDmaBuf = psAttachment->dmabuf;
 	PMR_DMA_BUF_DATA *psPrivData;
+	IMG_BOOL bMappingTable = IMG_TRUE;
 	PMR_FLAGS_T uiPMRFlags;
 	IMG_BOOL bZeroOnAlloc;
 	IMG_BOOL bPoisonOnAlloc;
 	IMG_BOOL bPoisonOnFree;
 	PVRSRV_ERROR eError;
-	IMG_UINT32 i, j;
-	IMG_UINT32 uiPagesPerChunk = uiChunkSize >> PAGE_SHIFT;
-	IMG_UINT32 ui32PageCount = 0;
-	struct scatterlist *sg;
-	struct sg_table *table;
-	IMG_UINT32 uiSglOffset;
 
-	bZeroOnAlloc = PVRSRV_CHECK_ZERO_ON_ALLOC(uiFlags);
-	bPoisonOnAlloc = PVRSRV_CHECK_POISON_ON_ALLOC(uiFlags);
-	bPoisonOnFree = PVRSRV_CHECK_POISON_ON_FREE(uiFlags);
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_ZERO_ON_ALLOC)
+	{
+		bZeroOnAlloc = IMG_TRUE;
+	}
+	else
+	{
+		bZeroOnAlloc = IMG_FALSE;
+	}
+
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_POISON_ON_ALLOC)
+	{
+		bPoisonOnAlloc = IMG_TRUE;
+	}
+	else
+	{
+		bPoisonOnAlloc = IMG_FALSE;
+	}
+
+	if (uiFlags & PVRSRV_MEMALLOCFLAG_POISON_ON_FREE)
+	{
+		bPoisonOnFree = IMG_TRUE;
+	}
+	else
+	{
+		bPoisonOnFree = IMG_FALSE;
+	}
 
 	if (bZeroOnAlloc && bPoisonOnFree)
 	{
 		/* Zero on Alloc and Poison on Alloc are mutually exclusive */
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto errReturn;
+		goto fail_params;
 	}
 
 	psPrivData = OSAllocZMem(sizeof(*psPrivData));
 	if (psPrivData == NULL)
 	{
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-		goto errReturn;
+		goto fail_priv_alloc;
 	}
 
 	psPrivData->psPhysHeap = psHeap;
 	psPrivData->psAttachment = psAttachment;
 	psPrivData->pfnDestroy = pfnDestroy;
 	psPrivData->bPoisonOnFree = bPoisonOnFree;
-	psPrivData->ui32VirtPageCount =
-			(ui32NumVirtChunks * uiChunkSize) >> PAGE_SHIFT;
-
-	psPrivData->pasDevPhysAddr =
-			OSAllocZMem(sizeof(*(psPrivData->pasDevPhysAddr)) *
-			            psPrivData->ui32VirtPageCount);
-	if (!psPrivData->pasDevPhysAddr)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				"%s: Failed to allocate buffer for physical addresses (oom)",
-				 __func__));
-		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-		goto errFreePrivData;
-	}
 
 	if (bZeroOnAlloc || bPoisonOnAlloc)
 	{
 		void *pvKernAddr;
 		int i, err;
 
-		err = dma_buf_begin_cpu_access(psDmaBuf, DMA_FROM_DEVICE);
+		err = dma_buf_begin_cpu_access(psDmaBuf,
+					       0,
+					       psDmaBuf->size,
+					       DMA_FROM_DEVICE);
 		if (err)
 		{
 			eError = PVRSRV_ERROR_PMR_NO_KERNEL_MAPPING;
-			goto errFreePhysAddr;
+			goto fail_begin;
 		}
 
 		for (i = 0; i < psDmaBuf->size / PAGE_SIZE; i++)
@@ -489,16 +547,17 @@ PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 			if (IS_ERR_OR_NULL(pvKernAddr))
 			{
 				PVR_DPF((PVR_DBG_ERROR,
-						 "%s: Failed to map page for %s (err=%ld)",
-						 __func__, bZeroOnAlloc ? "zeroing" : "poisoning",
-						 pvKernAddr ? PTR_ERR(pvKernAddr) : -ENOMEM));
+					 "%s: Failed to map page for %s",
+					 __func__,
+					 bZeroOnAlloc ? "zeroing" : "poisoning"));
 				eError = PVRSRV_ERROR_PMR_NO_KERNEL_MAPPING;
 
-				do {
-					err = dma_buf_end_cpu_access(psDmaBuf, DMA_TO_DEVICE);
-				} while (err == -EAGAIN || err == -EINTR);
+				dma_buf_end_cpu_access(psDmaBuf,
+						       0,
+						       psDmaBuf->size,
+						       DMA_TO_DEVICE);
 
-				goto errFreePhysAddr;
+				goto fail_kmap;
 			}
 
 			if (bZeroOnAlloc)
@@ -513,79 +572,10 @@ PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 			dma_buf_kunmap(psDmaBuf, i, pvKernAddr);
 		}
 
-		do {
-			err = dma_buf_end_cpu_access(psDmaBuf, DMA_TO_DEVICE);
-		} while (err == -EAGAIN || err == -EINTR);
-	}
-
-	table = dma_buf_map_attachment(psAttachment, DMA_BIDIRECTIONAL);
-	if (IS_ERR_OR_NULL(table))
-	{
-		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto errFreePhysAddr;
-	}
-
-	/*
-	 * We do a two pass process: first work out how many pages there
-	 * are and second, fill in the data.
-	 */
-	for_each_sg(table->sgl, sg, table->nents, i)
-	{
-		ui32PageCount += PAGE_ALIGN(pvr_sg_length(sg)) / PAGE_SIZE;
-	}
-
-	if (WARN_ON(!ui32PageCount))
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Number of phys. pages must not be zero",
-				 __func__));
-		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto errUnmap;
-	}
-
-	if  (WARN_ON(ui32PageCount != ui32NumPhysChunks * uiPagesPerChunk))
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Requested physical chunks and actual "
-				"number of physical dma buf pages don't match",
-				 __func__));
-		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto errUnmap;
-	}
-
-	psPrivData->ui32PhysPageCount = ui32PageCount;
-	psPrivData->psSgTable = table;
-	ui32PageCount = 0;
-	sg = table->sgl;
-	uiSglOffset = 0;
-
-
-	/* Fill physical address array */
-	for (i = 0; i < ui32NumPhysChunks; i++)
-	{
-		for (j = 0; j < uiPagesPerChunk; j++)
-		{
-			IMG_UINT32 uiIdx = pui32MappingTable[i] * uiPagesPerChunk + j;
-
-			psPrivData->pasDevPhysAddr[uiIdx].uiAddr =
-					sg_dma_address(sg) + uiSglOffset;
-
-			/* Get the next offset for the current sgl or the next sgl */
-			uiSglOffset += PAGE_SIZE;
-			if (uiSglOffset >= pvr_sg_length(sg))
-			{
-				sg = sg_next(sg);
-				uiSglOffset = 0;
-
-				/* Check that we haven't looped */
-				if (WARN_ON(sg == table->sgl))
-				{
-					PVR_DPF((PVR_DBG_ERROR, "%s: Failed to fill phys. address "
-							"array ",
-							 __func__));
-					eError = PVRSRV_ERROR_INVALID_PARAMS;
-					goto errUnmap;
-				}
-			}
-		}
+		dma_buf_end_cpu_access(psDmaBuf,
+				       0,
+				       psDmaBuf->size,
+				       DMA_TO_DEVICE);
 	}
 
 	uiPMRFlags = (PMR_FLAGS_T)(uiFlags & PVRSRV_MEMALLOCFLAGS_PMRFLAGSMASK);
@@ -596,37 +586,48 @@ PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 	 */
 	PVR_ASSERT(uiPMRFlags == (uiFlags & PVRSRV_MEMALLOCFLAGS_PMRFLAGSMASK));
 
-	eError = PMRCreatePMR(psDevNode,
-			      psHeap,
-			      ui32NumVirtChunks * uiChunkSize,
-			      uiChunkSize,
-			      ui32NumPhysChunks,
-			      ui32NumVirtChunks,
-			      pui32MappingTable,
+	eError = PMRCreatePMR(psHeap,
+			      psDmaBuf->size,
+			      psDmaBuf->size,
+			      1,
+			      1,
+			      &bMappingTable,
 			      PAGE_SHIFT,
 			      uiPMRFlags,
-			      "IMPORTED_DMABUF",
+			      "PMRDMABUF",
 			      &_sPMRDmaBufFuncTab,
 			      psPrivData,
-			      PMR_TYPE_DMABUF,
 			      ppsPMRPtr,
+			      &psPrivData->hPDumpAllocInfo,
 			      IMG_FALSE);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to create PMR (%s)",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
-		goto errFreePhysAddr;
+		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to create PMR", __func__));
+		goto fail_create_pmr;
 	}
+
+#if defined(PVR_RI_DEBUG)
+	eError = RIWritePMREntryKM(*ppsPMRPtr,
+				   sizeof("DMABUF"),
+				   "DMABUF",
+				   psDmaBuf->size);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_WARNING,
+			 "%s: Failed to write PMR entry (%s)",
+			 __func__, PVRSRVGetErrorStringKM(eError)));
+	}
+#endif
 
 	return PVRSRV_OK;
 
-errUnmap:
-	dma_buf_unmap_attachment(psAttachment, table, DMA_BIDIRECTIONAL);
-errFreePhysAddr:
-	OSFreeMem(psPrivData->pasDevPhysAddr);
-errFreePrivData:
+fail_create_pmr:
+fail_kmap:
+fail_begin:
 	OSFreeMem(psPrivData);
-errReturn:
+
+fail_priv_alloc:
+fail_params:
 	PVR_ASSERT(eError != PVRSRV_OK);
 	return eError;
 }
@@ -707,8 +708,10 @@ PhysmemExportDmaBuf(CONNECTION_DATA *psConnection,
 
 	if (IS_ERR_OR_NULL(psDmaBuf))
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to export buffer (err=%ld)",
-		         __func__, psDmaBuf ? PTR_ERR(psDmaBuf) : -ENOMEM));
+		PVR_DPF((PVR_DBG_ERROR,
+		         "%s: dma_buf_export failed (err=%ld)",
+		         __func__,
+		         PTR_ERR(psDmaBuf)));
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		goto fail_pmr_ref;
 	}
@@ -716,8 +719,10 @@ PhysmemExportDmaBuf(CONNECTION_DATA *psConnection,
 	iFd = dma_buf_fd(psDmaBuf, O_RDWR);
 	if (iFd < 0)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to get dma-buf fd (err=%d)",
-		         __func__, iFd));
+		PVR_DPF((PVR_DBG_ERROR,
+		         "%s: dma_buf_fd failed (err=%d)",
+		         __func__,
+		         iFd));
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		goto fail_dma_buf;
 	}
@@ -737,99 +742,51 @@ fail_pmr_ref:
 
 PVRSRV_ERROR
 PhysmemImportDmaBuf(CONNECTION_DATA *psConnection,
-                    PVRSRV_DEVICE_NODE *psDevNode,
-                    IMG_INT fd,
-                    PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                    PMR **ppsPMRPtr,
-                    IMG_DEVMEM_SIZE_T *puiSize,
-                    IMG_DEVMEM_ALIGN_T *puiAlign)
+		    PVRSRV_DEVICE_NODE *psDevNode,
+		    IMG_INT fd,
+		    PVRSRV_MEMALLOCFLAGS_T uiFlags,
+		    PMR **ppsPMRPtr,
+		    IMG_DEVMEM_SIZE_T *puiSize,
+		    IMG_DEVMEM_ALIGN_T *puiAlign)
 {
-	IMG_DEVMEM_SIZE_T uiSize;
-	IMG_UINT32 ui32MappingTable = 0;
-	struct dma_buf *psDmaBuf;
-
-	/* Get the buffer handle */
-	psDmaBuf = dma_buf_get(fd);
-	if (IS_ERR_OR_NULL(psDmaBuf))
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to get dma-buf from fd (err=%ld)",
-				 __func__, psDmaBuf ? PTR_ERR(psDmaBuf) : -ENOMEM));
-		return PVRSRV_ERROR_BAD_MAPPING;
-
-	}
-
-	uiSize = psDmaBuf->size;
-
-	dma_buf_put(psDmaBuf);
-
-	return PhysmemImportSparseDmaBuf(psConnection,
-	                                 psDevNode,
-	                                 fd,
-	                                 uiFlags,
-	                                 uiSize,
-	                                 1,
-	                                 1,
-	                                 &ui32MappingTable,
-	                                 ppsPMRPtr,
-	                                 puiSize,
-	                                 puiAlign);
-
-
-}
-
-PVRSRV_ERROR
-PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
-                          PVRSRV_DEVICE_NODE *psDevNode,
-                          IMG_INT fd,
-                          PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                          IMG_DEVMEM_SIZE_T uiChunkSize,
-                          IMG_UINT32 ui32NumPhysChunks,
-                          IMG_UINT32 ui32NumVirtChunks,
-                          IMG_UINT32 *pui32MappingTable,
-                          PMR **ppsPMRPtr,
-                          IMG_DEVMEM_SIZE_T *puiSize,
-                          IMG_DEVMEM_ALIGN_T *puiAlign)
-{
+#if defined(SUPPORT_DRM)
+	struct file *psFile;
+	struct drm_file *psFilePriv;
+#endif
+	struct device *psDev;
 	PMR *psPMR = NULL;
 	struct dma_buf_attachment *psAttachment;
 	struct dma_buf *psDmaBuf;
 	PHYS_HEAP *psHeap;
 	PVRSRV_ERROR eError;
 
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-	if (!psDevNode)
+	if (!psConnection)
 	{
 		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto errReturn;
+		goto fail_params;
 	}
+
+#if defined(SUPPORT_DRM)
+	psFile = LinuxFileFromConnection(psConnection);
+	psFilePriv = psFile->private_data;
+	psDev = psFilePriv->minor->dev->dev;
+#else
+	psDev = &gpsPVRLDMDev->dev;
+#endif
 
 	/* Get the buffer handle */
 	psDmaBuf = dma_buf_get(fd);
 	if (IS_ERR_OR_NULL(psDmaBuf))
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to get dma-buf from fd (err=%ld)",
-				 __func__, psDmaBuf ? PTR_ERR(psDmaBuf) : -ENOMEM));
+		PVR_DPF((PVR_DBG_ERROR, "%s: dma_buf_get failed", __func__));
 		eError = PVRSRV_ERROR_BAD_MAPPING;
-		goto errReturn;
+		goto fail_dma_buf_get;
 	}
 
 	if (psDmaBuf->ops == &sPVRDmaBufOps)
 	{
-		PVRSRV_DEVICE_NODE *psPMRDevNode;
-
 		/* We exported this dma_buf, so we can just get its PMR */
 		psPMR = (PMR *) psDmaBuf->priv;
-
-		/* However, we can't import it if it belongs to a different device */
-		psPMRDevNode = PMR_DeviceNode(psPMR);
-		if (psPMRDevNode != psDevNode)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: PMR invalid for this device\n",
-					 __func__));
-			eError = PVRSRV_ERROR_PMR_NOT_PERMITTED;
-			goto errDMAPut;
-		}
 	}
 	else if (g_psDmaBufHash)
 	{
@@ -843,7 +800,7 @@ PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
 		PMRRefPMR(psPMR);
 
 		*ppsPMRPtr = psPMR;
-		PMR_LogicalSize(psPMR, puiSize);
+		*puiSize = psDmaBuf->size;
 		*puiAlign = PAGE_SIZE;
 
 		dma_buf_put(psDmaBuf);
@@ -851,74 +808,17 @@ PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
 		return PVRSRV_OK;
 	}
 
-	/* Do we want this to be a sparse PMR? */
-	if (ui32NumVirtChunks > 1)
-	{
-		IMG_UINT32 i;
-
-		/* Parameter validation */
-		if (psDmaBuf->size != (uiChunkSize * ui32NumPhysChunks) ||
-		    uiChunkSize != PAGE_SIZE ||
-		    ui32NumPhysChunks > ui32NumVirtChunks)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					"%s: Requesting sparse buffer: "
-					"uiChunkSize ("IMG_DEVMEM_SIZE_FMTSPEC") must be equal to "
-					"OS page size (%lu). uiChunkSize * ui32NumPhysChunks "
-					"("IMG_DEVMEM_SIZE_FMTSPEC") must"
-					" be equal to the buffer size ("IMG_SIZE_FMTSPEC"). "
-					"ui32NumPhysChunks (%u) must be lesser or equal to "
-					"ui32NumVirtChunks (%u)",
-					 __func__,
-					uiChunkSize,
-					PAGE_SIZE,
-					uiChunkSize * ui32NumPhysChunks,
-					psDmaBuf->size,
-					ui32NumPhysChunks,
-					ui32NumVirtChunks));
-			eError = PVRSRV_ERROR_INVALID_PARAMS;
-			goto errDMAPut;
-		}
-
-		/* Parameter validation - Mapping table entries*/
-		for (i = 0; i < ui32NumPhysChunks; i++)
-		{
-			if (pui32MappingTable[i] > ui32NumVirtChunks)
-			{
-				PVR_DPF((PVR_DBG_ERROR,
-						"%s: Requesting sparse buffer: "
-						"Entry in mapping table (%u) is out of allocation "
-						"bounds (%u)",
-						 __func__,
-						 (IMG_UINT32) pui32MappingTable[i],
-						 (IMG_UINT32) ui32NumVirtChunks));
-				eError = PVRSRV_ERROR_INVALID_PARAMS;
-				goto errDMAPut;
-			}
-		}
-	}
-	else
-	{
-		/* Make sure parameters are valid for non-sparse allocations as well */
-		uiChunkSize = psDmaBuf->size;
-		ui32NumPhysChunks = 1;
-		ui32NumVirtChunks = 1;
-		pui32MappingTable[0] = 0;
-	}
-
-
-	psAttachment = dma_buf_attach(psDmaBuf, psDevNode->psDevConfig->pvOSDevice);
+	psAttachment = dma_buf_attach(psDmaBuf, psDev);
 	if (IS_ERR_OR_NULL(psAttachment))
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to attach to dma-buf (err=%ld)",
-				 __func__, psAttachment? PTR_ERR(psAttachment) : -ENOMEM));
+		PVR_DPF((PVR_DBG_ERROR, "%s: dma_buf_get failed", __func__));
 		eError = PVRSRV_ERROR_BAD_MAPPING;
-		goto errDMAPut;
+		goto fail_dma_buf_attach;
 	}
 
 	/*
 	 * Get the physical heap for this PMR
-	 *
+	 *	
 	 * Note:
 	 * While we have no way to determine the type of the buffer
 	 * we just assume that all dmabufs are from the same
@@ -927,24 +827,18 @@ PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
 	eError = PhysHeapAcquire(DMABUF_IMPORT_PHYSHEAP_ID, &psHeap);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to acquire physical heap (%s)",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
-		goto errDMADetach;
+		PVR_DPF((PVR_DBG_ERROR, "%s: Failed PhysHeapAcquire", __func__));
+		goto fail_physheap;
 	}
 
-	eError = PhysmemCreateNewDmaBufBackedPMR(psDevNode,
-	                                         psHeap,
-	                                         psAttachment,
-	                                         PhysmemDestroyDmaBuf,
-	                                         uiFlags,
-	                                         uiChunkSize,
-	                                         ui32NumPhysChunks,
-	                                         ui32NumVirtChunks,
-	                                         pui32MappingTable,
-	                                         &psPMR);
+	eError = PhysmemCreateNewDmaBufBackedPMR(psHeap,
+						 psAttachment,
+						 PhysmemDestroyDmaBuf,
+						 uiFlags,
+						 &psPMR);
 	if (eError != PVRSRV_OK)
 	{
-		goto errHeapRelease;
+		goto fail_create_new_pmr;
 	}
 
 	if (!g_psDmaBufHash)
@@ -958,7 +852,7 @@ PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
 		if (!g_psDmaBufHash)
 		{
 			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-			goto errUnrefPMR;
+			goto fail_hash_create;
 		}
 	}
 
@@ -967,24 +861,25 @@ PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
 	g_ui32HashRefCount++;
 
 	*ppsPMRPtr = psPMR;
-	*puiSize = ui32NumVirtChunks * uiChunkSize;
+	*puiSize = psDmaBuf->size;
 	*puiAlign = PAGE_SIZE;
 
 	return PVRSRV_OK;
 
-errUnrefPMR:
+fail_hash_create:
 	PMRUnrefPMR(psPMR);
 
-errHeapRelease:
+fail_create_new_pmr:
 	PhysHeapRelease(psHeap);
 
-errDMADetach:
+fail_physheap:
 	dma_buf_detach(psDmaBuf, psAttachment);
 
-errDMAPut:
+fail_dma_buf_attach:
 	dma_buf_put(psDmaBuf);
 
-errReturn:
+fail_dma_buf_get:
+fail_params:
 	PVR_ASSERT(eError != PVRSRV_OK);
 	return eError;
 }
@@ -992,26 +887,16 @@ errReturn:
 #else /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) || defined(SUPPORT_ION) */
 
 PVRSRV_ERROR
-PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
-                                PHYS_HEAP *psHeap,
+PhysmemCreateNewDmaBufBackedPMR(PHYS_HEAP *psHeap,
                                 struct dma_buf_attachment *psAttachment,
                                 PFN_DESTROY_DMABUF_PMR pfnDestroy,
                                 PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                                IMG_DEVMEM_SIZE_T uiChunkSize,
-                                IMG_UINT32 ui32NumPhysChunks,
-                                IMG_UINT32 ui32NumVirtChunks,
-                                IMG_UINT32 *pui32MappingTable,
                                 PMR **ppsPMRPtr)
 {
-	PVR_UNREFERENCED_PARAMETER(psDevNode);
 	PVR_UNREFERENCED_PARAMETER(psHeap);
 	PVR_UNREFERENCED_PARAMETER(psAttachment);
 	PVR_UNREFERENCED_PARAMETER(pfnDestroy);
 	PVR_UNREFERENCED_PARAMETER(uiFlags);
-	PVR_UNREFERENCED_PARAMETER(uiChunkSize);
-	PVR_UNREFERENCED_PARAMETER(ui32NumPhysChunks);
-	PVR_UNREFERENCED_PARAMETER(ui32NumVirtChunks);
-	PVR_UNREFERENCED_PARAMETER(pui32MappingTable);
 	PVR_UNREFERENCED_PARAMETER(ppsPMRPtr);
 
 	return PVRSRV_ERROR_NOT_SUPPORTED;
@@ -1059,31 +944,4 @@ PhysmemImportDmaBuf(CONNECTION_DATA *psConnection,
 	return PVRSRV_ERROR_NOT_SUPPORTED;
 }
 
-PVRSRV_ERROR
-PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
-                          PVRSRV_DEVICE_NODE *psDevNode,
-                          IMG_INT fd,
-                          PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                          IMG_DEVMEM_SIZE_T uiChunkSize,
-                          IMG_UINT32 ui32NumPhysChunks,
-                          IMG_UINT32 ui32NumVirtChunks,
-                          IMG_UINT32 *pui32MappingTable,
-                          PMR **ppsPMRPtr,
-                          IMG_DEVMEM_SIZE_T *puiSize,
-                          IMG_DEVMEM_ALIGN_T *puiAlign)
-{
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-	PVR_UNREFERENCED_PARAMETER(psDevNode);
-	PVR_UNREFERENCED_PARAMETER(fd);
-	PVR_UNREFERENCED_PARAMETER(uiFlags);
-	PVR_UNREFERENCED_PARAMETER(ppsPMRPtr);
-	PVR_UNREFERENCED_PARAMETER(puiSize);
-	PVR_UNREFERENCED_PARAMETER(puiAlign);
-	PVR_UNREFERENCED_PARAMETER(uiChunkSize);
-	PVR_UNREFERENCED_PARAMETER(ui32NumPhysChunks);
-	PVR_UNREFERENCED_PARAMETER(ui32NumVirtChunks);
-	PVR_UNREFERENCED_PARAMETER(pui32MappingTable);
-
-	return PVRSRV_ERROR_NOT_SUPPORTED;
-}
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) || defined(SUPPORT_ION) || defined(KERNEL_HAS_DMABUF_VMAP_MMAP) */

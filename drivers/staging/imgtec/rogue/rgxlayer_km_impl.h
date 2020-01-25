@@ -50,16 +50,7 @@ typedef struct _RGX_POWER_LAYER_PARAMS_
 {
 	void *psDevInfo;
 	void *psDevConfig;
-#if defined(PDUMP)
-	IMG_UINT32 ui32PdumpFlags;
-#endif
-
 	IMG_DEV_PHYADDR sPCAddr;
-	IMG_DEV_PHYADDR sGPURegAddr;
-	IMG_DEV_PHYADDR sBootRemapAddr;
-	IMG_DEV_PHYADDR sCodeRemapAddr;
-	IMG_DEV_PHYADDR sDataRemapAddr;
-	IMG_DEV_PHYADDR sTrampolineRemapAddr;
 } RGX_POWER_LAYER_PARAMS;
 
 #endif /* !defined (__RGXLAYER_KM_IMPL_H__) */

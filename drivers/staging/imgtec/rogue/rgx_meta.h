@@ -214,67 +214,62 @@ typedef struct
 #define RGX_META_LDR_CFG_MEMSET			(0x0003)
 #define RGX_META_LDR_CFG_MEMCHECK		(0x0004)
 
-
 /************************************************************************
 * RGX FW segmented MMU definitions
 ************************************************************************/
 /* All threads can access the segment */
 #define RGXFW_SEGMMU_ALLTHRS	(0xf << 8)
-/* Writable */
+/* Writeable */
 #define RGXFW_SEGMMU_WRITEABLE	(0x1 << 1)
-/* All threads can access and writable */
+/* All threads can access and writeable */
 #define RGXFW_SEGMMU_ALLTHRS_WRITEABLE	(RGXFW_SEGMMU_ALLTHRS | RGXFW_SEGMMU_WRITEABLE)
+
+/* Direct map regions mapping (8-10) */
+#define RGXFW_SEGMMU_DMAP_ID_START			(8)
+#define RGXFW_SEGMMU_DMAP_ADDR_START		(0x06000000U)
+#define RGXFW_SEGMMU_DMAP_ADDR_META			(0x06000000U)
+#define RGXFW_SEGMMU_DMAP_SIZE				(8*1024*1024) /* 8 MB */
 
 /* Direct map region 11 used for mapping GPU memory */
 #define RGXFW_SEGMMU_DMAP_GPU_ID			(11)
-#define RGXFW_SEGMMU_DMAP_GPU_ADDR_START	(0x07800000U)
+#define RGXFW_SEGMMU_DMAP_GPU_ADDR_START	(RGXFW_SEGMMU_DMAP_ADDR_START + 3*RGXFW_SEGMMU_DMAP_SIZE)
 
 /* Segment IDs */
-#define RGXFW_SEGMMU_DATA_ID			(1)
+#define RGXFW_SEGMMU_TEXT_ID			(0)
+#define RGXFW_SEGMMU_SHARED_ID			(1)
 #define RGXFW_SEGMMU_BOOTLDR_ID			(2)
-#define RGXFW_SEGMMU_TEXT_ID			(RGXFW_SEGMMU_BOOTLDR_ID)
+#define RGXFW_SEGMMU_DATA_ID			(3)
 
 #define RGXFW_SEGMMU_META_DM_ID			(0x7)
 
-
-/*
- * SLC caching strategy in S7 is emitted through the segment MMU. All the segments
- * configured through the macro RGXFW_SEGMMU_OUTADDR_TOP are CACHED in the SLC.
- * The interface has been kept the same to simplify the code changes.
- * The bifdm argument is ignored (no longer relevant) in S7.
- */
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_49144(pers, coheren, mmu_ctx)  ( (((IMG_UINT64) ((pers)    & 0x3))  << 50) | \
-                                                                         (((IMG_UINT64) ((mmu_ctx) & 0xFF)) << 42) | \
-                                                                         (((IMG_UINT64) ((coheren) & 0x1))  << 40) )
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED_ERN_49144(mmu_ctx)      RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_49144(0x3, 0x0, mmu_ctx)
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED_ERN_49144(mmu_ctx)    RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_49144(0x0, 0x1, mmu_ctx)
-/* Set FW code/data cached in the SLC as default */
-#define RGXFW_SEGMMU_OUTADDR_TOP_ERN_49144(mmu_ctx, bifdm)             RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED_ERN_49144(mmu_ctx | (bifdm&0x0))
-
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_45914(pers, coheren, mmu_ctx)  ( (((IMG_UINT64) ((pers)    & 0x3))  << 52) | \
-                                                                         (((IMG_UINT64) ((mmu_ctx) & 0xFF)) << 44) | \
-                                                                         (((IMG_UINT64) ((coheren) & 0x1))  << 40) )
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED_ERN_45914(mmu_ctx)      RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_45914(0x3, 0x0, mmu_ctx)
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED_ERN_45914(mmu_ctx)    RGXFW_SEGMMU_OUTADDR_TOP_S7_ERN_45914(0x0, 0x1, mmu_ctx)
-/* Set FW code/data cached in the SLC as default */
-#define RGXFW_SEGMMU_OUTADDR_TOP_ERN_45914(mmu_ctx, bifdm)             RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED_ERN_45914(mmu_ctx | (bifdm&0x0))
-
-/* To configure the Page Catalog and BIF-DM fed into the BIF for Garten accesses through this segment */
-#define RGXFW_SEGMMU_OUTADDR_TOP_PRE_S7(pc, bifdm)              ( (((IMG_UINT64) ((pc)    & 0xF)) << 44) | \
-                                                                  (((IMG_UINT64) ((bifdm) & 0xF)) << 40) )
-
-#if !defined(__KERNEL__) && defined(RGX_FEATURE_META)
+#if defined(HW_ERN_45914)
+/* SLC caching strategy is emitted through the segment MMU. All the segments configured 
+   through this macro are CACHED in the SLC. The interface has been kept the same to 
+   simplify the code changes. The bifdm argument is ignored (no longer relevant). */
 #if defined(HW_ERN_49144)
-#define RGXFW_SEGMMU_OUTADDR_TOP                  RGXFW_SEGMMU_OUTADDR_TOP_ERN_49144
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED  RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED_ERN_49144
-#elif defined(HW_ERN_45914)
-#define RGXFW_SEGMMU_OUTADDR_TOP                  RGXFW_SEGMMU_OUTADDR_TOP_ERN_45914
-#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED  RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED_ERN_45914
-#else
-#define RGXFW_SEGMMU_OUTADDR_TOP                  RGXFW_SEGMMU_OUTADDR_TOP_PRE_S7
-#endif
-#endif
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7(pers, coheren, mmu_ctx)     ( (((IMG_UINT64) ((pers)    & 0x3))  << 50) | \
+                                                                  (((IMG_UINT64) ((mmu_ctx) & 0xFF)) << 42) | \
+                                                                  (((IMG_UINT64) ((coheren) & 0x1))  << 40) )
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED(mmu_ctx)         RGXFW_SEGMMU_OUTADDR_TOP_S7(0x3, 0x0, mmu_ctx)
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED(mmu_ctx)       RGXFW_SEGMMU_OUTADDR_TOP_S7(0x0, 0x1, mmu_ctx)
 
+/* Set FW code/data cached in the SLC as default */
+#define RGXFW_SEGMMU_OUTADDR_TOP(mmu_ctx, bifdm)                RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED(mmu_ctx | (bifdm&0x0))
+#else
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7(pers, coheren, mmu_ctx)     ( (((IMG_UINT64) ((pers)    & 0x3))  << 52) | \
+                                                                  (((IMG_UINT64) ((mmu_ctx) & 0xFF)) << 44) | \
+                                                                  (((IMG_UINT64) ((coheren) & 0x1))  << 40) )
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED(mmu_ctx)         RGXFW_SEGMMU_OUTADDR_TOP_S7(0x3, 0x0, mmu_ctx)
+#define RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_UNCACHED(mmu_ctx)       RGXFW_SEGMMU_OUTADDR_TOP_S7(0x0, 0x1, mmu_ctx)
+
+/* Set FW code/data cached in the SLC as default */
+#define RGXFW_SEGMMU_OUTADDR_TOP(mmu_ctx, bifdm)                RGXFW_SEGMMU_OUTADDR_TOP_S7_SLC_CACHED(mmu_ctx | (bifdm&0x0))
+#endif
+#else
+/* To configure the Page Catalog and BIF-DM fed into the BIF for Garten accesses through this segment */
+#define RGXFW_SEGMMU_OUTADDR_TOP(pc, bifdm)			            ( (((IMG_UINT64) ((pc)    & 0xF)) << 44) | \
+                                                                  (((IMG_UINT64) ((bifdm) & 0xF)) << 40) )
+#endif
 
 /* META segments have 4kB minimum size */
 #define RGXFW_SEGMMU_ALIGN			(0x1000) 
@@ -285,39 +280,9 @@ typedef struct
 #define META_CR_MMCU_SEGMENTn_OUTA0(n)			(0x04850008 + (n)*0x10)
 #define META_CR_MMCU_SEGMENTn_OUTA1(n)			(0x0485000C + (n)*0x10)
 
-/* The following defines must be recalculated if the Meta MMU segments
- * used to access Host-FW data are changed
- * Current combinations are:
- * - SLC uncached, META cached,   FW base address 0x70000000
- * - SLC uncached, META uncached, FW base address 0xF0000000
- * - SLC cached,   META cached,   FW base address 0x10000000
- * - SLC cached,   META uncached, FW base address 0x90000000
- */
-#define RGXFW_SEGMMU_DATA_BASE_ADDRESS        (0x10000000)
-#define RGXFW_SEGMMU_DATA_META_CACHED         (0x0)
-#define RGXFW_SEGMMU_DATA_META_UNCACHED       (META_MEM_GLOBAL_RANGE_BIT) // 0x80000000
-#define RGXFW_SEGMMU_DATA_META_CACHE_MASK     (META_MEM_GLOBAL_RANGE_BIT)
-/* For non-VIVT SLCs the cacheability of the FW data in the SLC is selected
- * in the PTEs for the FW data, not in the Meta Segment MMU,
- * which means these defines have no real effect in those cases */
-#define RGXFW_SEGMMU_DATA_VIVT_SLC_CACHED     (0x0)
-#define RGXFW_SEGMMU_DATA_VIVT_SLC_UNCACHED   (0x60000000)
-#define RGXFW_SEGMMU_DATA_VIVT_SLC_CACHE_MASK (0x60000000)
-
-
-/************************************************************************
-* RGX FW RGX MMU definitions
-************************************************************************/
-#if defined(RGX_FEATURE_SLC_VIVT) && defined(SUPPORT_TRUSTED_DEVICE)
-
-#define META_MMU_CONTEXT_MAPPING        (0x1) /* fw data */
-#define META_MMU_CONTEXT_MAPPING_CODE   (0x0) /* fw code */
-
-#else 
-
-#define META_MMU_CONTEXT_MAPPING       (0x0)
-
-#endif 
+/* Win mode for data cache */
+#define RGXFW__SEGMMU_DMAP_DC_WIN (0x3)
+#define RGXFW__SEGMMU_DMAP_DC_SHIFT (0x6)
 
 /************************************************************************
 * RGX FW Bootloader defaults
@@ -332,6 +297,13 @@ typedef struct
 #define RGXFW_BOOTLDR_CONF_OFFSET	(0x80)
 
 
+/* Firmware to host interrupts defines */
+#define RGXFW_CR_IRQ_STATUS           RGX_CR_META_SP_MSLVIRQSTATUS
+#define RGXFW_CR_IRQ_STATUS_EVENT_EN  RGX_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_EN
+#define RGXFW_CR_IRQ_CLEAR            RGX_CR_META_SP_MSLVIRQSTATUS
+#define RGXFW_CR_IRQ_CLEAR_MASK       RGX_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_CLRMSK
+
+
 /************************************************************************
 * RGX META Stack
 ************************************************************************/
@@ -340,29 +312,16 @@ typedef struct
 /************************************************************************
 * RGX META Core memory
 ************************************************************************/
-#if defined(RGXFW_META_SUPPORT_2ND_THREAD)
-	#define RGX_META_COREMEM_STACK_SIZE  (RGX_META_STACK_SIZE*2)
-	#define RGX_META_COREMEM_BSS_SIZE    (0xF40)
-	#if defined(RGX_FEATURE_META_DMA)
-		#define RGX_META_COREMEM_CCBBUF_SIZE (0x3C0)
-		#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_CCBBUF_SIZE + RGX_META_COREMEM_BSS_SIZE + RGX_META_COREMEM_STACK_SIZE)
-	#else
-		#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_BSS_SIZE + RGX_META_COREMEM_STACK_SIZE)
-	#endif
+#define RGX_META_COREMEM_BSS_SIZE    (0xA00)
+
+#if defined(RGX_FEATURE_META_DMA)
+	#define RGX_META_COREMEM_CCBBUF_SIZE (0x2A0)
+	#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_CCBBUF_SIZE + RGX_META_COREMEM_BSS_SIZE + RGX_META_STACK_SIZE)
 #else
-	#define RGX_META_COREMEM_STACK_SIZE  (RGX_META_STACK_SIZE)
-	#define RGX_META_COREMEM_BSS_SIZE    (0xB00)
-	#if defined(RGX_FEATURE_META_DMA)
-		#define RGX_META_COREMEM_CCBBUF_SIZE (0x3C0)
-		#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_CCBBUF_SIZE + RGX_META_COREMEM_BSS_SIZE + RGX_META_COREMEM_STACK_SIZE)
-	#else
-		#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_BSS_SIZE + RGX_META_COREMEM_STACK_SIZE)
-	#endif
+	#define RGX_META_COREMEM_DATA_SIZE   (RGX_META_COREMEM_BSS_SIZE + RGX_META_STACK_SIZE)
 #endif
 
-#if defined (RGX_META_COREMEM_CODE)
 #define RGX_META_COREMEM_CODE_SIZE   (RGX_META_COREMEM_SIZE - RGX_META_COREMEM_DATA_SIZE)
-#endif
 
 /* code and data both map to the same physical memory */
 #define RGX_META_COREMEM_CODE_ADDR   (0x80000000)
@@ -370,21 +329,16 @@ typedef struct
 /* because data and code share the same memory, base address for code is offset by the data */
 #define RGX_META_COREMEM_CODE_BADDR  (RGX_META_COREMEM_CODE_ADDR + RGX_META_COREMEM_DATA_SIZE)
 
-#if defined(RGXFW_META_SUPPORT_2ND_THREAD)
-	#define RGX_META_COREMEM_STACK_ADDR      (RGX_META_COREMEM_DATA_ADDR)
-	#define RGX_META_COREMEM_2ND_STACK_ADDR  (RGX_META_COREMEM_DATA_ADDR + RGX_META_STACK_SIZE)
-	#define RGX_META_COREMEM_BSS_ADDR        (RGX_META_COREMEM_2ND_STACK_ADDR + RGX_META_STACK_SIZE)
-#else
-	#define RGX_META_COREMEM_STACK_ADDR      (RGX_META_COREMEM_DATA_ADDR)
-	#define RGX_META_COREMEM_BSS_ADDR        (RGX_META_COREMEM_STACK_ADDR + RGX_META_STACK_SIZE)
-#endif
+#define RGX_META_COREMEM_STACK_ADDR  (RGX_META_COREMEM_DATA_ADDR)
+#define RGX_META_COREMEM_BSS_ADDR    (RGX_META_COREMEM_STACK_ADDR + RGX_META_STACK_SIZE)
 
 #if defined(RGX_FEATURE_META_DMA)
 	#define RGX_META_COREMEM_CCBBUF_ADDR (RGX_META_COREMEM_BSS_ADDR + RGX_META_COREMEM_BSS_SIZE)
 #endif
 
-#define RGX_META_IS_COREMEM_CODE(A, B)  (((A) >= RGX_META_COREMEM_CODE_ADDR) && ((A) < (RGX_META_COREMEM_CODE_ADDR + (B))))
-#define RGX_META_IS_COREMEM_DATA(A, B)  (((A) >= RGX_META_COREMEM_DATA_ADDR) && ((A) < (RGX_META_COREMEM_DATA_ADDR + (B))))
+#define RGX_META_IS_COREMEM_CODE(A)  (((A) >= RGX_META_COREMEM_CODE_BADDR) && ((A) < (RGX_META_COREMEM_CODE_ADDR + RGX_META_COREMEM_SIZE)))
+#define RGX_META_IS_COREMEM_DATA(A)  (((A) >= RGX_META_COREMEM_DATA_ADDR) && ((A) < (RGX_META_COREMEM_DATA_ADDR + RGX_META_COREMEM_DATA_SIZE)))
+
 
 /************************************************************************
 * 2nd thread
@@ -400,28 +354,30 @@ typedef struct
 #define META_CR_CORE_ID_VER_SHIFT	(16U)
 #define META_CR_CORE_ID_VER_CLRMSK	(0XFF00FFFFU)
 
-#if !defined(__KERNEL__) && defined(RGX_FEATURE_META)
-
-	#if (RGX_FEATURE_META == MTP218)
-	#define RGX_CR_META_CORE_ID_VALUE 0x19
-	#elif (RGX_FEATURE_META == MTP219)
-	#define RGX_CR_META_CORE_ID_VALUE 0x1E
-	#elif (RGX_FEATURE_META == LTP218)
-	#define RGX_CR_META_CORE_ID_VALUE 0x1C
-	#elif (RGX_FEATURE_META == LTP217)
-	#define RGX_CR_META_CORE_ID_VALUE 0x1F
-	#else
-	#error "Unknown META ID"
-	#endif
+#if (RGX_FEATURE_META == MTP218)
+#define RGX_CR_META_CORE_ID_VALUE 0x19
+#elif (RGX_FEATURE_META == MTP219)
+#define RGX_CR_META_CORE_ID_VALUE 0x1E
+#elif (RGX_FEATURE_META == LTP218)
+#define RGX_CR_META_CORE_ID_VALUE 0x1C
+#elif (RGX_FEATURE_META == LTP217)
+#define RGX_CR_META_CORE_ID_VALUE 0x1F
 #else
-
-	#define RGX_CR_META_MTP218_CORE_ID_VALUE 0x19
-	#define RGX_CR_META_MTP219_CORE_ID_VALUE 0x1E
-	#define RGX_CR_META_LTP218_CORE_ID_VALUE 0x1C
-	#define RGX_CR_META_LTP217_CORE_ID_VALUE 0x1F
-
+#error "Unknown META ID"
 #endif
-#define RGXFW_PROCESSOR_META        "META"
+
+#define FW_CORE_ID_VALUE	    RGX_CR_META_CORE_ID_VALUE
+#define RGXFW_PROCESSOR             "META"
+
+
+typedef enum
+{
+	FW_PERF_CONF_NONE = 0,
+	FW_PERF_CONF_ICACHE = 1,
+	FW_PERF_CONF_DCACHE = 2,
+	FW_PERF_CONF_POLLS = 3,
+	FW_PERF_CONF_CUSTOM_TIMER = 4
+} FW_PERF_CONF;
 
 
 #endif /*  __RGX_META_H__ */

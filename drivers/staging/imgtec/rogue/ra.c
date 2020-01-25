@@ -89,7 +89,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "hash.h"
 #include "ra.h"
-#include "pvrsrv_memallocflags.h"
 
 #include "osfunc.h"
 #include "allocmem.h"
@@ -98,7 +97,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* The initial, and minimum size of the live address -> boundary tag
    structure hash table. The value 64 is a fairly arbitrary
-   choice. The hash table resizes on demand so the value chosen is
+   choice. The hash table resizes on demand so the value choosen is
    not critical. */
 #define MINIMUM_HASH_SIZE (64)
 
@@ -168,10 +167,9 @@ struct _RA_ARENA_
 	RA_LENGTH_T uQuantum;
 
 	/* import interface, if provided */
-	PVRSRV_ERROR (*pImportAlloc)(RA_PERARENA_HANDLE h,
+	IMG_BOOL (*pImportAlloc)(RA_PERARENA_HANDLE h,
 							 RA_LENGTH_T uSize,
 							 IMG_UINT32 uFlags,
-							 const IMG_CHAR *pszAnnotation,
 							 RA_BASE_T *pBase,
 							 RA_LENGTH_T *pActualSize,
                              RA_PERISPAN_HANDLE *phPriv);
@@ -215,13 +213,12 @@ struct _RA_ARENA_
 @Input          _pRef - user reference
 @Input          _uflags - allocation flags
 @Input          _pBase - receives allocated base
-@Return         PVRSRV_ERROR_RA_REQUEST_ALLOC_FAIL, this function always fails to allocate.
+@Return         IMG_FALSE, this function always fails to allocate.
 */ /**************************************************************************/
-static PVRSRV_ERROR
+static IMG_BOOL
 _RequestAllocFail (RA_PERARENA_HANDLE _h,
                    RA_LENGTH_T _uSize,
                    IMG_UINT32 _uFlags,
-                   const IMG_CHAR *_pszAnnotation,
                    RA_BASE_T *_pBase,
                    RA_LENGTH_T *_pActualSize,
                    RA_PERISPAN_HANDLE *_phPriv)
@@ -232,9 +229,8 @@ _RequestAllocFail (RA_PERARENA_HANDLE _h,
 	PVR_UNREFERENCED_PARAMETER (_phPriv);
 	PVR_UNREFERENCED_PARAMETER (_uFlags);
 	PVR_UNREFERENCED_PARAMETER (_pBase);
-	PVR_UNREFERENCED_PARAMETER (_pszAnnotation);
 
-	return PVRSRV_ERROR_RA_REQUEST_ALLOC_FAIL;
+	return IMG_FALSE;
 }
 
 
@@ -1003,10 +999,9 @@ IMG_INTERNAL RA_ARENA *
 RA_Create (IMG_CHAR *name,
 		   RA_LOG2QUANTUM_T uLog2Quantum,
 		   IMG_UINT32 ui32LockClass,
-		   PVRSRV_ERROR (*imp_alloc)(RA_PERARENA_HANDLE h, 
+		   IMG_BOOL (*imp_alloc)(RA_PERARENA_HANDLE h, 
                                  RA_LENGTH_T uSize,
                                  RA_FLAGS_T _flags, 
-                                 const IMG_CHAR *pszAnnotation,
                                  /* returned data */
                                  RA_BASE_T *pBase,
                                  RA_LENGTH_T *pActualSize,
@@ -1079,7 +1074,6 @@ IMG_INTERNAL void
 RA_Delete (RA_ARENA *pArena)
 {
 	IMG_UINT32 uIndex;
-	IMG_BOOL bWarn = IMG_TRUE;
 
 	PVR_ASSERT(pArena != NULL);
 
@@ -1100,15 +1094,10 @@ RA_Delete (RA_ARENA *pArena)
 
 		if (pBT->type != btt_free)
 		{
-			if (bWarn)
-			{
-				PVR_DPF ((PVR_DBG_ERROR, "%s: Allocations still exist in the arena that is being destroyed", __func__));
-				PVR_DPF ((PVR_DBG_ERROR, "%s: Likely Cause: client drivers not freeing allocations before destroying devmem context", __func__));
-				PVR_DPF ((PVR_DBG_ERROR, "%s: base = 0x%llx size=0x%llx", __func__,
+			PVR_DPF ((PVR_DBG_ERROR, "RA_Delete: allocations still exist in the arena that is being destroyed"));
+			PVR_DPF ((PVR_DBG_ERROR, "Likely Cause: client drivers not freeing alocations before destroying devmemcontext"));
+			PVR_DPF ((PVR_DBG_ERROR, "RA_Delete: base = 0x%llx size=0x%llx",
 					  (unsigned long long)pBT->base, (unsigned long long)pBT->uSize));
-				PVR_DPF ((PVR_DBG_ERROR, "%s: This warning will be issued only once for the first allocation found!", __func__));
-				bWarn = IMG_FALSE;
-			}
 		}
 		else
 		{
@@ -1165,12 +1154,6 @@ RA_Add (RA_ARENA *pArena,
 		return IMG_FALSE;
 	}
 
-	if(uSize == 0)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "RA_Add: invalid size 0 added to arena %s", pArena->name));
-		return IMG_FALSE;
-	}
-
 	OSLockAcquireNested(pArena->hLock, pArena->ui32LockClass);
 	PVR_ASSERT(is_arena_valid(pArena));
 	PVR_DPF ((PVR_DBG_MESSAGE, "RA_Add: name='%s', "
@@ -1200,34 +1183,32 @@ RA_Add (RA_ARENA *pArena,
 @Output         pActualSize       The actual size of resource segment
                                   allocated, typcially rounded up by quantum.
 @Output         phPriv            The user reference associated with allocated resource span.
-@Input          uImportFlags            Flags influencing allocation policy.
+@Input          uFlags            Flags influencing allocation policy.
 @Input          uAlignment        The uAlignment constraint required for the
                                   allocated segment, use 0 if uAlignment not required, otherwise
                                   must be a power of 2.
 @Output         base              Allocated base resource
-@Return         PVRSRV_OK - success
+@Return         IMG_TRUE - success
+                IMG_FALSE - failure
 */ /**************************************************************************/
-IMG_INTERNAL PVRSRV_ERROR
+IMG_INTERNAL IMG_BOOL
 RA_Alloc (RA_ARENA *pArena,
 		  RA_LENGTH_T uRequestSize,
 		  IMG_UINT8 uImportMultiplier,
-		  RA_FLAGS_T uImportFlags,
+		  RA_FLAGS_T uFlags,
 		  RA_LENGTH_T uAlignment,
-		  const IMG_CHAR *pszAnnotation,
 		  RA_BASE_T *base,
 		  RA_LENGTH_T *pActualSize,
 		  RA_PERISPAN_HANDLE *phPriv)
 {
-	PVRSRV_ERROR eError;
 	IMG_BOOL bResult;
 	RA_LENGTH_T uSize = uRequestSize;
-	RA_FLAGS_T uFlags = (uImportFlags & PVRSRV_MEMALLOCFLAGS_RA_DIFFERENTIATION_MASK);
 
 	if (pArena == NULL || uImportMultiplier == 0 || uSize == 0)
 	{
 		PVR_DPF ((PVR_DBG_ERROR,
-		          "RA_Alloc: One of the necessary parameters is 0"));
-		return PVRSRV_ERROR_INVALID_PARAMS;
+				"RA_Alloc: One of the necessary parameters is 0"));
+		return IMG_FALSE;
 	}
 
 	OSLockAcquireNested(pArena->hLock, pArena->ui32LockClass);
@@ -1242,10 +1223,10 @@ RA_Alloc (RA_ARENA *pArena,
 	PVR_ASSERT((uAlignment == 0) || (uAlignment & (uAlignment - 1)) == 0);
 
 	PVR_DPF ((PVR_DBG_MESSAGE,
-	          "RA_Alloc: arena='%s', size=0x%llx(0x%llx), "
-	          "alignment=0x%llx", pArena->name,
-	          (unsigned long long)uSize, (unsigned long long)uRequestSize,
-	          (unsigned long long)uAlignment));
+			  "RA_Alloc: arena='%s', size=0x%llx(0x%llx), "
+              "alignment=0x%llx", pArena->name,
+			  (unsigned long long)uSize, (unsigned long long)uRequestSize,
+			  (unsigned long long)uAlignment));
 
 	/* if allocation failed then we might have an import source which
 	   can provide more resource, else we will have to fail the
@@ -1253,7 +1234,7 @@ RA_Alloc (RA_ARENA *pArena,
 	bResult = _AttemptAllocAligned (pArena, uSize, uFlags, uAlignment, base, phPriv);
 	if (!bResult)
 	{
-		IMG_HANDLE hPriv;
+        IMG_HANDLE hPriv;
 		RA_BASE_T import_base;
 		RA_LENGTH_T uImportSize = uSize;
 
@@ -1265,24 +1246,16 @@ RA_Alloc (RA_ARENA *pArena,
 		{
 			uImportSize += (uAlignment - pArena->uQuantum);
 		}
-
 		/* apply over-allocation multiplier after all alignment adjustments */
 		uImportSize *= uImportMultiplier;
 
 		/* ensure that we import according to the quanta of this arena */
 		uImportSize = (uImportSize + pArena->uQuantum - 1) & ~(pArena->uQuantum - 1);
 
-		eError = pArena->pImportAlloc (pArena->pImportHandle,
-		                               uImportSize, uImportFlags,
-		                               pszAnnotation,
-		                               &import_base, &uImportSize,
-		                               &hPriv);
-		if (PVRSRV_OK != eError)
-		{
-			OSLockRelease(pArena->hLock);
-			return eError;
-		}
-		else
+		bResult =
+			pArena->pImportAlloc (pArena->pImportHandle, uImportSize, uFlags,
+                                  &import_base, &uImportSize, &hPriv);
+		if (bResult)
 		{
 			BT *pBT;
 			pBT = _InsertResourceSpan (pArena, import_base, uImportSize, uFlags);
@@ -1295,22 +1268,22 @@ RA_Alloc (RA_ARENA *pArena,
 				pArena->pImportFree(pArena->pImportHandle, import_base, hPriv);
 
 				PVR_DPF ((PVR_DBG_MESSAGE, "RA_Alloc: name='%s', "
-				          "size=0x%llx failed!", pArena->name,
-				          (unsigned long long)uSize));
+                          "size=0x%llx failed!", pArena->name,
+						  (unsigned long long)uSize));
 				/* RA_Dump (arena); */
-
 				OSLockRelease(pArena->hLock);
-				return PVRSRV_ERROR_RA_INSERT_RESOURCE_SPAN_FAILED;
+				return IMG_FALSE;
 			}
 
-			pBT->hPriv = hPriv;
+
+            pBT->hPriv = hPriv;
 
 			bResult = _AttemptAllocAligned(pArena, uSize, uFlags, uAlignment, base, phPriv);
 			if (!bResult)
 			{
 				PVR_DPF ((PVR_DBG_ERROR,
-				          "RA_Alloc: name='%s' second alloc failed!",
-				          pArena->name));
+						  "RA_Alloc: name='%s' second alloc failed!",
+						  pArena->name));
 
 				/*
 				  On failure of _AttemptAllocAligned() depending on the exact point
@@ -1318,9 +1291,6 @@ RA_Alloc (RA_ARENA *pArena,
 				  left untouched. If the later, we need to return it.
 				*/
 				_FreeBT(pArena, pBT);
-
-				OSLockRelease(pArena->hLock);
-				return PVRSRV_ERROR_RA_ATTEMPT_ALLOC_ALIGNED_FAILED;
 			}
 			else
 			{
@@ -1328,8 +1298,8 @@ RA_Alloc (RA_ARENA *pArena,
 				if (*base < import_base  ||  *base > (import_base + uImportSize))
 				{
 					PVR_DPF ((PVR_DBG_ERROR,
-					          "RA_Alloc: name='%s' alloc did not occur in the imported span!",
-					          pArena->name));
+							  "RA_Alloc: name='%s' alloc did not occur in the imported span!",
+							  pArena->name));
 
 					/*
 					  Remove the imported span which should not be in use (if it is then
@@ -1348,7 +1318,7 @@ RA_Alloc (RA_ARENA *pArena,
 	PVR_ASSERT(is_arena_valid(pArena));
 
 	OSLockRelease(pArena->hLock);
-	return PVRSRV_OK;
+	return bResult;
 }
 
 
@@ -1386,12 +1356,6 @@ RA_Free (RA_ARENA *pArena, RA_BASE_T base)
 	{
 		PVR_ASSERT (pBT->base == base);
 		_FreeBT (pArena, pBT);
-	}
-	else
-	{
-		PVR_DPF((PVR_DBG_ERROR, "RA_Free: no resource span found for given base (0x%llX) in arena %s",
-										(unsigned long long) base,
-											pArena->name));
 	}
 
 	PVR_ASSERT(is_arena_valid(pArena));

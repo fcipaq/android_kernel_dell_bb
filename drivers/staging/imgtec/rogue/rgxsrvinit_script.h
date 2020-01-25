@@ -170,7 +170,7 @@ IMG_BOOL ScriptDBGCalc(RGX_SCRIPT_BUILD *psScript,
                        IMG_CHAR *pszName);
 
 
-#if defined(RGX_FEATURE_META) || defined(SUPPORT_KERNEL_SRVINIT)
+#if defined(RGX_FEATURE_META)
 /*!
 *******************************************************************************
 
@@ -290,6 +290,7 @@ IMG_BOOL ScriptDBGReadMetaCoreReg(RGX_SCRIPT_BUILD *psScript,
 #endif /* RGX_FEATURE_META */
 
 
+#if defined(FIX_HW_BRN_44871)
 /*!
 *******************************************************************************
 
@@ -307,6 +308,32 @@ IMG_BOOL ScriptDBGReadMetaCoreReg(RGX_SCRIPT_BUILD *psScript,
 IMG_INTERNAL
 IMG_BOOL ScriptDBGString(RGX_SCRIPT_BUILD *psScript,
                          const IMG_CHAR *aszString);
+#endif /* FIX_HW_BRN_44871 */
+
+
+#if defined(RGX_FEATURE_PERFBUS) && defined(SUPPORT_DEBUG_BUS_DUMP)
+/*!
+*******************************************************************************
+
+ @Function      ScriptDBGBusReadBlock
+
+ @Description   Adds script entries reading a reg through the debug bus interface
+
+ @Input         psScript
+ @Input         pszGroupName
+ @Input         ui32BaseAddrOffset
+ @Input         ui32GroupCount
+
+ @Return        IMG_BOOL
+
+******************************************************************************/
+
+IMG_INTERNAL
+IMG_BOOL ScriptDBGBusReadBlock(RGX_SCRIPT_BUILD *psScript,
+                               const IMG_CHAR *pszGroupName,
+                               IMG_UINT32 ui32BaseAddrOffset,
+                               IMG_UINT32 ui32GroupCount);
+#endif /* RGX_FEATURE_PERFBUS && SUPPORT_DEBUG_BUS_DUMP */
 
 
 /*!

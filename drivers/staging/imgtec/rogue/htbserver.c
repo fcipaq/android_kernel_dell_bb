@@ -47,16 +47,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "htbserver.h"
 #include "htbuffer.h"
-#include "htbuffer_types.h"
 #include "tlstream.h"
-#include "pvrsrv_tlcommon.h"
+#include "pvr_tlcommon.h"
 #include "img_types.h"
 #include "pvrsrv_error.h"
 #include "osfunc.h"
 #include "allocmem.h"
-#include "pvr_notifier.h"
-#include "pvrsrv.h"
-#include "pvrsrv_apphint.h"
 
 /* size of circular buffer controlling the maximum number of concurrent PIDs logged */
 #define HTB_MAX_NUM_PID 8
@@ -151,102 +147,8 @@ _LookupFlags( HTB_OPMODE_CTRL eMode )
 
 
 /************************************************************************/ /*!
- @Function      _HTBLogDebugInfo
- @Description   Debug dump handler used to dump the state of the HTB module.
-                Called for each verbosity level during a debug dump. Function
-                only prints state when called for High verbosity.
-
- @Input         hDebugRequestHandle See PFN_DBGREQ_NOTIFY
-
- @Input         ui32VerbLevel       See PFN_DBGREQ_NOTIFY
-
- @Input         pfnDumpDebugPrintf  See PFN_DBGREQ_NOTIFY
-
- @Input         pvDumpDebugFile     See PFN_DBGREQ_NOTIFY
-
-*/ /**************************************************************************/
-static void _HTBLogDebugInfo(
-		PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
-		IMG_UINT32 ui32VerbLevel,
-		DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
-		void *pvDumpDebugFile
-)
-{
-	PVR_UNREFERENCED_PARAMETER(hDebugRequestHandle);
-
-	if (ui32VerbLevel == DEBUG_REQUEST_VERBOSITY_HIGH)
-	{
-
-		if (g_bConfigured)
-		{
-			IMG_INT i;
-
-			PVR_DUMPDEBUG_LOG("------[ HTB Log state: On ]------");
-
-			PVR_DUMPDEBUG_LOG("HTB Log mode: %d", g_sCtrl.eLogMode);
-			PVR_DUMPDEBUG_LOG("HTB Log level: %d", g_sCtrl.ui32LogLevel);
-			PVR_DUMPDEBUG_LOG("HTB Buffer Opmode: %d", g_sCtrl.eOpMode);
-
-			for (i=0; i < HTB_FLAG_NUM_EL; i++)
-			{
-				PVR_DUMPDEBUG_LOG("HTB Log group %d: %x", i, g_auiHTBGroupEnable[i]);
-			}
-		}
-		else
-		{
-			PVR_DUMPDEBUG_LOG("------[ HTB Log state: Off ]------");
-		}
-	}
-}
-
-/************************************************************************/ /*!
- @Function      HTBDeviceCreate
- @Description   Initialisation actions for HTB at device creation.
-
- @Input         psDeviceNode    Reference to the device node in context
-
- @Return        eError          Internal services call returned eError error
-                                number
-*/ /**************************************************************************/
-PVRSRV_ERROR
-HTBDeviceCreate(
-		PVRSRV_DEVICE_NODE *psDeviceNode
-)
-{
-	PVRSRV_ERROR eError = PVRSRV_OK;
-
-	eError = PVRSRVRegisterDbgRequestNotify(&psDeviceNode->hHtbDbgReqNotify,
-			psDeviceNode, &_HTBLogDebugInfo, DEBUG_REQUEST_HTB, NULL);
-	PVR_LOG_IF_ERROR(eError, "PVRSRVRegisterDbgRequestNotify");
-
-	return eError;
-}
-
-/************************************************************************/ /*!
- @Function      HTBIDeviceDestroy
- @Description   De-initialisation actions for HTB at device destruction.
-
- @Input         psDeviceNode    Reference to the device node in context
-
-*/ /**************************************************************************/
-void
-HTBDeviceDestroy(
-		PVRSRV_DEVICE_NODE *psDeviceNode
-)
-{
-	if (psDeviceNode->hHtbDbgReqNotify)
-	{
-		/* No much we can do if it fails, driver unloading */
-		(void)PVRSRVUnregisterDbgRequestNotify(psDeviceNode->hHtbDbgReqNotify);
-		psDeviceNode->hHtbDbgReqNotify = NULL;
-	}
-}
-
-
-/************************************************************************/ /*!
  @Function      HTBDeInit
- @Description   Close the Host Trace Buffer and free all resources. Must
-                perform a no-op if already de-initialised.
+ @Description   Close the Host Trace Buffer and free all resources
 
  @Return        eError          Internal services call returned eError error
                                 number
@@ -269,56 +171,6 @@ HTBDeInit( void )
 	return PVRSRV_OK;
 }
 
-
-/*************************************************************************/ /*!
- AppHint interface functions
-*/ /**************************************************************************/
-static
-PVRSRV_ERROR _HTBSetLogGroup(const PVRSRV_DEVICE_NODE *psDeviceNode,
-                             const void *psPrivate,
-                             IMG_UINT32 ui32Value)
-{
-	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
-	PVR_UNREFERENCED_PARAMETER(psPrivate);
-
-	return HTBControlKM(1, &ui32Value, 0, 0,
-	                    HTB_LOGMODE_UNDEF, HTB_OPMODE_UNDEF);
-}
-
-static
-PVRSRV_ERROR _HTBReadLogGroup(const PVRSRV_DEVICE_NODE *psDeviceNode,
-                              const void *psPrivate,
-                              IMG_UINT32 *pui32Value)
-{
-	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
-	PVR_UNREFERENCED_PARAMETER(psPrivate);
-
-	*pui32Value = g_auiHTBGroupEnable[0];
-	return PVRSRV_OK;
-}
-
-static
-PVRSRV_ERROR _HTBSetOpMode(const PVRSRV_DEVICE_NODE *psDeviceNode,
-                           const void *psPrivate,
-                           IMG_UINT32 ui32Value)
-{
-	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
-	PVR_UNREFERENCED_PARAMETER(psPrivate);
-
-	return HTBControlKM(0, NULL, 0, 0, HTB_LOGMODE_UNDEF, ui32Value);
-}
-
-static
-PVRSRV_ERROR _HTBReadOpMode(const PVRSRV_DEVICE_NODE *psDeviceNode,
-                            const void *psPrivate,
-                            IMG_UINT32 *pui32Value)
-{
-	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
-	PVR_UNREFERENCED_PARAMETER(psPrivate);
-
-	*pui32Value = (IMG_UINT32)g_sCtrl.eOpMode;
-	return PVRSRV_OK;
-}
 
 /*************************************************************************/ /*!
  @Function      HTBConfigureKM
@@ -355,17 +207,6 @@ HTBConfigureKM(
 		g_sCtrl.ui32PIDHead = 0;
 		g_sCtrl.eLogMode = HTB_LOGMODE_ALLPID;
 		g_sCtrl.bLogDropSignalled = IMG_FALSE;
-
-		PVRSRVAppHintRegisterHandlersUINT32(APPHINT_ID_EnableHTBLogGroup,
-		                                    _HTBReadLogGroup,
-		                                    _HTBSetLogGroup,
-		                                    NULL,
-		                                    NULL);
-		PVRSRVAppHintRegisterHandlersUINT32(APPHINT_ID_HTBOperationMode,
-		                                    _HTBReadOpMode,
-		                                    _HTBSetOpMode,
-		                                    NULL,
-		                                    NULL);
 	}
 	else
 	{
@@ -468,7 +309,7 @@ HTBControlKM(
 	/* HTB_LOGMODE_ALLPID overrides ui32EnablePID */
 	if ( HTB_LOGMODE_ALLPID == eLogMode )
 	{
-		OSCachedMemSet(g_sCtrl.aui32EnablePID, 0, sizeof(g_sCtrl.aui32EnablePID));
+		OSMemSet(g_sCtrl.aui32EnablePID, 0, sizeof(g_sCtrl.aui32EnablePID));
 		g_sCtrl.ui32PIDCount = 0;
 		g_sCtrl.ui32PIDHead = 0;
 	}
@@ -523,6 +364,7 @@ HTBControlKM(
 
 	return eError;
 }
+
 
 /*************************************************************************/ /*!
 */ /**************************************************************************/

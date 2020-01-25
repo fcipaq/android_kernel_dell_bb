@@ -50,19 +50,17 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /*!
  ******************************************************************************
- * Alignment UM/FW checks array
+ * Alignment checks array
  *****************************************************************************/
-
-#define RGXFW_ALIGN_CHECKS_UM_MAX 128
 
 #define RGXFW_ALIGN_CHECKS_INIT0						\
 		sizeof(RGXFWIF_TRACEBUF),						\
 		offsetof(RGXFWIF_TRACEBUF, ui32LogType),		\
 		offsetof(RGXFWIF_TRACEBUF, sTraceBuf),			\
-		offsetof(RGXFWIF_TRACEBUF, aui32HwrDmLockedUpCount),	\
-		offsetof(RGXFWIF_TRACEBUF, aui32HwrDmOverranCount),	\
-		offsetof(RGXFWIF_TRACEBUF, aui32HwrDmRecoveredCount),	\
-		offsetof(RGXFWIF_TRACEBUF, aui32HwrDmFalseDetectCount),	\
+		offsetof(RGXFWIF_TRACEBUF, aui16HwrDmLockedUpCount),	\
+		offsetof(RGXFWIF_TRACEBUF, aui16HwrDmOverranCount),	\
+		offsetof(RGXFWIF_TRACEBUF, aui16HwrDmRecoveredCount),	\
+		offsetof(RGXFWIF_TRACEBUF, aui16HwrDmFalseDetectCount),	\
 														\
 		/* RGXFWIF_CMDTA checks */						\
 		sizeof(RGXFWIF_CMDTA),							\
@@ -72,10 +70,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		sizeof(RGXFWIF_CMD3D),							\
 		offsetof(RGXFWIF_CMD3D, s3DRegs),				\
 														\
-		/* RGXFWIF_CMDTRANSFER checks */                \
-		sizeof(RGXFWIF_CMDTRANSFER),                    \
-		offsetof(RGXFWIF_CMDTRANSFER, sTransRegs),      \
+		/* RGXFWIF_CMDTRANSFER checks */				\
+		sizeof(RGXFWIF_CMDTRANSFER),					\
+		offsetof(RGXFWIF_CMDTRANSFER, sTransRegs),		\
 														\
+		/* RGXFWIF_CMD2D checks */						\
+		sizeof(RGXFWIF_CMD2D),							\
+		offsetof(RGXFWIF_CMD2D, s2DRegs),				\
 														\
 		/* RGXFWIF_CMD_COMPUTE checks */				\
 		sizeof(RGXFWIF_CMD_COMPUTE),					\
@@ -113,72 +114,24 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 #if defined(RGX_FEATURE_RAY_TRACING)
-#define RGXFW_ALIGN_CHECKS_INIT1                           \
-		RGXFW_ALIGN_CHECKS_INIT0,                          \
-		sizeof(RGXFWIF_RPM_FREELIST),                      \
-		offsetof(RGXFWIF_RPM_FREELIST, sFreeListDevVAddr), \
-		offsetof(RGXFWIF_RPM_FREELIST, ui32MaxPages),      \
-		offsetof(RGXFWIF_RPM_FREELIST, ui32CurrentPages),  \
+#define RGXFW_ALIGN_CHECKS_INIT							\
+		RGXFW_ALIGN_CHECKS_INIT0,						\
+		sizeof(RGXFWIF_RPM_FREELIST), 					\
+		offsetof(RGXFWIF_RPM_FREELIST, sFreeListDevVAddr),\
+		offsetof(RGXFWIF_RPM_FREELIST, sRPMPageListDevVAddr),\
+		offsetof(RGXFWIF_RPM_FREELIST, ui32MaxPages),\
+		offsetof(RGXFWIF_RPM_FREELIST, ui32CurrentPages),\
 		offsetof(RGXFWIF_RPM_FREELIST, ui32GrowPages)
+
 #else
-#define RGXFW_ALIGN_CHECKS_INIT1		RGXFW_ALIGN_CHECKS_INIT0
+#define RGXFW_ALIGN_CHECKS_INIT		RGXFW_ALIGN_CHECKS_INIT0
+
 #endif /* RGX_FEATURE_RAY_TRACING */
-
-
-#if defined(RGX_FEATURE_TLA)
-#define RGXFW_ALIGN_CHECKS_INIT2                   \
-		RGXFW_ALIGN_CHECKS_INIT1,                  \
-		/* RGXFWIF_CMD2D checks */                 \
-		sizeof(RGXFWIF_CMD2D),                     \
-		offsetof(RGXFWIF_CMD2D, s2DRegs)
-#else
-#define RGXFW_ALIGN_CHECKS_INIT2		RGXFW_ALIGN_CHECKS_INIT1
-#endif	/* RGX_FEATURE_TLA */
-
-
-#if defined(RGX_FEATURE_FASTRENDER_DM)
-#define RGXFW_ALIGN_CHECKS_INIT                    \
-		RGXFW_ALIGN_CHECKS_INIT2,                  \
-		/* RGXFWIF_CMDTDM checks */                \
-		sizeof(RGXFWIF_CMDTDM),                    \
-		offsetof(RGXFWIF_CMDTDM, sTDMRegs)
-#else
-#define RGXFW_ALIGN_CHECKS_INIT		RGXFW_ALIGN_CHECKS_INIT2
-#endif /* ! RGX_FEATURE_FASTRENDER_DM */
-
-
-
-/*!
- ******************************************************************************
- * Alignment KM checks array
- *****************************************************************************/
-
-#define RGXFW_ALIGN_CHECKS_INIT_KM                          \
-		sizeof(RGXFWIF_INIT),                               \
-		offsetof(RGXFWIF_INIT, sFaultPhysAddr),             \
-		offsetof(RGXFWIF_INIT, sPDSExecBase),               \
-		offsetof(RGXFWIF_INIT, sUSCExecBase),               \
-		offsetof(RGXFWIF_INIT, psKernelCCBCtl),             \
-		offsetof(RGXFWIF_INIT, psKernelCCB),                \
-		offsetof(RGXFWIF_INIT, psFirmwareCCBCtl),           \
-		offsetof(RGXFWIF_INIT, psFirmwareCCB),              \
-		offsetof(RGXFWIF_INIT, asSigBufCtl),                \
-		offsetof(RGXFWIF_INIT, sTraceBufCtl),              \
-		offsetof(RGXFWIF_INIT, sRGXCompChecks),             \
-		                                                    \
-		/* RGXFWIF_FWRENDERCONTEXT checks */                \
-		sizeof(RGXFWIF_FWRENDERCONTEXT),                    \
-		offsetof(RGXFWIF_FWRENDERCONTEXT, sTAContext),      \
-		offsetof(RGXFWIF_FWRENDERCONTEXT, s3DContext),      \
-		                                                    \
-		sizeof(RGXFWIF_FWCOMMONCONTEXT),                    \
-		offsetof(RGXFWIF_FWCOMMONCONTEXT, psFWMemContext),  \
-		offsetof(RGXFWIF_FWCOMMONCONTEXT, sRunNode),        \
-		offsetof(RGXFWIF_FWCOMMONCONTEXT, psCCB),           \
-		offsetof(RGXFWIF_FWCOMMONCONTEXT, ui64MCUFenceAddr)
 
 #endif /*  __RGX_FWIF_ALIGNCHECKS_H__ */
 
 /******************************************************************************
  End of file (rgx_fwif_alignchecks.h)
 ******************************************************************************/
+
+

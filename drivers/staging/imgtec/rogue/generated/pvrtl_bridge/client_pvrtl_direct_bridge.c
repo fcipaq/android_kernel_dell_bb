@@ -45,13 +45,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* Module specific includes */
 #include "devicemem_typedefs.h"
-#include "pvrsrv_tlcommon.h"
+#include "pvr_tl.h"
 
 #include "tlserver.h"
 
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLOpenStream(IMG_HANDLE hBridge,
-							  const IMG_CHAR *puiName,
+							  IMG_CHAR *puiName,
 							  IMG_UINT32 ui32Mode,
 							  IMG_HANDLE *phSD,
 							  IMG_HANDLE *phTLPMR)
@@ -126,88 +126,6 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLReleaseData(IMG_HANDLE hBridge,
 					psSDInt,
 					ui32ReadOffset,
 					ui32ReadLen);
-
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLDiscoverStreams(IMG_HANDLE hBridge,
-							       const IMG_CHAR *puiNamePattern,
-							       IMG_UINT32 ui32Max,
-							       IMG_UINT32 *pui32Streams,
-							       IMG_UINT32 *pui32NumFound)
-{
-	PVRSRV_ERROR eError;
-	PVR_UNREFERENCED_PARAMETER(hBridge);
-
-
-	eError =
-		TLServerDiscoverStreamsKM(
-					puiNamePattern,
-					ui32Max,
-					pui32Streams,
-					pui32NumFound);
-
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLReserveStream(IMG_HANDLE hBridge,
-							     IMG_HANDLE hSD,
-							     IMG_UINT32 *pui32BufferOffset,
-							     IMG_UINT32 ui32Size,
-							     IMG_UINT32 ui32SizeMin,
-							     IMG_UINT32 *pui32Available)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC * psSDInt;
-	PVR_UNREFERENCED_PARAMETER(hBridge);
-
-	psSDInt = (TL_STREAM_DESC *) hSD;
-
-	eError =
-		TLServerReserveStreamKM(
-					psSDInt,
-					pui32BufferOffset,
-					ui32Size,
-					ui32SizeMin,
-					pui32Available);
-
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLCommitStream(IMG_HANDLE hBridge,
-							    IMG_HANDLE hSD,
-							    IMG_UINT32 ui32ReqSize)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC * psSDInt;
-	PVR_UNREFERENCED_PARAMETER(hBridge);
-
-	psSDInt = (TL_STREAM_DESC *) hSD;
-
-	eError =
-		TLServerCommitStreamKM(
-					psSDInt,
-					ui32ReqSize);
-
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeTLWriteData(IMG_HANDLE hBridge,
-							 IMG_HANDLE hSD,
-							 IMG_UINT32 ui32Size,
-							 IMG_BYTE *psData)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC * psSDInt;
-	PVR_UNREFERENCED_PARAMETER(hBridge);
-
-	psSDInt = (TL_STREAM_DESC *) hSD;
-
-	eError =
-		TLServerWriteDataKM(
-					psSDInt,
-					ui32Size,
-					psData);
 
 	return eError;
 }

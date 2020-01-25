@@ -48,7 +48,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "rgx_fwif_sf.h"
 
-static IMG_CHAR *const groups[]= {
+static IMG_CHAR *groups[]= {
 #define X(A,B) #B,
 	RGXFW_LOG_SFGROUPLIST
 #undef X
@@ -61,7 +61,7 @@ typedef struct {
 
 /*  The tuple pairs that will be generated using XMacros will be stored here.
  *   This macro definition must match the definition of SFids in rgx_fwif_sf.h */
-static const tuple SFs[]= {
+tuple SFs[]= {
 #define X(a, b, c, d, e) { RGXFW_LOG_CREATESFID(a,b,e) , d },
 	RGXFW_LOG_SFIDLIST
 #undef X

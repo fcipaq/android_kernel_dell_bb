@@ -41,7 +41,6 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 #include <linux/version.h>
-#include <linux/cpumask.h>
 #include <linux/dma-mapping.h>
 #include <asm/cacheflush.h>
 
@@ -49,6 +48,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_types.h"
 #include "osfunc.h"
 #include "pvr_debug.h"
+#include "module_common.h"
 
 #if defined(CONFIG_OUTER_CACHE)
   /* If you encounter a 64-bit ARM system with an outer cache, you'll need
@@ -57,32 +57,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
    */
 	#error "CONFIG_OUTER_CACHE not supported on arm64."
 #endif
-
-static void per_cpu_cache_flush(void *arg)
-{
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0))
-	static IMG_BOOL bLog = IMG_TRUE;
-	/*
-		NOTE: Regarding arm64 global flush support on >= Linux v4.2:
-		- Global cache flush support is deprecated from v4.2 onwards
-		- Cache maintenance is done using UM/KM VA maintenance _only_
-		- If you find that more time is spent in VA cache maintenance
-			- Implement arm64 assembly sequence for global flush here
-				- asm volatile ();
-		- If you do not want to implement the global cache assembly
-			- Disable KM cache maintenance support in UM cache.c
-			- Remove this PVR_LOG message
-	*/
-	if (bLog)
-	{
-		PVR_LOG(("Global d-cache flush assembly not implemented, using rangebased flush"));
-		bLog = IMG_FALSE;
-	}
-#else
-	flush_cache_all();
-#endif
-	PVR_UNREFERENCED_PARAMETER(arg);
-}
 
 PVRSRV_ERROR OSCPUOperation(PVRSRV_CACHE_OP uiCacheOp)
 {
@@ -93,10 +67,7 @@ PVRSRV_ERROR OSCPUOperation(PVRSRV_CACHE_OP uiCacheOp)
 		case PVRSRV_CACHE_OP_CLEAN:
 		case PVRSRV_CACHE_OP_FLUSH:
 		case PVRSRV_CACHE_OP_INVALIDATE:
-			on_each_cpu(per_cpu_cache_flush, NULL, 1);
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,2,0))
 			eError = PVRSRV_ERROR_NOT_IMPLEMENTED;
-#endif
 			break;
 
 		case PVRSRV_CACHE_OP_NONE:
@@ -114,53 +85,35 @@ PVRSRV_ERROR OSCPUOperation(PVRSRV_CACHE_OP uiCacheOp)
 	return eError;
 }
 
-void OSFlushCPUCacheRangeKM(PVRSRV_DEVICE_NODE *psDevNode,
-							void *pvVirtStart,
+void OSFlushCPUCacheRangeKM(void *pvVirtStart,
 							void *pvVirtEnd,
 							IMG_CPU_PHYADDR sCPUPhysStart,
 							IMG_CPU_PHYADDR sCPUPhysEnd)
 {
-	struct dma_map_ops *dma_ops = get_dma_ops(psDevNode->psDevConfig->pvOSDevice);
-
-	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
-	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
+	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
 
 	dma_ops->sync_single_for_device(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_TO_DEVICE);
 	dma_ops->sync_single_for_cpu(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_FROM_DEVICE);
 }
 
-void OSCleanCPUCacheRangeKM(PVRSRV_DEVICE_NODE *psDevNode,
-							void *pvVirtStart,
+void OSCleanCPUCacheRangeKM(void *pvVirtStart,
 							void *pvVirtEnd,
 							IMG_CPU_PHYADDR sCPUPhysStart,
 							IMG_CPU_PHYADDR sCPUPhysEnd)
 {
-	struct dma_map_ops *dma_ops = get_dma_ops(psDevNode->psDevConfig->pvOSDevice);
-
-	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
-	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
+	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
 
 	dma_ops->sync_single_for_device(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_TO_DEVICE);
 }
 
-void OSInvalidateCPUCacheRangeKM(PVRSRV_DEVICE_NODE *psDevNode,
-								 void *pvVirtStart,
+void OSInvalidateCPUCacheRangeKM(void *pvVirtStart,
 								 void *pvVirtEnd,
 								 IMG_CPU_PHYADDR sCPUPhysStart,
 								 IMG_CPU_PHYADDR sCPUPhysEnd)
 {
-	struct dma_map_ops *dma_ops = get_dma_ops(psDevNode->psDevConfig->pvOSDevice);
-
-	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
-	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
+	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
 
 	dma_ops->sync_single_for_cpu(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_FROM_DEVICE);
-}
-
-PVRSRV_CACHE_OP_ADDR_TYPE OSCPUCacheOpAddressType(PVRSRV_CACHE_OP uiCacheOp)
-{
-	PVR_UNREFERENCED_PARAMETER(uiCacheOp);
-	return PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL;
 }
 
 void OSUserModeAccessToPerfCountersEn(void)

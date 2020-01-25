@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for rgxcmp
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for rgxcmp
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for rgxcmp
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,13 +45,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_RGXCMP_BRIDGE_H
 #define COMMON_RGXCMP_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "rgx_bridge.h"
-#include <powervr/sync_external.h>
+#include "sync_external.h"
+#include "rgx_fwif_shared.h"
 
 
 #define PVRSRV_BRIDGE_RGXCMP_CMD_FIRST			0
@@ -61,8 +60,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_RGXCMP_RGXFLUSHCOMPUTEDATA			PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+3
 #define PVRSRV_BRIDGE_RGXCMP_RGXSETCOMPUTECONTEXTPRIORITY			PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+4
 #define PVRSRV_BRIDGE_RGXCMP_RGXGETLASTCOMPUTECONTEXTRESETREASON			PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+5
-#define PVRSRV_BRIDGE_RGXCMP_RGXNOTIFYCOMPUTEWRITEOFFSETUPDATE			PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+6
-#define PVRSRV_BRIDGE_RGXCMP_CMD_LAST			(PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+6)
+#define PVRSRV_BRIDGE_RGXCMP_CMD_LAST			(PVRSRV_BRIDGE_RGXCMP_CMD_FIRST+5)
 
 
 /*******************************************
@@ -77,7 +75,6 @@ typedef struct PVRSRV_BRIDGE_IN_RGXCREATECOMPUTECONTEXT_TAG
 	IMG_UINT32 ui32FrameworkCmdize;
 	IMG_BYTE * psFrameworkCmd;
 	IMG_HANDLE hPrivData;
-	IMG_DEV_VIRTADDR sResumeSignalAddr;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXCREATECOMPUTECONTEXT;
 
 /* Bridge out structure for RGXCreateComputeContext */
@@ -113,7 +110,6 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXDESTROYCOMPUTECONTEXT_TAG
 typedef struct PVRSRV_BRIDGE_IN_RGXKICKCDM_TAG
 {
 	IMG_HANDLE hComputeContext;
-	IMG_UINT32 ui32ClientCacheOpSeqNum;
 	IMG_UINT32 ui32ClientFenceCount;
 	IMG_HANDLE * phClientFenceUFOSyncPrimBlock;
 	IMG_UINT32 * pui32ClientFenceOffset;
@@ -125,19 +121,16 @@ typedef struct PVRSRV_BRIDGE_IN_RGXKICKCDM_TAG
 	IMG_UINT32 ui32ServerSyncCount;
 	IMG_UINT32 * pui32ServerSyncFlags;
 	IMG_HANDLE * phServerSyncs;
-	IMG_INT32 i32CheckFenceFd;
-	IMG_INT32 i32UpdateTimelineFd;
-	IMG_CHAR * puiUpdateFenceName;
 	IMG_UINT32 ui32CmdSize;
 	IMG_BYTE * psDMCmd;
-	IMG_UINT32 ui32PDumpFlags;
+	IMG_BOOL bbPDumpContinuous;
 	IMG_UINT32 ui32ExtJobRef;
+	IMG_UINT32 ui32IntJobRef;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXKICKCDM;
 
 /* Bridge out structure for RGXKickCDM */
 typedef struct PVRSRV_BRIDGE_OUT_RGXKICKCDM_TAG
 {
-	IMG_INT32 i32UpdateFenceFd;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXKICKCDM;
 
@@ -194,23 +187,6 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXGETLASTCOMPUTECONTEXTRESETREASON_TAG
 	IMG_UINT32 ui32LastResetJobRef;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXGETLASTCOMPUTECONTEXTRESETREASON;
-
-
-/*******************************************
-            RGXNotifyComputeWriteOffsetUpdate          
- *******************************************/
-
-/* Bridge in structure for RGXNotifyComputeWriteOffsetUpdate */
-typedef struct PVRSRV_BRIDGE_IN_RGXNOTIFYCOMPUTEWRITEOFFSETUPDATE_TAG
-{
-	IMG_HANDLE hComputeContext;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXNOTIFYCOMPUTEWRITEOFFSETUPDATE;
-
-/* Bridge out structure for RGXNotifyComputeWriteOffsetUpdate */
-typedef struct PVRSRV_BRIDGE_OUT_RGXNOTIFYCOMPUTEWRITEOFFSETUPDATE_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXNOTIFYCOMPUTEWRITEOFFSETUPDATE;
 
 
 #endif /* COMMON_RGXCMP_BRIDGE_H */

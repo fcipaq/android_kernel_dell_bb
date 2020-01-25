@@ -67,16 +67,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
                                       PVRSRV_DEVICE_NODE *psDevNode,
                                       IMG_DEVMEM_SIZE_T uiSize,
-                                      PMR_LOG2ALIGN_T uiLog2Align,
                                       PVRSRV_MEMALLOCFLAGS_T uiFlags,
+                                      IMG_UINT32 *pui32Align,
                                       PMR **ppsPMRPtr,
                                       IMG_UINT64 *pui64SecBufHandle);
 
 PVRSRV_ERROR PhysmemImportSecBuf(CONNECTION_DATA *psConnection,
                                  PVRSRV_DEVICE_NODE *psDevNode,
                                  IMG_DEVMEM_SIZE_T uiSize,
-                                 IMG_UINT32 ui32Log2Align,
                                  PVRSRV_MEMALLOCFLAGS_T uiFlags,
+                                 IMG_UINT32 *pui32Align,
                                  PMR **ppsPMRPtr,
                                  IMG_UINT64 *pui64SecBufHandle);
 

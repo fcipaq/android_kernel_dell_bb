@@ -47,6 +47,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgx_bridge.h"
 #include "rgxscript.h"
 #include "devicemem_typedefs.h"
+#include "rgx_fwif_shared.h"
 #include "rgx_fwif.h"
 
 #include "rgxinit.h"
@@ -97,7 +98,7 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFirmware(IMG_HANDLE hBridge,
 							     IMG_UINT32 ui32SignatureChecksBufSize,
 							     IMG_UINT32 ui32HWPerfFWBufSizeKB,
 							     IMG_UINT64 ui64HWPerfFilter,
-							     IMG_UINT32 ui32RGXFWAlignChecksArrLength,
+							     IMG_UINT32 ui32RGXFWAlignChecksSize,
 							     IMG_UINT32 *pui32RGXFWAlignChecks,
 							     IMG_UINT32 ui32ConfigFlags,
 							     IMG_UINT32 ui32LogType,
@@ -122,7 +123,7 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFirmware(IMG_HANDLE hBridge,
 					ui32SignatureChecksBufSize,
 					ui32HWPerfFWBufSizeKB,
 					ui64HWPerfFilter,
-					ui32RGXFWAlignChecksArrLength,
+					ui32RGXFWAlignChecksSize,
 					pui32RGXFWAlignChecks,
 					ui32ConfigFlags,
 					ui32LogType,
@@ -139,21 +140,29 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFirmware(IMG_HANDLE hBridge,
 	return eError;
 }
 
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFinaliseFWImage(IMG_HANDLE hBridge)
+IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFinaliseFWImage(IMG_HANDLE hBridge,
+								    IMG_HANDLE hFWImagePMRImport,
+								    IMG_UINT64 ui64FWImgLen)
 {
 	PVRSRV_ERROR eError;
+	PMR * psFWImagePMRImportInt;
 
+	psFWImagePMRImportInt = (PMR *) hFWImagePMRImport;
 
 	eError =
 		PVRSRVRGXInitFinaliseFWImageKM(NULL, (PVRSRV_DEVICE_NODE *)((void*) hBridge)
-					);
+		,
+					psFWImagePMRImportInt,
+					ui64FWImgLen);
+
 	return eError;
 }
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitDevPart2(IMG_HANDLE hBridge,
 							     RGX_INIT_COMMAND *psDbgScript,
+							     RGX_INIT_COMMAND *psDbgBusScript,
+							     RGX_INIT_COMMAND *psDeinitScript,
 							     IMG_UINT32 ui32DeviceFlags,
-							     IMG_UINT32 ui32HWPerfHostBufSize,
 							     IMG_UINT32 ui32HWPerfHostFilter,
 							     IMG_UINT32 ui32RGXActivePMConf,
 							     IMG_HANDLE hFWCodePMR,
@@ -176,8 +185,9 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitDevPart2(IMG_HANDLE hBridge,
 		PVRSRVRGXInitDevPart2KM(NULL, (PVRSRV_DEVICE_NODE *)((void*) hBridge)
 		,
 					psDbgScript,
+					psDbgBusScript,
+					psDeinitScript,
 					ui32DeviceFlags,
-					ui32HWPerfHostBufSize,
 					ui32HWPerfHostFilter,
 					ui32RGXActivePMConf,
 					psFWCodePMRInt,
@@ -190,8 +200,7 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitDevPart2(IMG_HANDLE hBridge,
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeGPUVIRTPopulateLMASubArenas(IMG_HANDLE hBridge,
 									 IMG_UINT32 ui32NumElements,
-									 IMG_UINT32 *pui32Elements,
-									 IMG_BOOL bEnableTrustedDeviceAceConfig)
+									 IMG_UINT32 *pui32Elements)
 {
 	PVRSRV_ERROR eError;
 
@@ -200,57 +209,8 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeGPUVIRTPopulateLMASubArenas(IMG_HAN
 		PVRSRVGPUVIRTPopulateLMASubArenasKM(NULL, (PVRSRV_DEVICE_NODE *)((void*) hBridge)
 		,
 					ui32NumElements,
-					pui32Elements,
-					bEnableTrustedDeviceAceConfig);
+					pui32Elements);
 
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitGuest(IMG_HANDLE hBridge,
-							  IMG_BOOL bEnableSignatureChecks,
-							  IMG_UINT32 ui32SignatureChecksBufSize,
-							  IMG_UINT32 ui32RGXFWAlignChecksArrLength,
-							  IMG_UINT32 *pui32RGXFWAlignChecks,
-							  IMG_UINT32 ui32DeviceFlags,
-							  RGXFWIF_COMPCHECKS_BVNC *psClientBVNC)
-{
-	PVRSRV_ERROR eError;
-
-
-	eError =
-		PVRSRVRGXInitGuestKM(NULL, (PVRSRV_DEVICE_NODE *)((void*) hBridge)
-		,
-					bEnableSignatureChecks,
-					ui32SignatureChecksBufSize,
-					ui32RGXFWAlignChecksArrLength,
-					pui32RGXFWAlignChecks,
-					ui32DeviceFlags,
-					psClientBVNC);
-
-	return eError;
-}
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeRGXInitFirmwareExtended(IMG_HANDLE hBridge,
-								     IMG_UINT32 ui32RGXFWAlignChecksArrLength,
-								     IMG_UINT32 *pui32RGXFWAlignChecks,
-								     RGXFWIF_DEV_VIRTADDR *pspsRGXFwInit,
-								     IMG_HANDLE *phHWPerfPMR2,
-								     RGX_FW_INIT_IN_PARAMS *pspsInParams)
-{
-	PVRSRV_ERROR eError;
-	PMR * psHWPerfPMR2Int;
-
-
-	eError =
-		PVRSRVRGXInitFirmwareExtendedKM(NULL, (PVRSRV_DEVICE_NODE *)((void*) hBridge)
-		,
-					ui32RGXFWAlignChecksArrLength,
-					pui32RGXFWAlignChecks,
-					pspsRGXFwInit,
-					&psHWPerfPMR2Int,
-					pspsInParams);
-
-	*phHWPerfPMR2 = psHWPerfPMR2Int;
 	return eError;
 }
 

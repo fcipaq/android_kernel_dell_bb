@@ -48,9 +48,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "allocmem.h"
 #include "pvrsrv_error.h"
 #include "osfunc.h"
-#include "devicemem.h"
 
-#include "pvrsrv_tlcommon.h"
+#include "pvr_tlcommon.h"
 #include "tlintern.h"
 
 /*
@@ -66,8 +65,7 @@ TLMakeStreamDesc(PTL_SNODE f1, IMG_UINT32 f2, IMG_HANDLE f3)
 	}
 	ps->psNode = f1;
 	ps->ui32Flags = f2;
-	ps->hReadEvent = f3;
-	ps->uiRefCount = 1;
+	ps->hDataEvent = f3;
 	return ps;
 }
 
@@ -79,7 +77,7 @@ TLMakeSNode(IMG_HANDLE f2, TL_STREAM *f3, TL_STREAM_DESC *f4)
 	{
 		return NULL;
 	}
-	ps->hReadEventObj = f2;
+	ps->hDataEventObj = f2;
 	ps->psStream = f3;
 	ps->psRDesc = f4;
 	f3->psNode = ps;
@@ -107,16 +105,7 @@ TLInit(PVRSRV_DEVICE_NODE *psDevNode)
 	PVR_DPF_ENTERED;
 
 	PVR_ASSERT(psDevNode);
-
-	/*
-	 * The Transport Layer is designed to work in a single device system but
-	 * this function will be called multiple times in a multi-device system.
-	 * Return an error in this case.
-	 */
-	if (sTLGlobalData.psRgxDevNode)
-	{
-		return PVRSRV_ERROR_INIT_FAILURE;
-	}
+	PVR_ASSERT(sTLGlobalData.psRgxDevNode==0);
 
 	/* Store the RGX device node for later use in devmem buffer allocations */
 	sTLGlobalData.psRgxDevNode = (void*)psDevNode;
@@ -166,13 +155,11 @@ static void RemoveAndFreeStreamNode(PTL_SNODE psRemove)
 			/* Other calling code may have freed and zero'd the pointers */
 			if (psn->psRDesc)
 			{
-				OSFreeMem(psn->psRDesc);
-				psn->psRDesc = NULL;
+				OSFREEMEM(psn->psRDesc);
 			}
 			if (psn->psStream)
 			{
-				OSFreeMem(psn->psStream);
-				psn->psStream = NULL;
+				OSFREEMEM(psn->psStream);
 			}
 			*last = psn->psNext;
 			break;
@@ -181,29 +168,24 @@ static void RemoveAndFreeStreamNode(PTL_SNODE psRemove)
 	}
 
 	// Release the event list object owned by the stream node
-	if (psRemove->hReadEventObj)
+	if (psRemove->hDataEventObj)
 	{
-		eError = OSEventObjectDestroy(psRemove->hReadEventObj);
+		eError = OSEventObjectDestroy(psRemove->hDataEventObj);
 		PVR_LOG_IF_ERROR(eError, "OSEventObjectDestroy");
 
-		psRemove->hReadEventObj = NULL;
+		psRemove->hDataEventObj = NULL;
 	}
 
 	// Release the memory of the stream node
-	OSFreeMem(psRemove);
+	OSFREEMEM(psRemove);
 
 	PVR_DPF_RETURN;
 }
 
 void
-TLDeInit(PVRSRV_DEVICE_NODE *psDevNode)
+TLDeInit(void)
 {
 	PVR_DPF_ENTERED;
-
-	if (sTLGlobalData.psRgxDevNode != psDevNode)
-	{
-		PVR_DPF_RETURN;
-	}
 
 	if (sTLGlobalData.uiClientCnt)
 	{
@@ -264,7 +246,7 @@ void TLAddStreamNode(PTL_SNODE psAdd)
 	PVR_DPF_RETURN;
 }
 
-PTL_SNODE TLFindStreamNodeByName(const IMG_CHAR *pszName)
+PTL_SNODE TLFindStreamNodeByName(IMG_PCHAR pszName)
 {
 	TL_GLOBAL_DATA*  psGD = TLGGD();
 	PTL_SNODE 		 psn;
@@ -284,137 +266,23 @@ PTL_SNODE TLFindStreamNodeByName(const IMG_CHAR *pszName)
 	PVR_DPF_RETURN_VAL(NULL);
 }
 
-PTL_SNODE TLFindStreamNodeByDesc(PTL_STREAM_DESC psDesc)
+PTL_SNODE TLFindStreamNodeByDesc(PTL_STREAM_DESC psRDesc)
 {
 	TL_GLOBAL_DATA*  psGD = TLGGD();
 	PTL_SNODE 		 psn;
 
 	PVR_DPF_ENTERED;
 
-	PVR_ASSERT(psDesc);
+	PVR_ASSERT(psRDesc);
 
 	for (psn = psGD->psHead; psn; psn=psn->psNext)
 	{
-		if (psn->psRDesc == psDesc || psn->psWDesc == psDesc)
+		if (psn->psRDesc == psRDesc)
 		{
 			PVR_DPF_RETURN_VAL(psn);
 		}
 	}
 	PVR_DPF_RETURN_VAL(NULL);
-}
-
-static inline IMG_BOOL IsDigit(IMG_CHAR c)
-{
-	return c >= '0' && c <= '9';
-}
-
-static inline IMG_BOOL ReadNumber(const IMG_CHAR *pszBuffer,
-                                  IMG_UINT32 *pui32Number)
-{
-	IMG_CHAR acTmp[11] = {0}; // max 10 digits
-	IMG_UINT32 ui32Result;
-	IMG_UINT i;
-
-	for (i = 0; i < sizeof(acTmp) - 1; i++)
-	{
-		if (!IsDigit(*pszBuffer))
-			break;
-		acTmp[i] = *pszBuffer++;
-	}
-
-	/* if there are no digits or there is something after the number */
-	if (i == 0 || *pszBuffer != '\0')
-		return IMG_FALSE;
-
-	if (OSStringToUINT32(acTmp, 10, &ui32Result) != PVRSRV_OK)
-		return IMG_FALSE;
-
-	*pui32Number = ui32Result;
-
-	return IMG_TRUE;
-}
-
-/**
- * Matches pszPattern against pszName and stores results in pui32Numbers.
- *
- * @Input pszPattern this is a beginning part of the name string that should
- *                   be followed by a number.
- * @Input pszName name of the stream
- * @Output pui32Number will contain numbers from stream's name end e.g.
- *                     1234 for name abc_1234
- * @Return IMG_TRUE when a stream was found or IMG_FALSE if not
- */
-static IMG_BOOL MatchNamePattern(const IMG_CHAR *pszNamePattern,
-                                 const IMG_CHAR *pszName,
-                                 IMG_UINT32 *pui32Number)
-{
-	IMG_UINT uiPatternLen;
-
-	uiPatternLen = OSStringLength(pszNamePattern);
-
-	if (OSStringNCompare(pszNamePattern, pszName, uiPatternLen) != 0)
-		return IMG_FALSE;
-
-	return ReadNumber(pszName + uiPatternLen, pui32Number);
-}
-
-IMG_UINT32 TLDiscoverStreamNodes(const IMG_CHAR *pszNamePattern,
-                                 IMG_UINT32 *pui32Streams,
-                                 IMG_UINT32 ui32Max)
-{
-	TL_GLOBAL_DATA *psGD = TLGGD();
-	PTL_SNODE psn;
-	IMG_UINT32 ui32Count = 0;
-
-	PVR_ASSERT(pszNamePattern);
-
-	for (psn = psGD->psHead; psn; psn = psn->psNext)
-	{
-		IMG_UINT32 ui32Number = 0;
-
-		if (!MatchNamePattern(pszNamePattern, psn->psStream->szName,
-		                      &ui32Number))
-			continue;
-
-		if (pui32Streams != NULL)
-		{
-			if (ui32Count > ui32Max)
-				break;
-
-			pui32Streams[ui32Count] = ui32Number;
-		}
-
-		ui32Count++;
-	}
-
-	return ui32Count;
-}
-
-PTL_SNODE TLFindAndGetStreamNodeByDesc(PTL_STREAM_DESC psDesc)
-{
-	PTL_SNODE psn;
-
-	PVR_DPF_ENTERED;
-
-	psn = TLFindStreamNodeByDesc(psDesc);
-	if (psn == NULL)
-		PVR_DPF_RETURN_VAL(NULL);
-
-	PVR_ASSERT(psDesc == psn->psWDesc);
-
-	psn->uiWRefCount++;
-	psDesc->uiRefCount++;
-
-	PVR_DPF_RETURN_VAL(psn);
-}
-
-void TLReturnStreamNode(PTL_SNODE psNode)
-{
-	psNode->uiWRefCount--;
-	psNode->psWDesc->uiRefCount--;
-
-	PVR_ASSERT(psNode->uiWRefCount > 0);
-	PVR_ASSERT(psNode->psWDesc->uiRefCount > 0);
 }
 
 IMG_BOOL TLTryRemoveStreamAndFreeStreamNode(PTL_SNODE psRemove)
@@ -424,7 +292,7 @@ IMG_BOOL TLTryRemoveStreamAndFreeStreamNode(PTL_SNODE psRemove)
 	PVR_ASSERT(psRemove);
 
 	/* If there is a client connected to this stream, defer stream's deletion */
-	if (psRemove->psRDesc != NULL || psRemove->psWDesc != NULL)
+	if (psRemove->psRDesc != NULL)
 	{
 		PVR_DPF_RETURN_VAL (IMG_FALSE);
 	}
@@ -436,52 +304,26 @@ IMG_BOOL TLTryRemoveStreamAndFreeStreamNode(PTL_SNODE psRemove)
 	PVR_DPF_RETURN_VAL (IMG_TRUE);
 }
 
-IMG_BOOL TLUnrefDescAndTryFreeStreamNode(PTL_SNODE psNodeToRemove,
-                                          PTL_STREAM_DESC psSD)
+IMG_BOOL TLRemoveDescAndTryFreeStreamNode(PTL_SNODE psRemove)
 {
 	PVR_DPF_ENTERED;
 
-	PVR_ASSERT(psNodeToRemove);
-	PVR_ASSERT(psSD);
+	PVR_ASSERT(psRemove);
 
-	/* Decrement reference count. For descriptor obtained by reader it must
-	 * reach 0 (only single reader allowed) and for descriptors obtained by
-	 * writers it must reach value greater or equal to 0 (multiple writers
-	 * model). */
-	psSD->uiRefCount--;
+	/* Remove stream descriptor (i.e. stream reader context) */
+	psRemove->psRDesc = NULL;
 
-	if (psSD == psNodeToRemove->psRDesc)
-	{
-		PVR_ASSERT(0 == psSD->uiRefCount);
-		/* Remove stream descriptor (i.e. stream reader context) */
-		psNodeToRemove->psRDesc = NULL;
-	}
-	else if (psSD == psNodeToRemove->psWDesc)
-	{
-		PVR_ASSERT(0 <= psSD->uiRefCount);
-
-		psNodeToRemove->uiWRefCount--;
-
-		/* Remove stream descriptor if reference == 0 */
-		if (0 == psSD->uiRefCount)
-		{
-			psNodeToRemove->psWDesc = NULL;
-		}
-	}
-
-	/* Do not Free Stream Node if there is a write reference (a producer
-	 * context) to the stream */
-	if (NULL != psNodeToRemove->psRDesc || NULL != psNodeToRemove->psWDesc ||
-	    0 != psNodeToRemove->uiWRefCount)
+	/* Do not Free Stream Node if there is a write reference (a producer context) to the stream */
+	if (0 != psRemove->uiWRefCount)
 	{
 		PVR_DPF_RETURN_VAL (IMG_FALSE);
 	}
 
-	/* Make stream pointer NULL to prevent it from being destroyed in
-	 * RemoveAndFreeStreamNode Cleanup of stream should be done by the calling
-	 * context */
-	psNodeToRemove->psStream = NULL;
-	RemoveAndFreeStreamNode(psNodeToRemove);
+	/* Make stream pointer NULL to prevent it from being destroyed in RemoveAndFreeStreamNode
+	 * Cleanup of stream should be done by the calling context */
+	psRemove->psStream = NULL;
+	RemoveAndFreeStreamNode(psRemove);
 	
 	PVR_DPF_RETURN_VAL (IMG_TRUE);
 }
+

@@ -59,7 +59,6 @@ extern IMG_UINT32 gui32HandleDataFreeCounter;
 typedef struct _CONNECTION_DATA_
 {
 	PVRSRV_HANDLE_BASE		*psHandleBase;
-	PROCESS_HANDLE_BASE		*psProcessHandleBase;
 	struct _SYNC_CONNECTION_DATA_	*psSyncConnectionData;
 	struct _PDUMP_CONNECTION_DATA_	*psPDumpConnectionData;
 
@@ -79,8 +78,6 @@ typedef struct _CONNECTION_DATA_
 
 	IMG_HANDLE			hProcessStats;
 
-	IMG_HANDLE			hClientTLStream;
-
 	/* Structure which is hooked into the cleanup thread work list */
 	PVRSRV_CLEANUP_THREAD_WORK sCleanupThreadFn;
 
@@ -93,6 +90,9 @@ typedef struct _CONNECTION_DATA_
 
 PVRSRV_ERROR PVRSRVConnectionConnect(void **ppvPrivData, void *pvOSData);
 void PVRSRVConnectionDisconnect(void *pvPrivData);
+
+PVRSRV_ERROR PVRSRVConnectionInit(void);
+PVRSRV_ERROR PVRSRVConnectionDeInit(void);
 
 IMG_PID PVRSRVGetPurgeConnectionPid(void);
 

@@ -48,8 +48,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/vmalloc.h>
+#include <linux/version.h>
+
+#if defined(LDM_PLATFORM) && !defined(SUPPORT_DRM)
+#include <linux/platform_device.h>
+#endif
+
+#if defined(LDM_PCI) && !defined(SUPPORT_DRM)
+#include <linux/pci.h>
+#endif
+
 #include <asm/uaccess.h>
+
+#if defined(SUPPORT_DRM)
 #include <drm/drmP.h>
+#endif
 
 #include "img_types.h"
 #include "linuxsrv.h"
@@ -60,8 +73,50 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvr_debug.h"
 #include "pvrmodule.h"
 #include "pvr_uaccess.h"
+
+#if defined(SUPPORT_DRM)
+
+#include "pvr_drm_shared.h"
 #include "pvr_drm.h"
-#include "pvr_drv.h"
+
+#else /* defined(SUPPORT_DRM) */
+
+#define DRVNAME "dbgdrv"
+MODULE_SUPPORTED_DEVICE(DRVNAME);
+
+static struct class *psDbgDrvClass;
+
+static int AssignedMajorNumber = 0;
+
+long dbgdrv_ioctl(struct file *, unsigned int, unsigned long);
+long dbgdrv_ioctl_compat(struct file *, unsigned int, unsigned long);
+
+static int dbgdrv_open(struct inode unref__ * pInode, struct file unref__ * pFile)
+{
+	return 0;
+}
+
+static int dbgdrv_release(struct inode unref__ * pInode, struct file unref__ * pFile)
+{
+	return 0;
+}
+
+static int dbgdrv_mmap(struct file* pFile, struct vm_area_struct* ps_vma)
+{
+	return 0;
+}
+
+static struct file_operations dbgdrv_fops =
+{
+	.owner          = THIS_MODULE,
+	.unlocked_ioctl = dbgdrv_ioctl,
+	.compat_ioctl   = dbgdrv_ioctl_compat,
+	.open           = dbgdrv_open,
+	.release        = dbgdrv_release,
+	.mmap           = dbgdrv_mmap,
+};
+
+#endif  /* defined(SUPPORT_DRM) */
 
 /* Outward temp buffer used by IOCTL handler allocated once and grows as needed.
  * This optimisation means the debug driver performs less vmallocs/vfrees
@@ -83,7 +138,11 @@ void DBGDrvGetServiceTable(void **fn_table)
 	*fn_table = &g_sDBGKMServices;
 }
 
+#if defined(SUPPORT_DRM)
 void dbgdrv_cleanup(void)
+#else
+void cleanup_module(void)
+#endif
 {
 	if (g_outTmpBuf)
 	{
@@ -91,6 +150,11 @@ void dbgdrv_cleanup(void)
 		g_outTmpBuf = NULL;
 	}
 
+#if !defined(SUPPORT_DRM)
+	device_destroy(psDbgDrvClass, MKDEV(AssignedMajorNumber, 0));
+	class_destroy(psDbgDrvClass);
+	unregister_chrdev(AssignedMajorNumber, DRVNAME);
+#endif /* !defined(SUPPORT_DRM) */
 #if defined(SUPPORT_DBGDRV_EVENT_OBJECTS)
 	HostDestroyEventObjects();
 #endif
@@ -99,8 +163,20 @@ void dbgdrv_cleanup(void)
 	return;
 }
 
+#if defined(SUPPORT_DRM)
 IMG_INT dbgdrv_init(void)
+#else
+int init_module(void)
+#endif
 {
+#if !defined(SUPPORT_DRM)
+	struct device *psDev;
+#endif
+
+#if !defined(SUPPORT_DRM)
+	int err = -EBUSY;
+#endif
+
 	/* Init API mutex */
 	if ((g_pvAPIMutex=HostCreateMutex()) == NULL)
 	{
@@ -121,24 +197,60 @@ IMG_INT dbgdrv_init(void)
 	(void) HostCreateEventObjects();
 #endif
 
+#if !defined(SUPPORT_DRM)
+	AssignedMajorNumber =
+		register_chrdev(AssignedMajorNumber, DRVNAME, &dbgdrv_fops);
+
+	if (AssignedMajorNumber <= 0)
+	{
+		PVR_DPF((PVR_DBG_ERROR," unable to get major\n"));
+		goto ErrDestroyEventObjects;
+	}
+
+	/*
+	 * This code (using GPL symbols) facilitates automatic device
+	 * node creation on platforms with udev (or similar).
+	 */
+	psDbgDrvClass = class_create(THIS_MODULE, DRVNAME);
+	if (IS_ERR(psDbgDrvClass))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "%s: unable to create class (%ld)",
+				 __func__, PTR_ERR(psDbgDrvClass)));
+		goto ErrUnregisterCharDev;
+	}
+
+	psDev = device_create(psDbgDrvClass, NULL, MKDEV(AssignedMajorNumber, 0), NULL, DRVNAME);
+	if (IS_ERR(psDev))
+	{
+		PVR_DPF((PVR_DBG_ERROR, "%s: unable to create device (%ld)",
+								__func__, PTR_ERR(psDev)));
+		goto ErrDestroyClass;
+	}
+#endif /* !defined(SUPPORT_DRM) */
+
 	return 0;
+
+#if !defined(SUPPORT_DRM)
+ErrDestroyEventObjects:
+#if defined(SUPPORT_DBGDRV_EVENT_OBJECTS)
+	HostDestroyEventObjects();
+#endif
+ErrUnregisterCharDev:
+	unregister_chrdev(AssignedMajorNumber, DRVNAME);
+ErrDestroyClass:
+	class_destroy(psDbgDrvClass);
+	return err;
+#endif /* !defined(SUPPORT_DRM) */
 }
 
 static IMG_INT dbgdrv_ioctl_work(void *arg, IMG_BOOL bCompat)
 {
-	struct drm_pvr_dbgdrv_cmd *psDbgdrvCmd = (struct drm_pvr_dbgdrv_cmd *) arg;
+	IOCTL_PACKAGE *pIP = (IOCTL_PACKAGE *) arg;
 	char *buffer, *in, *out;
 	unsigned int cmd;
 	void *pBufferIn, *pBufferOut;
 
-	if (psDbgdrvCmd->pad)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "Invalid pad value\n"));
-		return -EINVAL;
-	}
-
-	if ((psDbgdrvCmd->in_data_size > (PAGE_SIZE >> 1)) ||
-		(psDbgdrvCmd->out_data_size > (PAGE_SIZE >> 1)))
+	if ((pIP->ui32InBufferSize > (PAGE_SIZE >> 1) ) || (pIP->ui32OutBufferSize > (PAGE_SIZE >> 1)))
 	{
 		PVR_DPF((PVR_DBG_ERROR,"Sizes of the buffers are too large, cannot do ioctl\n"));
 		return -1;
@@ -154,18 +266,18 @@ static IMG_INT dbgdrv_ioctl_work(void *arg, IMG_BOOL bCompat)
 	in = buffer;
 	out = buffer + (PAGE_SIZE >>1);
 
-	pBufferIn = (void *)(uintptr_t) psDbgdrvCmd->in_data_ptr;
-	pBufferOut = (void *)(uintptr_t) psDbgdrvCmd->out_data_ptr;
+	pBufferIn = WIDEPTR_GET_PTR(pIP->pInBuffer, bCompat);
+	pBufferOut = WIDEPTR_GET_PTR(pIP->pOutBuffer, bCompat);
 
-	if (pvr_copy_from_user(in, pBufferIn, psDbgdrvCmd->in_data_size) != 0)
+	if (pvr_copy_from_user(in, pBufferIn, pIP->ui32InBufferSize) != 0)
 	{
 		goto init_failed;
 	}
 
 	/* Extra -1 because ioctls start at DEBUG_SERVICE_IOCTL_BASE + 1 */
-	cmd = MAKEIOCTLINDEX(psDbgdrvCmd->cmd) - DEBUG_SERVICE_IOCTL_BASE - 1;
+	cmd = MAKEIOCTLINDEX(pIP->ui32Cmd) - DEBUG_SERVICE_IOCTL_BASE - 1;
 
-	if (psDbgdrvCmd->cmd == DEBUG_SERVICE_READ)
+	if (pIP->ui32Cmd == DEBUG_SERVICE_READ)
 	{
 		IMG_UINT32 *pui32BytesCopied = (IMG_UINT32 *)out;
 		DBG_OUT_READ *psReadOutParams = (DBG_OUT_READ *)out;
@@ -225,7 +337,7 @@ static IMG_INT dbgdrv_ioctl_work(void *arg, IMG_BOOL bCompat)
 		(g_DBGDrivProc[cmd])(in, out, bCompat);
 	}
 
-	if (copy_to_user(pBufferOut, out, psDbgdrvCmd->out_data_size) != 0)
+	if (copy_to_user(pBufferOut, out, pIP->ui32OutBufferSize) != 0)
 	{
 		goto init_failed;
 	}
@@ -238,12 +350,20 @@ init_failed:
 	return -EFAULT;
 }
 
+#if defined(SUPPORT_DRM)
 int dbgdrv_ioctl(struct drm_device *dev, void *arg, struct drm_file *pFile)
+#else
+long dbgdrv_ioctl(struct file *file, unsigned int ioctlCmd, unsigned long arg)
+#endif
 {
 	return dbgdrv_ioctl_work((void *) arg, IMG_FALSE);
 }
 
-int dbgdrv_ioctl_compat(struct file *file, unsigned int ioctlCmd, unsigned long arg)
+#if defined(SUPPORT_DRM)
+int dbgdrv_ioctl_compat(struct drm_device *dev, void *arg, struct drm_file *pFile)
+#else
+long dbgdrv_ioctl_compat(struct file *file, unsigned int ioctlCmd, unsigned long arg)
+#endif
 {
 	return dbgdrv_ioctl_work((void *) arg, IMG_TRUE);
 }

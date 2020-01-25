@@ -83,58 +83,16 @@ typedef struct _PVRSRV_DEV_CONNECTION_ PVRSRV_DEV_CONNECTION;
 	Flags for Services connection.
 	Allows to define per-client policy for Services
 */
-#define SRV_FLAGS_INIT_PROCESS          (1U << 1)  /*!< Allows connect to succeed if SrvInit
+#define SRV_FLAGS_PERSIST		(1U << 0)  /*!< Persist client flag */
+#define SRV_FLAGS_INIT_PROCESS	(1U << 1)  /*!< Allows connect to succeed if SrvInit
 											* has not yet run (used by SrvInit itself) */
-
-#define SRV_WORKEST_ENABLED             (1U << 2)  /*!< If Workload Estimation is enabled */
-#define SRV_PDVFS_ENABLED               (1U << 3)  /*!< If PDVFS is enabled */
-
-#define SRV_NO_HWPERF_CLIENT_STREAM     (1U << 4)  /*!< Don't create HWPerf for this connection */
-
-/*
- * Bits 20 - 27 are used to pass information needed for validation
- * of the GPU Virtualisation Validation mechanism. In particular:
- *
- * Bits:
- * [20 - 22]: OSid of the memory region that will be used for allocations
- * [23 - 25]: OSid that will be emitted by the Firmware for all memory accesses
- *            regarding that memory context.
- *      [26]: If the AXI Protection register will be set to secure for that OSid
- *      [27]: If the Emulator Wrapper Register checking for protection violation
- *            will be set to secure for that OSid
- */
-
-#define VIRTVAL_FLAG_OSID_SHIFT        (20)
-#define SRV_VIRTVAL_FLAG_OSID_MASK     (7U << VIRTVAL_FLAG_OSID_SHIFT)
-
-#define VIRTVAL_FLAG_OSIDREG_SHIFT     (23)
-#define SRV_VIRTVAL_FLAG_OSIDREG_MASK  (7U << VIRTVAL_FLAG_OSIDREG_SHIFT)
-
-#define VIRTVAL_FLAG_AXIPREG_SHIFT     (26)
-#define SRV_VIRTVAL_FLAG_AXIPREG_MASK  (1U << VIRTVAL_FLAG_AXIPREG_SHIFT)
-
-#define VIRTVAL_FLAG_AXIPTD_SHIFT      (27)
-#define SRV_VIRTVAL_FLAG_AXIPTD_MASK   (1U << VIRTVAL_FLAG_AXIPTD_SHIFT)
-
-#define SRV_FLAGS_PDUMPCTRL             (1U << 31) /*!< PDump Ctrl client flag */
+#define SRV_FLAGS_PDUMPCTRL     (1U << 31) /*!< PDump Ctrl client flag */
 
 /*
     Pdump flags which are accessible to Services clients
 */
-#define PDUMP_NONE		0x00000000UL /*<! No flags */
-
-#define PDUMP_CONT	0x40000000UL /*<! Output this entry always regardless of framed capture range,
+#define PVRSRV_PDUMP_FLAGS_CONTINUOUS	0x40000000UL /*<! Output this entry always regardless of framed capture range,
                                                           used by client applications being dumped. */
-
-/* Status of the device. */
-typedef enum
-{
-	PVRSRV_DEVICE_STATUS_UNKNOWN,        /* status of the device is unknown */
-	PVRSRV_DEVICE_STATUS_OK,             /* the device is operational */
-	PVRSRV_DEVICE_STATUS_NOT_RESPONDING, /* the device is not responding */
-	PVRSRV_DEVICE_STATUS_DEVICE_ERROR    /* the device is not operational */
-} PVRSRV_DEVICE_STATUS;
-
 #endif /* SERVICES_KM_H */
 /**************************************************************************//**
 End of file (services_km.h)

@@ -1,8 +1,5 @@
-/* -*- mode: c; indent-tabs-mode: t; c-basic-offset: 8; tab-width: 8 -*- */
-/* vi: set ts=8 sw=8 sts=8: */
 /*************************************************************************/ /*!
 @File           debugfs_dma_buf.c
-@Codingstyle    LinuxKernel
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
 
@@ -41,6 +38,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
+/* vi: set ts=8: */
 
 #include "debugfs_dma_buf.h"
 
@@ -48,8 +46,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/kernel.h>
 #include <linux/debugfs.h>
-
-#include "kernel_compatibility.h"
 
 static struct dentry *g_debugfs_dentry;
 static struct dma_buf *g_dma_buf;
@@ -60,7 +56,6 @@ static ssize_t read_file_dma_buf(struct file *file, char __user *user_buf,
 	size_t istart = *ppos / PAGE_SIZE, iend, i = istart;
 	ssize_t wb = 0, res = 0;
 	struct dma_buf *dma_buf = g_dma_buf;
-	int err;
 
 	if (!dma_buf)
 		goto err_out;
@@ -76,7 +71,8 @@ static ssize_t read_file_dma_buf(struct file *file, char __user *user_buf,
 	 * remaining dma buffer size or the available um buffer size. */
 	iend = istart + min((size_t)(dma_buf->size - *ppos), count) / PAGE_SIZE;
 
-	res = dma_buf_begin_cpu_access(dma_buf, DMA_FROM_DEVICE);
+	res = dma_buf_begin_cpu_access(dma_buf, istart * PAGE_SIZE,
+				       PAGE_ALIGN(count), DMA_FROM_DEVICE);
 	if (res)
 		goto err_put;
 
@@ -106,9 +102,8 @@ static ssize_t read_file_dma_buf(struct file *file, char __user *user_buf,
 	res = wb;
 
 err_access:
-	do {
-		err = dma_buf_end_cpu_access(dma_buf, DMA_FROM_DEVICE);
-	} while (err == -EAGAIN || err == -EINTR);
+	dma_buf_end_cpu_access(dma_buf, istart * PAGE_SIZE,
+			       PAGE_ALIGN(count), DMA_FROM_DEVICE);
 err_put:
 	dma_buf_put(dma_buf);
 err_out:

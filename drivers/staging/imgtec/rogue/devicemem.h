@@ -112,6 +112,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "device_connection.h"
 
 
+/* Use GET and SET function to access this */
+IMG_INTERNAL extern IMG_UINT32  g_uiLog2PageSize;
+
+#define GET_LOG2_PAGESIZE() ( (const IMG_UINT32) g_uiLog2PageSize )
+#define SET_LOG2_PAGESIZE(ui32Log2PageSize) \
+	{ \
+		PVR_ASSERT( (ui32Log2PageSize > 11) && (ui32Log2PageSize < 22) ); \
+		g_uiLog2PageSize = (IMG_UINT32) ui32Log2PageSize; \
+	}
+
 typedef IMG_UINT32 DEVMEM_HEAPCFGID;
 #define DEVMEM_HEAPCFG_FORCLIENTS 0
 #define DEVMEM_HEAPCFG_META 1
@@ -163,13 +173,6 @@ DevmemUnpin(DEVMEM_MEMDESC *psMemDesc);
 IMG_INTERNAL PVRSRV_ERROR
 DevmemPin(DEVMEM_MEMDESC *psMemDesc);
 
-IMG_INTERNAL PVRSRV_ERROR
-DevmemGetHeapInt(DEVMEM_HEAP *psHeap,
-				 IMG_HANDLE *phDevmemHeap);
-
-IMG_INTERNAL PVRSRV_ERROR
-DevmemGetSize(DEVMEM_MEMDESC *psMemDesc,
-			  IMG_DEVMEM_SIZE_T* puiSize);
 
 /*
  * DevmemCreateContext()
@@ -272,9 +275,6 @@ DevmemCreateHeap(DEVMEM_CONTEXT *psCtxPtr,
                  IMG_UINT32 ui32Log2Quantum,
                  /* The minimum import alignment for this heap */
                  IMG_UINT32 ui32Log2ImportAlignment,
-                 /* (For tiling heaps) the factor to use to convert
-                    alignment to optimum buffer stride */
-                 IMG_UINT32 ui32Log2TilingStrideFactor,
                  /* Name of heap for debug */
                  /* N.B.  Okay to exist on caller's stack - this
                     func takes a copy if it needs it. */
@@ -297,9 +297,7 @@ DevmemDestroyHeap(DEVMEM_HEAP *psHeap);
  * Compute the Size and Align passed to avoid suballocations (used when allocation with PVRSRV_MEMALLOCFLAG_EXPORTALIGN)
  */
 IMG_INTERNAL void
-DevmemExportalignAdjustSizeAndAlign(IMG_UINT32 uiLog2Quantum,
-                                    IMG_DEVMEM_SIZE_T *puiSize,
-                                    IMG_DEVMEM_ALIGN_T *puiAlign);
+DevmemExportalignAdjustSizeAndAlign(DEVMEM_HEAP *psHeap, IMG_DEVMEM_SIZE_T *puiSize, IMG_DEVMEM_ALIGN_T *puiAlign);
 
 /*
  * DevmemSubAllocate()
@@ -334,7 +332,7 @@ DevmemSubAllocate(IMG_UINT8 uiPreAllocMultiplier,
                   IMG_DEVMEM_SIZE_T uiSize,
                   IMG_DEVMEM_ALIGN_T uiAlign,
                   DEVMEM_FLAGS_T uiFlags,
-                  const IMG_CHAR *pszText,
+                  const IMG_PCHAR pszText,
                   DEVMEM_MEMDESC **ppsMemDescPtr);
 
 #define DevmemAllocate(...) \
@@ -342,33 +340,32 @@ DevmemSubAllocate(IMG_UINT8 uiPreAllocMultiplier,
 
 PVRSRV_ERROR
 DevmemAllocateExportable(SHARED_DEV_CONNECTION hDevConnection,
-                         IMG_DEVMEM_SIZE_T uiSize,
-                         IMG_DEVMEM_ALIGN_T uiAlign,
-                         IMG_UINT32 uiLog2HeapPageSize,
-                         DEVMEM_FLAGS_T uiFlags,
-                         const IMG_CHAR *pszText,
-                         DEVMEM_MEMDESC **ppsMemDescPtr);
+						 IMG_DEVMEM_SIZE_T uiSize,
+						 IMG_DEVMEM_ALIGN_T uiAlign,
+						 DEVMEM_FLAGS_T uiFlags,
+						 const IMG_PCHAR pszText,
+						 DEVMEM_MEMDESC **ppsMemDescPtr);
 
 PVRSRV_ERROR
 DeviceMemChangeSparse(DEVMEM_MEMDESC *psMemDesc,
-                      IMG_UINT32 ui32AllocPageCount,
-                      IMG_UINT32 *paui32AllocPageIndices,
-                      IMG_UINT32 ui32FreePageCount,
-                      IMG_UINT32 *pauiFreePageIndices,
-                      SPARSE_MEM_RESIZE_FLAGS uiFlags);
+					  IMG_UINT32 ui32AllocPageCount,
+					  IMG_UINT32 *paui32AllocPageIndices,
+					  IMG_UINT32 ui32FreePageCount,
+					  IMG_UINT32 *pauiFreePageIndices,
+					  SPARSE_MEM_RESIZE_FLAGS uiFlags,
+					  IMG_UINT32 *pui32Status);
 
 PVRSRV_ERROR
 DevmemAllocateSparse(SHARED_DEV_CONNECTION hDevConnection,
-                     IMG_DEVMEM_SIZE_T uiSize,
-                     IMG_DEVMEM_SIZE_T uiChunkSize,
-                     IMG_UINT32 ui32NumPhysChunks,
-                     IMG_UINT32 ui32NumVirtChunks,
-                     IMG_UINT32 *pui32MappingTable,
-                     IMG_DEVMEM_ALIGN_T uiAlign,
-                     IMG_UINT32 uiLog2HeapPageSize,
-                     DEVMEM_FLAGS_T uiFlags,
-                     const IMG_CHAR *pszText,
-                     DEVMEM_MEMDESC **ppsMemDescPtr);
+					 IMG_DEVMEM_SIZE_T uiSize,
+					 IMG_DEVMEM_SIZE_T uiChunkSize,
+					 IMG_UINT32 ui32NumPhysChunks,
+					 IMG_UINT32 ui32NumVirtChunks,
+					 IMG_UINT32 *pui32MappingTable,
+					 IMG_DEVMEM_ALIGN_T uiAlign,
+					 DEVMEM_FLAGS_T uiFlags,
+					 const IMG_PCHAR pszText,
+					 DEVMEM_MEMDESC **ppsMemDescPtr);
 
 /*
  * DevmemFree()
@@ -554,8 +551,7 @@ DevmemHeapDetails(SHARED_DEV_CONNECTION hDevConnection,
                   IMG_DEV_VIRTADDR *psDevVAddrBaseOut,
                   IMG_DEVMEM_SIZE_T *puiHeapLengthOut,
                   IMG_UINT32 *puiLog2DataPageSize,
-                  IMG_UINT32 *puiLog2ImportAlignmentOut,
-                  IMG_UINT32 *puiLog2TilingStrideFactor);
+                  IMG_UINT32 *puiLog2ImportAlignmentOut);
 
 /*
  * Devmem_FindHeapByName()
@@ -600,16 +596,12 @@ IMG_INTERNAL PVRSRV_ERROR
 DevmemGetFlags(DEVMEM_MEMDESC *psMemDesc,
 				DEVMEM_FLAGS_T *puiFlags);
 
-IMG_INTERNAL IMG_HANDLE
-DevmemGetConnection(DEVMEM_MEMDESC *psMemDesc);
-
 PVRSRV_ERROR
 DevmemLocalImport(IMG_HANDLE hBridge,
 				  IMG_HANDLE hExtHandle,
 				  DEVMEM_FLAGS_T uiFlags,
 				  DEVMEM_MEMDESC **ppsMemDescPtr,
-				  IMG_DEVMEM_SIZE_T *puiSizePtr,
-				  const IMG_CHAR *pszAnnotation);
+				  IMG_DEVMEM_SIZE_T *puiSizePtr);
 
 IMG_INTERNAL PVRSRV_ERROR
 DevmemIsDevVirtAddrValid(DEVMEM_CONTEXT *psContext,
@@ -622,30 +614,11 @@ DevmemIsDevVirtAddrValid(DEVMEM_CONTEXT *psContext,
 IMG_UINT32
 DevmemGetHeapLog2PageSize(DEVMEM_HEAP *psHeap);
 
-/* DevmemGetHeapTilingProperties()
+/* DevmemGetHeapLog2ImportAlignment()
  *
- * Get the import alignment and tiling stride factor used for a certain heap.
+ * Get the import alignment used for a certain heap.
  */
 IMG_UINT32
-DevmemGetHeapTilingProperties(DEVMEM_HEAP *psHeap,
-                              IMG_UINT32 *puiLog2ImportAlignment,
-                              IMG_UINT32 *puiLog2TilingStrideFactor);
-
-/**************************************************************************/ /*!
-@Function       RegisterDevMemPFNotify
-@Description    Registers that the application wants to be signaled when a page
-                fault occurs.
-
-@Input          psContext      Memory context the process that would like to
-                               be notified about.
-@Input          ui32PID        The PID  of the calling process.
-@Input          bRegister      If true, register. If false, de-register.
-@Return         PVRSRV_ERROR:  PVRSRV_OK on success. Otherwise, a PVRSRV_
-                               error code
-*/ /***************************************************************************/
-IMG_INTERNAL PVRSRV_ERROR
-RegisterDevmemPFNotify(DEVMEM_CONTEXT *psContext,
-                       IMG_UINT32     ui32PID,
-                       IMG_BOOL       bRegister);
+DevmemGetHeapLog2ImportAlignment(DEVMEM_HEAP *psHeap);
 
 #endif /* #ifndef SRVCLIENT_DEVICEMEM_CLIENT_H */

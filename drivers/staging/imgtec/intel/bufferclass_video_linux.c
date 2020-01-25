@@ -38,7 +38,6 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-#include <linux/compiler.h>
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -84,8 +83,15 @@ extern struct ttm_buffer_object *ttm_buffer_object_lookup(struct ttm_object_file
 		*tfile,
 		uint32_t handle);
 
+MODULE_SUPPORTED_DEVICE(DEVNAME);
+
+#if defined(LDM_PLATFORM) || defined(LDM_PCI)
 static struct class *psPvrClass;
+#endif
+
 static int AssignedMajorNumber;
+
+#define unref__ __attribute__ ((unused))
 
 #if defined(LMA)
 #define PVR_BUFFERCLASS_MEMOFFSET (220 * 1024 * 1024)
@@ -124,7 +130,10 @@ int
 BCVideoModInit(void)
 {
 	int i, j;
+	/*LDM_PCI is defined, while LDM_PLATFORM and LMA are not defined.*/
+#if defined(LDM_PLATFORM) || defined(LDM_PCI)
 	struct device *psDev;
+#endif
 
 #if defined(LMA)
 	struct pci_dev *psPCIDev;
@@ -151,6 +160,7 @@ BCVideoModInit(void)
 	       AssignedMajorNumber);
 #endif
 
+#if defined(LDM_PLATFORM) || defined(LDM_PCI)
 	psPvrClass = class_create(THIS_MODULE, "bc_video");
 	if (IS_ERR(psPvrClass)) {
 		printk(KERN_ERR DRVNAME
@@ -170,6 +180,7 @@ BCVideoModInit(void)
 		       PTR_ERR(psDev));
 		goto ExitDestroyClass;
 	}
+#endif
 
 #if defined(LMA)
 	g_ulMemBase =
@@ -204,8 +215,10 @@ BCVideoModInit(void)
 
 	return 0;
 
+#if defined(LDM_PLATFORM) || defined(LDM_PCI)
 ExitDestroyClass:
 	class_destroy(psPvrClass);
+#endif
 ExitUnregister:
 	unregister_chrdev(AssignedMajorNumber, DEVNAME);
 	//ExitDisable:
@@ -220,9 +233,10 @@ int
 BCVideoModCleanup(void)
 {
 	int i;
-
+#if defined(LDM_PLATFORM) || defined(LDM_PCI)
 	device_destroy(psPvrClass, MKDEV(AssignedMajorNumber, 0));
 	class_destroy(psPvrClass);
+#endif
 
 	for (i = 0; i < BC_VIDEO_DEVICE_MAX_ID; i++) {
 		if (BC_Video_Deinit(i) != BCE_OK) {
@@ -261,7 +275,7 @@ BCFreeKernelMem(void *pvMem)
 
 BCE_ERROR
 BCAllocDiscontigMemory(unsigned long ulSize,
-		       BCE_HANDLE __maybe_unused * phMemHandle,
+		       BCE_HANDLE unref__ * phMemHandle,
 		       IMG_CPU_VIRTADDR * pLinAddr,
 		       IMG_SYS_PHYADDR ** ppPhysAddr)
 {
@@ -298,7 +312,7 @@ BCAllocDiscontigMemory(unsigned long ulSize,
 
 void
 BCFreeDiscontigMemory(unsigned long ulSize,
-		      BCE_HANDLE __maybe_unused hMemHandle,
+		      BCE_HANDLE unref__ hMemHandle,
 		      IMG_CPU_VIRTADDR LinAddr, IMG_SYS_PHYADDR * pPhysAddr)
 {
 	kfree(pPhysAddr);
@@ -309,7 +323,7 @@ BCFreeDiscontigMemory(unsigned long ulSize,
 
 BCE_ERROR
 BCAllocContigMemory(unsigned long ulSize,
-		    BCE_HANDLE __maybe_unused * phMemHandle,
+		    BCE_HANDLE unref__ * phMemHandle,
 		    IMG_CPU_VIRTADDR * pLinAddr, IMG_CPU_PHYADDR * pPhysAddr)
 {
 #if defined(LMA)
@@ -370,7 +384,7 @@ BCAllocContigMemory(unsigned long ulSize,
 
 void
 BCFreeContigMemory(unsigned long ulSize,
-		   BCE_HANDLE __maybe_unused hMemHandle,
+		   BCE_HANDLE unref__ hMemHandle,
 		   IMG_CPU_VIRTADDR LinAddr, IMG_CPU_PHYADDR PhysAddr)
 {
 #if defined(LMA)
@@ -420,7 +434,7 @@ BCOpenPVRServices(BCE_HANDLE * phPVRServices)
 
 
 BCE_ERROR
-BCClosePVRServices(BCE_HANDLE __maybe_unused hPVRServices)
+BCClosePVRServices(BCE_HANDLE unref__ hPVRServices)
 {
 	return (BCE_OK);
 }
@@ -454,6 +468,7 @@ BC_CreateBuffers(int id, bc_buf_params_t * p, IMG_BOOL is_conti_addr)
 		break;
 	default:
 		return -EINVAL;
+		break;
 	}
 
 	stride = p->stride;
@@ -529,7 +544,7 @@ BCVideoDestroyBuffers(int id)
 	if (id < 0 ||
 		id >= BC_VIDEO_DEVICE_MAX_ID ||
 	    bc_video_id_usage[id] != 1) {
-		return 0;
+		return 0;;
 	}
 	bc_video_id_usage[id] = 0;
 
@@ -604,6 +619,7 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 			return err;
 		}
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_get_buffer_index: {
 		int idx;
@@ -619,6 +635,7 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 		}
 		printk(KERN_ERR DRVNAME ": BCIOGET_BUFFERIDX- buffer not found\n");
 		return -EINVAL;
+		break;
 	}
 	case BC_Video_ioctl_request_buffers: {
 		bc_buf_params_t p;
@@ -631,6 +648,7 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 		}
 		psBridge->outputparam = id;
 		return BC_CreateBuffers(id, &p, IMG_FALSE);
+		break;
 	}
 	case BC_Video_ioctl_set_buffer_phyaddr: {
 		bc_buf_ptr_t p;
@@ -674,12 +692,14 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 		if (bo)
 			ttm_bo_unref(&bo);
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_release_buffer_device: {
 		bc_video_id_usage[id] = 0;
 
 		BCVideoDestroyBuffers(id);
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_alloc_buffer: {
 		bc_buf_ptr_t p;
@@ -745,6 +765,7 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 		psBridge->outputparam = (int)(uintptr_t) pvBuf;
 
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_free_buffer: {
 		bc_buf_ptr_t p;
@@ -759,6 +780,7 @@ BCVideoBridge(struct drm_device *dev, void * arg,
 
 		vfree(devinfo->psSystemBuffer[p.index].sCPUVAddr);
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_get_buffer_handle: {
 		int idx;
@@ -803,6 +825,7 @@ BC_Camera_Bridge(BC_Video_ioctl_package * psBridge, unsigned long pAddr)
 			return err;
 		}
 		return 0;
+		break;
 	}
 	case BC_Video_ioctl_get_buffer_index: {
 		int idx;
@@ -818,6 +841,7 @@ BC_Camera_Bridge(BC_Video_ioctl_package * psBridge, unsigned long pAddr)
 		}
 		printk(KERN_ERR DRVNAME ": BCIOGET_BUFFERIDX- buffer not found\n");
 		return -EINVAL;
+		break;
 	}
 	case BC_Video_ioctl_request_buffers: {
 		bc_buf_params_t p;
@@ -827,9 +851,11 @@ BC_Camera_Bridge(BC_Video_ioctl_package * psBridge, unsigned long pAddr)
 			return BC_CreateBuffers(id, &p, IMG_TRUE);
 		else
 			return BC_CreateBuffers(id, &p, IMG_FALSE);
+		break;
 	}
 	case BC_Video_ioctl_release_buffer_device: {
 		return BCVideoDestroyBuffers(id);
+		break;
 	}
 	case BC_Video_ioctl_set_buffer_phyaddr: {
 		bc_buf_ptr_t p;
@@ -889,6 +915,7 @@ BC_Camera_Bridge(BC_Video_ioctl_package * psBridge, unsigned long pAddr)
 			kfree(ppsPages);
 		}
 		return 0;
+		break;
 	}
 	default:
 		return err;
@@ -912,7 +939,7 @@ struct drm_ioctl_desc sBCdrmIoctls[] = {
 	IOCTL_DEF(DRM_IOCTL_BUFFER_CLASS_VIDEO, BCVideoBridge, DRM_AUTH)
 };
 
-static int bc_max_ioctl = ARRAY_SIZE(sBCdrmIoctls);
+static int bc_max_ioctl = DRM_ARRAY_SIZE(sBCdrmIoctls);
 
 void BCVideoQueryIoctls(struct drm_ioctl_desc *ioctls)
 {

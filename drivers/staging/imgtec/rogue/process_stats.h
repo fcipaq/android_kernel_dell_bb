@@ -43,10 +43,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __PROCESS_STATS_H__
 #define __PROCESS_STATS_H__
 
-#include <powervr/mem_types.h>
-
 #include "pvrsrv_error.h"
-#include "cache_ops.h"
 
 /*
  *  The publishing of Process Stats is controlled by the
@@ -126,7 +123,7 @@ void PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE eAllocType,
 								 size_t uiBytes);
 
 void PVRSRVStatsDecrMemKAllocStat(size_t uiBytes,
-								  IMG_PID decrPID);
+        						  IMG_PID decrPID);
 
 /*
  * Decrease the memory stat for eAllocType. Takes the allocation size value from the
@@ -159,20 +156,6 @@ void  PVRSRVStatsUpdateFreelistStats(IMG_UINT32 ui32NumGrowReqByApp,
 									 IMG_UINT32 ui32NumHighPages,
 									 IMG_PID	ownerPid);
 
-void  PVRSRVStatsUpdateCacheOpStats(PVRSRV_CACHE_OP uiCacheOp,
-									IMG_UINT32 ui32OpSeqNum,
-#if defined(PVR_RI_DEBUG)
-									IMG_DEV_VIRTADDR sDevVAddr,
-									IMG_UINT32 eFenceOpType,
-#endif
-									IMG_DEVMEM_SIZE_T uiOffset,
-									IMG_DEVMEM_SIZE_T uiSize,
-									IMG_UINT64 ui64ExecuteTimeMs,
-									IMG_BOOL bRangeBasedFlush,
-									IMG_BOOL bUserModeFlush,
-									IMG_BOOL bIsTimeline,
-									IMG_BOOL bIsFence,
-									IMG_PID ownerPid);
 
 /* Update pre/post power transition timing statistics */
 void InsertPowerTimeStatistic(IMG_UINT64 ui64SysStartTime, IMG_UINT64 ui64SysEndTime,

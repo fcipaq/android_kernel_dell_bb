@@ -57,7 +57,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/string.h>
 #endif
 
-#if defined (__QNXNTO__) || defined (INTEGRITY_OS)
+#if defined (__QNXNTO__)
 #include <string.h>
 #endif
 
@@ -78,6 +78,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  Types
 ******************************************************************************/
 
+#define DBG_STREAM_NAME_MAX		30
+
 /*
 	Per-buffer control structure.
 */
@@ -96,7 +98,7 @@ typedef struct _DBG_STREAM_
 
 	IMG_UINT32 ui32InitPhaseWOff;	/*!< snapshot offset for init phase end for follow-on pdump */
 
-	IMG_CHAR   szName[DEBUG_STREAM_NAME_MAX];			/* Give this a size, some compilers don't like [] */
+	IMG_CHAR   szName[DBG_STREAM_NAME_MAX];			/* Give this a size, some compilers don't like [] */
 } DBG_STREAM;
 
 /* Check 4xDBG_STREAM will fit in one page */
@@ -164,7 +166,7 @@ IMG_BOOL IMG_CALLCONV ExtDBGDrivCreateStream(IMG_CHAR *pszName, IMG_UINT32 ui32F
 {
 	IMG_BOOL pvRet;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	pvRet=DBGDrivCreateStream(pszName, ui32Flags, ui32Size, phInit, phMain, phDeinit);
@@ -180,7 +182,7 @@ IMG_BOOL IMG_CALLCONV ExtDBGDrivCreateStream(IMG_CHAR *pszName, IMG_UINT32 ui32F
  */
 void IMG_CALLCONV ExtDBGDrivDestroyStream(IMG_HANDLE hInit,IMG_HANDLE hMain, IMG_HANDLE hDeinit)
 {
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	DBGDrivDestroyStream(hInit, hMain, hDeinit);
@@ -198,7 +200,7 @@ void * IMG_CALLCONV ExtDBGDrivFindStream(IMG_CHAR * pszName, IMG_BOOL bResetStre
 {
 	void *	pvRet;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	pvRet=DBGDrivFindStream(pszName, bResetStream);
@@ -221,7 +223,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivRead(PDBG_STREAM psStream, IMG_UINT32 ui32BufI
 {
 	IMG_UINT32 ui32Ret;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	ui32Ret=DBGDrivRead(psStream, ui32BufID, ui32OutBuffSize, pui8OutBuf);
@@ -239,7 +241,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivWrite2(PDBG_STREAM psStream,IMG_UINT8 * pui8In
 {
 	IMG_UINT32	ui32Ret;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	ui32Ret=DBGDrivWrite2(psStream, pui8InBuf, ui32InBuffSize);
@@ -255,7 +257,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivWrite2(PDBG_STREAM psStream,IMG_UINT8 * pui8In
  */
 void IMG_CALLCONV ExtDBGDrivSetMarker(PDBG_STREAM psStream, IMG_UINT32 ui32Marker)
 {
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	DBGDrivSetMarker(psStream, ui32Marker);
@@ -273,7 +275,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivGetMarker(PDBG_STREAM psStream)
 {
 	IMG_UINT32	ui32Marker;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	ui32Marker = DBGDrivGetMarker(psStream);
@@ -304,7 +306,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivGetCtrlState(PDBG_STREAM psStream, IMG_UINT32 
 {
 	IMG_UINT32 ui32State = 0;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	ui32State = DBGDrivGetCtrlState(psStream, ui32StateID);
@@ -322,7 +324,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivGetFrame(void)
 {
 	IMG_UINT32 ui32Frame = 0;
 
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	ui32Frame = DBGDrivGetFrame();
@@ -338,7 +340,7 @@ IMG_UINT32 IMG_CALLCONV ExtDBGDrivGetFrame(void)
  */
 void IMG_CALLCONV ExtDBGDrivSetFrame(IMG_UINT32 ui32Frame)
 {
-	/* Acquire API Mutex */
+	/* Aquire API Mutex */
 	HostAquireMutex(g_pvAPIMutex);
 
 	DBGDrivSetFrame(ui32Frame);
@@ -660,7 +662,7 @@ static void DBGDrivSetStreamName(PDBG_STREAM psStream,
 									 IMG_CHAR* pszExt)
 {
 	IMG_CHAR* pCh = psStream->szName;
-	IMG_CHAR* pChEnd = psStream->szName+DEBUG_STREAM_NAME_MAX-8;
+	IMG_CHAR* pChEnd = psStream->szName+DBG_STREAM_NAME_MAX-8;
 	IMG_CHAR* pSrcCh;
 	IMG_CHAR* pSrcChEnd;
 
@@ -964,7 +966,7 @@ void * IMG_CALLCONV DBGDrivFindStream(IMG_CHAR * pszName, IMG_BOOL bResetStream)
 
 		if (strlen(psThis->szName) == strlen(pszName))
 		{
-			while ((ui32Off < DEBUG_STREAM_NAME_MAX) && (psThis->szName[ui32Off] != 0) && (pszName[ui32Off] != 0) && bAreSame)
+			while ((ui32Off < DBG_STREAM_NAME_MAX) && (psThis->szName[ui32Off] != 0) && (pszName[ui32Off] != 0) && bAreSame)
 			{
 				if (psThis->szName[ui32Off] != pszName[ui32Off])
 				{
@@ -1308,6 +1310,22 @@ void IMG_CALLCONV DBGDrivWaitForEvent(DBG_EVENT eEvent)
 }
 #endif
 
+/*	Use PVR_DPF() to avoid state messages in release build */
+#if defined(PVR_DISABLE_LOGGING) || !defined(DEBUG)
+#define PVR_LOG(...)
+#else
+
+extern void PVRSRVDebugPrintf(IMG_UINT32	ui32DebugLevel,
+						const IMG_CHAR*	pszFileName,
+						IMG_UINT32	ui32Line,
+						const IMG_CHAR*	pszFormat,
+						...	);
+/* Reproduce the PVR_LOG macro here but direct it to DPF */
+#define PVR_LOG(...)	PVRSRVDebugPrintf( DBGPRIV_CALLTRACE, __FILE__, __LINE__ , __VA_ARGS__);
+
+#endif
+
+
 /*!****************************************************************************
  @name		DBGDrivGetCtrlState
  @brief		Gets a state value from the debug driver or stream
@@ -1328,43 +1346,34 @@ IMG_UINT32 IMG_CALLCONV DBGDrivGetCtrlState(PDBG_STREAM psStream, IMG_UINT32 ui3
 	{
 	case DBG_GET_STATE_FLAG_IS_READONLY:
 		return ((psStream->ui32Flags & DEBUG_FLAGS_READONLY) != 0);
+		break;
 
 	case 0xFE: /* Dump the current stream state */
-		PVR_DPF((PVR_DBG_CALLTRACE,
-				 "------ PDUMP DBGDriv: psStream( %p ) ( -- %s -- ) ui32Flags( %x )",
-				 psStream, psStream->szName, psStream->ui32Flags));
-		PVR_DPF((PVR_DBG_CALLTRACE,
-				 "------ PDUMP DBGDriv: psStream->pvBase( %p ) psStream->ui32Size( %u )",
-				 psStream->pvBase, psStream->ui32Size));
-		PVR_DPF((PVR_DBG_CALLTRACE,
-				 "------ PDUMP DBGDriv: psStream->ui32RPtr( %u ) psStream->ui32WPtr( %u )",
-				 psStream->ui32RPtr, psStream->ui32WPtr));
-		PVR_DPF((PVR_DBG_CALLTRACE,
-				 "------ PDUMP DBGDriv: psStream->ui32Marker( %u ) psStream->ui32InitPhaseWOff( %u )",
-				 psStream->ui32Marker, psStream->ui32InitPhaseWOff));
+		PVR_LOG("------ PDUMP DBGDriv: psStream( %p ) ( -- %s -- ) ui32Flags( %x )",
+				psStream, psStream->szName, psStream->ui32Flags);
+		PVR_LOG("------ PDUMP DBGDriv: psStream->pvBase( %p ) psStream->ui32Size( %u )",
+				psStream->pvBase, psStream->ui32Size);
+		PVR_LOG("------ PDUMP DBGDriv: psStream->ui32RPtr( %u ) psStream->ui32WPtr( %u )",
+				psStream->ui32RPtr, psStream->ui32WPtr);
+		PVR_LOG("------ PDUMP DBGDriv: psStream->ui32Marker( %u ) psStream->ui32InitPhaseWOff( %u )",
+				psStream->ui32Marker, psStream->ui32InitPhaseWOff);
 		if (psStream->psInitStream)
 		{
-			PVR_DPF((PVR_DBG_CALLTRACE,
-					 "-------- PDUMP DBGDriv: psInitStream( %p ) ( -- %s -- ) ui32Flags( %x )",
-					 psStream->psInitStream, psStream->psInitStream->szName, psStream->ui32Flags));
-			PVR_DPF((PVR_DBG_CALLTRACE,
-					 "-------- PDUMP DBGDriv: psInitStream->pvBase( %p ) psInitStream->ui32Size( %u )",
-					 psStream->psInitStream->pvBase, psStream->psInitStream->ui32Size));
-			PVR_DPF((PVR_DBG_CALLTRACE,
-					 "-------- PDUMP DBGDriv: psInitStream->ui32RPtr( %u ) psInitStream->ui32WPtr( %u )",
-					 psStream->psInitStream->ui32RPtr, psStream->psInitStream->ui32WPtr));
-			PVR_DPF((PVR_DBG_CALLTRACE,
-					 "-------- PDUMP DBGDriv: psInitStream->ui32Marker( %u ) psInitStream->ui32InitPhaseWOff( %u ) ",
-					 psStream->psInitStream->ui32Marker, psStream->psInitStream->ui32InitPhaseWOff));
+			PVR_LOG("-------- PDUMP DBGDriv: psInitStream( %p ) ( -- %s -- ) ui32Flags( %x )",
+					psStream->psInitStream, psStream->psInitStream->szName, psStream->ui32Flags);
+			PVR_LOG("-------- PDUMP DBGDriv: psInitStream->pvBase( %p ) psInitStream->ui32Size( %u )",
+					psStream->psInitStream->pvBase, psStream->psInitStream->ui32Size);
+			PVR_LOG("-------- PDUMP DBGDriv: psInitStream->ui32RPtr( %u ) psInitStream->ui32WPtr( %u )",
+					psStream->psInitStream->ui32RPtr, psStream->psInitStream->ui32WPtr);
+			PVR_LOG("-------- PDUMP DBGDriv: psInitStream->ui32Marker( %u ) psInitStream->ui32InitPhaseWOff( %u ) ",
+					psStream->psInitStream->ui32Marker, psStream->psInitStream->ui32InitPhaseWOff);
 		}
 
 		break;
 
 	case 0xFF: /* Dump driver state not in a stream */
 		{
-			PVR_DPF((PVR_DBG_CALLTRACE,
-					 "------ PDUMP DBGDriv: g_psStreamList( head %p ) g_pvAPIMutex( %p ) g_PDumpCurrentFrameNo( %u )",
-					 g_psStreamList, g_pvAPIMutex, g_PDumpCurrentFrameNo));
+			PVR_LOG("------ PDUMP DBGDriv: g_psStreamList( head %p ) g_pvAPIMutex( %p ) g_PDumpCurrentFrameNo( %u )", g_psStreamList, g_pvAPIMutex, g_PDumpCurrentFrameNo);
 		}
 		break;
 
@@ -1468,7 +1477,7 @@ static IMG_BOOL ExpandStreamBuffer(PDBG_STREAM psStream, IMG_UINT32 ui32NewSize)
 					(void *)(IMG_PBYTE)psStream->pvBase,
 					psStream->ui32WPtr);
 		}
-		ui32NewROffset = 0; 
+		ui32NewROffset = 0;
 	}
 	else
 	{

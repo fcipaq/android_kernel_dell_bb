@@ -64,9 +64,8 @@ extern "C" {
 #if defined(_MSC_VER)
 	#include "msvc_types.h"
 #elif defined(LINUX) && defined(__KERNEL__)
-	#include <linux/types.h>
 	#include "kernel_types.h"
-#elif defined(LINUX) || defined(__METAG) || defined(__QNXNTO__) || defined(INTEGRITY_OS)
+#elif defined(LINUX) || defined(__METAG) || defined(__QNXNTO__)
 	#include <stddef.h>			/* NULL */
 	#include <inttypes.h>		/* intX_t/uintX_t, format specifiers */
 	#include <limits.h>			/* INT_MIN, etc */
@@ -127,8 +126,9 @@ typedef	enum tag_img_bool
 	IMG_FORCE_ALIGN = 0x7FFFFFFF
 } IMG_BOOL, *IMG_PBOOL;
 
-#if defined(UNDER_WDDM) || defined(WINDOWS_WDF)
+#if !defined(LINUX)
 typedef void            IMG_VOID, *IMG_PVOID;
+typedef IMG_VOID const* IMG_PCVOID;
 
 typedef uintptr_t		IMG_UINTPTR_T;
 typedef size_t			IMG_SIZE_T;
@@ -137,6 +137,11 @@ typedef size_t			IMG_SIZE_T;
 #define IMG_NULL		NULL
 
 typedef IMG_CHAR const* IMG_PCCHAR;
+typedef IMG_UINT16 const* IMG_PCUINT16;
+typedef IMG_INT16 const* IMG_PCINT16;
+typedef IMG_UINT32 const* IMG_PCUINT32;
+typedef IMG_INT32 const* IMG_PCINT32;
+typedef IMG_BOOL const* IMG_PCBOOL;
 #endif
 
 #if defined(_MSC_VER)
@@ -208,6 +213,21 @@ typedef int             IMG_OS_CONNECTION;
  *
  */
 
+typedef void *IMG_CPU_VIRTADDR;
+
+/* device virtual address */
+typedef struct _IMG_DEV_VIRTADDR
+{
+	IMG_UINT64  uiAddr;
+#define IMG_CAST_TO_DEVVADDR_UINT(var)		(IMG_UINT64)(var)
+	
+} IMG_DEV_VIRTADDR;
+
+typedef IMG_UINT64 IMG_DEVMEM_SIZE_T;
+typedef IMG_UINT64 IMG_DEVMEM_ALIGN_T;
+typedef IMG_UINT64 IMG_DEVMEM_OFFSET_T;
+typedef IMG_UINT32 IMG_DEVMEM_LOG2ALIGN_T;
+
 #define IMG_DEV_VIRTADDR_FMTSPEC "0x%010" IMG_UINT64_FMTSPECX
 #define IMG_DEVMEM_SIZE_FMTSPEC "0x%010" IMG_UINT64_FMTSPECX
 #define IMG_DEVMEM_ALIGN_FMTSPEC "0x%010" IMG_UINT64_FMTSPECX
@@ -219,9 +239,6 @@ typedef struct _IMG_CPU_PHYADDR
 #if defined(UNDER_WDDM) || defined(WINDOWS_WDF)
 	uintptr_t uiAddr;
 #define IMG_CAST_TO_CPUPHYADDR_UINT(var)		(uintptr_t)(var)
-#elif defined(LINUX) && defined(__KERNEL__)
-	phys_addr_t uiAddr;
-#define IMG_CAST_TO_CPUPHYADDR_UINT(var)		(phys_addr_t)(var)
 #else
 	IMG_UINT64 uiAddr;
 #define IMG_CAST_TO_CPUPHYADDR_UINT(var)		(IMG_UINT64)(var)

@@ -51,23 +51,22 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvrsrv.h"
 #include "srvcore.h"
 #if defined(SUPPORT_PVRSRV_GPUVIRT)
-#include "pvrsrv_vz.h"
+#include "pvrsrv_virt.h"
 #endif
 #include "services_km.h"
 #include "pvrsrv_device.h"
 #include "pvr_debug.h"
-#include "pvr_notifier.h"
 #include "sync.h"
 #include "sync_server.h"
 #include "devicemem.h"
-#include "cache_km.h"
 
 #include "log2.h"
+
+#include "pvrversion.h"
 
 #include "lists.h"
 #include "dllist.h"
 #include "syscommon.h"
-#include "sysvalidation.h"
 
 #include "physmem_lma.h"
 #include "physmem_osmem.h"
@@ -79,6 +78,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgxinit.h"
 #include "rgxfwutils.h"
 #endif
+
+#include "debug_request_ids.h"
 
 #if defined(PVR_RI_DEBUG)
 #include "ri_server.h"
@@ -106,45 +107,285 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "dc_server.h"
 #endif
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-#include "rgx_options.h"
-#include "srvinit.h"
-#include "rgxutils.h"
-#endif
-
-#include "oskm_apphint.h"
-#include "pvrsrv_apphint.h"
-
-#include "rgx_bvnc_defs_km.h"
-
 /*! Wait 100ms before retrying deferred clean-up again */
-#define CLEANUP_THREAD_WAIT_RETRY_TIMEOUT 100000ULL
+#define CLEANUP_THREAD_WAIT_RETRY_TIMEOUT 0x00000064
 
 /*! Wait 8hrs when no deferred clean-up required. Allows a poll several times
  * a day to check for any missed clean-up. */
-#define CLEANUP_THREAD_WAIT_SLEEP_TIMEOUT 28800000000ULL
+#define CLEANUP_THREAD_WAIT_SLEEP_TIMEOUT 0x01B77400
 
-/*! When unloading try a few times to free everything remaining on the list */
-#define CLEANUP_THREAD_UNLOAD_RETRY 4
 
-#define PVRSRV_PROC_HANDLE_BASE_INIT 10
+typedef struct DEBUG_REQUEST_ENTRY_TAG
+{
+	IMG_UINT32		ui32RequesterID;
+	DLLIST_NODE		sListHead;
+} DEBUG_REQUEST_ENTRY;
+
+typedef struct DEBUG_REQUEST_TABLE_TAG
+{
+	IMG_UINT32				ui32RequestCount;
+	DEBUG_REQUEST_ENTRY		asEntry[1];
+}DEBUG_REQUEST_TABLE;
 
 static PVRSRV_DATA	*gpsPVRSRVData = NULL;
-static IMG_UINT32 g_ui32InitFlags;
+static IMG_HANDLE   g_hDbgSysNotify;
+
+static PVRSRV_SYSTEM_CONFIG *gpsSysConfig = NULL;
+
+typedef PVRSRV_ERROR (*PFN_REGISTER_DEVICE)(PVRSRV_DEVICE_NODE *psDeviceNode);
+typedef PVRSRV_ERROR (*PFN_UNREGISTER_DEVICE)(PVRSRV_DEVICE_NODE *psDeviceNode);
+
+static PFN_REGISTER_DEVICE sRegisterDevice[PVRSRV_DEVICE_TYPE_LAST + 1];
+static PFN_UNREGISTER_DEVICE sUnregisterDevice[PVRSRV_DEVICE_TYPE_LAST + 1];
+
+static PVRSRV_ERROR IMG_CALLCONV PVRSRVRegisterDevice(PVRSRV_DEVICE_CONFIG *psDevConfig);
+static PVRSRV_ERROR IMG_CALLCONV PVRSRVUnregisterDevice(PVRSRV_DEVICE_NODE *psDeviceNode);
+
+static PVRSRV_ERROR PVRSRVRegisterDbgTable(IMG_UINT32 *paui32Table, IMG_UINT32 ui32Length, void **phTable);
+static void PVRSRVUnregisterDbgTable(void *hTable);
+
+static void _SysDebugRequestNotify(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle, IMG_UINT32 ui32VerbLevel,
+	DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf, void *pvDumpDebugFile);
+
+IMG_UINT32	g_ui32InitFlags;
 
 /* mark which parts of Services were initialised */
 #define		INIT_DATA_ENABLE_PDUMPINIT	0x1U
 
+/* Head of the list of callbacks called when Cmd complete happens */
+static DLLIST_NODE sCmdCompNotifyHead;
+static POSWR_LOCK hNotifyLock = NULL;
+
+/* Debug request table and lock */
+static POSWR_LOCK g_hDbgNotifyLock = NULL;
+static DEBUG_REQUEST_TABLE *g_psDebugTable;
+
+static void *g_hDebugTable = NULL;
+
 static IMG_UINT32 g_aui32DebugOrderTable[] = {
 	DEBUG_REQUEST_SYS,
-	DEBUG_REQUEST_APPHINT,
-	DEBUG_REQUEST_HTB,
+	DEBUG_REQUEST_RGX,
 	DEBUG_REQUEST_DC,
-	DEBUG_REQUEST_SYNCCHECKPOINT,
 	DEBUG_REQUEST_SERVERSYNC,
 	DEBUG_REQUEST_ANDROIDSYNC,
+	DEBUG_REQUEST_DRMDISPLAY,
 	DEBUG_REQUEST_LINUXFENCE
 };
+
+/*!
+******************************************************************************
+
+ @Function	AllocateDeviceID
+
+ @Description
+
+ allocates a device id from the pool of valid ids
+
+ @input psPVRSRVData :	Services private data
+
+ @input pui32DevID : device id to return
+
+ @Return device id
+
+******************************************************************************/
+static PVRSRV_ERROR AllocateDeviceID(PVRSRV_DATA *psPVRSRVData, IMG_UINT32 *pui32DevID)
+{
+	SYS_DEVICE_ID* psDeviceWalker;
+	SYS_DEVICE_ID* psDeviceEnd;
+
+	psDeviceWalker = &psPVRSRVData->sDeviceID[0];
+	psDeviceEnd = psDeviceWalker + SYS_DEVICE_COUNT;
+
+	/* find a free ID */
+	while (psDeviceWalker < psDeviceEnd)
+	{
+		if (!psDeviceWalker->bInUse)
+		{
+			psDeviceWalker->bInUse = IMG_TRUE;
+			*pui32DevID = psDeviceWalker->uiID;
+
+			return PVRSRV_OK;
+		}
+		psDeviceWalker++;
+	}
+
+	PVR_DPF((PVR_DBG_ERROR,"AllocateDeviceID: No free and valid device IDs available!"));
+
+	/* Should never get here: sDeviceID[] may have been setup too small */
+	PVR_ASSERT(psDeviceWalker < psDeviceEnd);
+
+	return PVRSRV_ERROR_NO_FREE_DEVICEIDS_AVAILABLE;
+}
+
+
+/*!
+******************************************************************************
+
+ @Function	FreeDeviceID
+
+ @Description
+
+ frees a device id from the pool of valid ids
+
+ @input psPVRSRVData :	Services private data
+
+ @input ui32DevID : device id to free
+
+ @Return device id
+
+******************************************************************************/
+static PVRSRV_ERROR FreeDeviceID(PVRSRV_DATA *psPVRSRVData, IMG_UINT32 ui32DevID)
+{
+	SYS_DEVICE_ID* psDeviceWalker;
+	SYS_DEVICE_ID* psDeviceEnd;
+
+	psDeviceWalker = &psPVRSRVData->sDeviceID[0];
+	psDeviceEnd = psDeviceWalker + SYS_DEVICE_COUNT;
+
+	/* find the ID to free */
+	while (psDeviceWalker < psDeviceEnd)
+	{
+		/* if matching id and in use, free */
+		if	(
+				(psDeviceWalker->uiID == ui32DevID) &&
+				(psDeviceWalker->bInUse)
+			)
+		{
+			psDeviceWalker->bInUse = IMG_FALSE;
+			return PVRSRV_OK;
+		}
+		psDeviceWalker++;
+	}
+
+	PVR_DPF((PVR_DBG_ERROR,"FreeDeviceID: no matching dev ID that is in use!"));
+
+	/* should never get here */
+	PVR_ASSERT(psDeviceWalker < psDeviceEnd);
+
+	return PVRSRV_ERROR_INVALID_DEVICEID;
+}
+
+
+/*!
+******************************************************************************
+ @Function	PVRSRVEnumerateDevicesKM_ForEachVaCb
+
+ @Description
+
+ Enumerates the device node (if is of the same class as given).
+
+ @Input psDeviceNode	- The device node to be enumerated
+ 		va				- variable arguments list, with:
+							pui32DevCount	- The device count pointer (to be increased)
+							ppeDeviceType     - The pointer to the device type pointer (to be updated and increased)
+							ppeDeviceClass    - The pointer to the device classes pointer (to be updated and increased)
+							ppui32DeviceIndex - The pointer to the device indexes pointer (to be updated and increased)
+******************************************************************************/
+static void PVRSRVEnumerateDevicesKM_ForEachVaCb(PVRSRV_DEVICE_NODE *psDeviceNode, va_list va)
+{
+	IMG_UINT *pui32DevCount;
+	PVRSRV_DEVICE_TYPE **ppeDeviceType;
+	PVRSRV_DEVICE_CLASS **ppeDeviceClass;
+	IMG_UINT32 **ppui32DeviceIndex;
+
+	pui32DevCount = va_arg(va, IMG_UINT*);
+	ppeDeviceType = va_arg(va, PVRSRV_DEVICE_TYPE**);
+	ppeDeviceClass = va_arg(va, PVRSRV_DEVICE_CLASS**);
+	ppui32DeviceIndex = va_arg(va, IMG_UINT32**);
+
+	if (psDeviceNode->sDevId.eDeviceType != PVRSRV_DEVICE_TYPE_EXT)
+	{
+		**ppeDeviceType = psDeviceNode->sDevId.eDeviceType;
+		**ppeDeviceClass = psDeviceNode->sDevId.eDeviceClass;
+		**ppui32DeviceIndex = psDeviceNode->sDevId.ui32DeviceIndex;
+
+		(*ppeDeviceType)++;
+		(*ppeDeviceClass)++;
+		(*ppui32DeviceIndex)++;
+
+		(*pui32DevCount)++;
+	}
+}
+
+
+
+/*!
+******************************************************************************
+
+ @Function PVRSRVEnumerateDevicesKM
+
+ @Description
+ This function will enumerate all the devices supported by the
+ PowerVR services within the target system.
+ The function returns a list of the device ID structures stored either in
+ the services or constructed in the user mode glue component in certain
+ environments. The number of devices in the list is also returned.
+
+ In a binary layered component which does not support dynamic runtime selection,
+ the glue code should compile to return the supported devices statically,
+ e.g. multiple instances of the same device if multiple devices are supported,
+ or the target combination of Rogue and display device.
+
+ In the case of an environment (for instance) where one Rogue may connect to two
+ display devices this code would enumerate all three devices and even
+ non-dynamic Rogue selection code should retain the facility to parse the list
+ to find the index of the Rogue device
+
+ @output pui32NumDevices :	On success, contains the number of devices present
+ 							in the system
+
+ @output peDeviceType	 :	Pointer to called supplied buffer to receive the
+ 							list of PVRSRV_DEVICE_TYPE
+
+ @output peDeviceClass	 :	Pointer to called supplied buffer to receive the
+ 							list of PVRSRV_DEVICE_CLASS
+
+ @output pui32DeviceIndex:	Pointer to called supplied buffer to receive the
+ 							list of device indexes
+
+ @return PVRSRV_ERROR  :	
+
+******************************************************************************/
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVEnumerateDevicesKM(IMG_UINT32 *pui32NumDevices,
+                                                   PVRSRV_DEVICE_TYPE *peDeviceType,
+                                                   PVRSRV_DEVICE_CLASS *peDeviceClass,
+                                                   IMG_UINT32 *pui32DeviceIndex)
+{
+	PVRSRV_DATA			*psPVRSRVData = PVRSRVGetPVRSRVData();
+	IMG_UINT32 			i;
+
+	if (!pui32NumDevices || !peDeviceType || !peDeviceClass || !pui32DeviceIndex)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVEnumerateDevicesKM: Invalid params"));
+		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
+
+	/*
+		setup input buffer to be `empty'
+	*/
+	for (i=0; i<PVRSRV_MAX_DEVICES; i++)
+	{
+		peDeviceType[i] = PVRSRV_DEVICE_TYPE_UNKNOWN;
+	}
+
+	/* and zero device count */
+	*pui32NumDevices = 0;
+
+	/*
+		Search through the device list for services managed devices
+		return id info for each device and the number of devices
+		available
+	*/
+	List_PVRSRV_DEVICE_NODE_ForEach_va(psPVRSRVData->psDeviceNodeList,
+									   &PVRSRVEnumerateDevicesKM_ForEachVaCb,
+									   pui32NumDevices,
+									   &peDeviceType,
+									   &peDeviceClass,
+									   &pui32DeviceIndex);
+
+	return PVRSRV_OK;
+}
 
 /* Add work to the cleanup thread work list.
  * The work item will be executed by the cleanup thread
@@ -157,11 +398,8 @@ void PVRSRVCleanupThreadAddWork(PVRSRV_CLEANUP_THREAD_WORK *psData)
 	psPVRSRVData = PVRSRVGetPVRSRVData();
 
 	PVR_ASSERT(psData != NULL);
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-	if(psPVRSRVData->eServicesState != PVRSRV_SERVICES_STATE_OK || psPVRSRVData->bUnload)
-#else
+
 	if(psPVRSRVData->bUnload)
-#endif
 	{
 		CLEANUP_THREAD_FN pfnFree = psData->pfnFree;
 
@@ -207,8 +445,7 @@ static INLINE DLLIST_NODE *_CleanupThreadWorkListPop(PVRSRV_DATA *psPVRSRVData)
 }
 
 /* Process the cleanup thread work list */
-static IMG_BOOL _CleanupThreadProcessWorkList(PVRSRV_DATA *psPVRSRVData,
-                                              IMG_BOOL *pbUseGlobalEO)
+static IMG_BOOL _CleanupThreadProcessWorkList(PVRSRV_DATA *psPVRSRVData)
 {
 	DLLIST_NODE *psNodeIter, *psNodeLast;
 	PVRSRV_ERROR eError;
@@ -243,7 +480,6 @@ static IMG_BOOL _CleanupThreadProcessWorkList(PVRSRV_DATA *psPVRSRVData,
 			 */
 			pfnFree = psData->pfnFree;
 
-			*pbUseGlobalEO = psData->bDependsOnHW;
 			eError = pfnFree(psData->pvData);
 
 			if(eError != PVRSRV_OK)
@@ -302,11 +538,8 @@ static void CleanupThread(void *pvData)
 {
 	PVRSRV_DATA *psPVRSRVData = pvData;
 	IMG_BOOL     bRetryWorkList = IMG_FALSE;
-	IMG_HANDLE	 hGlobalEvent;
 	IMG_HANDLE	 hOSEvent;
 	PVRSRV_ERROR eRc;
-	IMG_BOOL bUseGlobalEO = IMG_FALSE;
-	IMG_UINT32 uiUnloadRetry = 0;
 
 	/* Store the process id (pid) of the clean-up thread */
 	psPVRSRVData->cleanupThreadPid = OSGetCurrentProcessID();
@@ -319,42 +552,18 @@ static void CleanupThread(void *pvData)
 	eRc = OSEventObjectOpen(psPVRSRVData->hCleanupEventObject, &hOSEvent);
 	PVR_ASSERT(eRc == PVRSRV_OK);
 
-	eRc = OSEventObjectOpen(psPVRSRVData->hGlobalEventObject, &hGlobalEvent);
-	PVR_ASSERT(eRc == PVRSRV_OK);
-
 	/* While the driver is in a good state and is not being unloaded
 	 * try to free any deferred items when signalled
 	 */
-	while ((psPVRSRVData->eServicesState == PVRSRV_SERVICES_STATE_OK))
+	while ((psPVRSRVData->eServicesState == PVRSRV_SERVICES_STATE_OK) && 
+			(!psPVRSRVData->bUnload))
 	{
-		IMG_HANDLE hEvent;
-
-		if (psPVRSRVData->bUnload)
-		{
-			if (dllist_is_empty(&psPVRSRVData->sCleanupThreadWorkList) ||
-					uiUnloadRetry > CLEANUP_THREAD_UNLOAD_RETRY)
-			{
-				break;
-			}
-			uiUnloadRetry++;
-		}
-
 		/* Wait until signalled for deferred clean up OR wait for a
 		 * short period if the previous deferred clean up was not able
 		 * to release all the resources before trying again.
 		 * Bridge lock re-acquired on our behalf before the wait call returns.
 		 */
-
-		if(bRetryWorkList && bUseGlobalEO)
-		{
-			hEvent = hGlobalEvent;
-		}
-		else
-		{
-			hEvent = hOSEvent;
-		}
-
-		eRc = OSEventObjectWaitTimeout(hEvent,
+		eRc = OSEventObjectWaitTimeout(hOSEvent,
 				bRetryWorkList ?
 				CLEANUP_THREAD_WAIT_RETRY_TIMEOUT :
 				CLEANUP_THREAD_WAIT_SLEEP_TIMEOUT);
@@ -371,7 +580,7 @@ static void CleanupThread(void *pvData)
 			PVR_DPF((PVR_DBG_ERROR, "CleanupThread: wait error %d", eRc));
 		}
 
-		bRetryWorkList = _CleanupThreadProcessWorkList(psPVRSRVData, &bUseGlobalEO);
+		bRetryWorkList = _CleanupThreadProcessWorkList(psPVRSRVData);
 	}
 
 	OSLockDestroy(psPVRSRVData->hCleanupThreadWorkListLock);
@@ -379,77 +588,7 @@ static void CleanupThread(void *pvData)
 	eRc = OSEventObjectClose(hOSEvent);
 	PVR_LOG_IF_ERROR(eRc, "OSEventObjectClose");
 
-	eRc = OSEventObjectClose(hGlobalEvent);
-	PVR_LOG_IF_ERROR(eRc, "OSEventObjectClose");
-
 	PVR_DPF((CLEANUP_DPFL, "CleanupThread: thread ending... "));
-}
-
-static IMG_BOOL DevicesWatchdogThread_Powered_Any(PVRSRV_DEVICE_NODE *psDeviceNode)
-{
-	PVRSRV_DEV_POWER_STATE ePowerState = PVRSRV_DEV_POWER_STATE_ON;
-	PVRSRV_ERROR eError;
-
-	eError = PVRSRVPowerLock(psDeviceNode);
-	if (eError != PVRSRV_OK)
-	{
-		if (eError == PVRSRV_ERROR_RETRY)
-		{
-			/* Power lock cannot be acquired at this time (sys power is off) */
-			return IMG_FALSE;
-		}
-
-		/* Any other error is unexpected so we assume the device is on */
-		PVR_DPF((PVR_DBG_ERROR,
-				 "DevicesWatchdogThread: Failed to acquire power lock for device %p (%s)",
-				 psDeviceNode, PVRSRVGetErrorStringKM(eError)));
-		return IMG_TRUE;
-	}
-
-	(void) PVRSRVGetDevicePowerState(psDeviceNode, &ePowerState);
-
-	PVRSRVPowerUnlock(psDeviceNode);
-
-	return (ePowerState == PVRSRV_DEV_POWER_STATE_ON) ? IMG_TRUE : IMG_FALSE;
-}
-
-static void DevicesWatchdogThread_ForEachVaCb(PVRSRV_DEVICE_NODE *psDeviceNode,
-											  va_list va)
-{
-	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *) psDeviceNode->pvDevice;
-	PVRSRV_DEVICE_HEALTH_STATUS *pePreviousHealthStatus, eHealthStatus;
-	PVRSRV_ERROR eError;
-
-	pePreviousHealthStatus = va_arg(va, PVRSRV_DEVICE_HEALTH_STATUS *);
-
-	if (psDeviceNode->pfnUpdateHealthStatus != NULL)
-	{
-		eError = psDeviceNode->pfnUpdateHealthStatus(psDeviceNode, IMG_TRUE);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_WARNING, "DevicesWatchdogThread: "
-					 "Could not check for fatal error (%d)!",
-					 eError));
-		}
-	}
-	eHealthStatus = OSAtomicRead(&psDeviceNode->eHealthStatus);
-
-	if (eHealthStatus != PVRSRV_DEVICE_HEALTH_STATUS_OK)
-	{
-		if (eHealthStatus != *pePreviousHealthStatus)
-		{
-			if (!(psDevInfo->ui32DeviceFlags &
-				  RGXKM_DEVICE_STATE_DISABLE_DW_LOGGING_EN))
-			{
-				PVR_DPF((PVR_DBG_ERROR, "DevicesWatchdogThread: "
-						 "Device not responding!!!"));
-				PVRSRVDebugRequest(psDeviceNode, DEBUG_REQUEST_VERBOSITY_MAX,
-								   NULL, NULL);
-			}
-		}
-	}
-
-	*pePreviousHealthStatus = eHealthStatus;
 }
 
 static void DevicesWatchdogThread(void *pvData)
@@ -459,6 +598,7 @@ static void DevicesWatchdogThread(void *pvData)
 	IMG_HANDLE hOSEvent;
 	PVRSRV_ERROR  eError;
 	IMG_UINT32 ui32Timeout = DEVICES_WATCHDOG_POWER_ON_SLEEP_TIMEOUT;
+	PVRSRV_DEV_POWER_STATE ePowerState;
 
 	PVR_DPF((PVR_DBG_MESSAGE, "DevicesWatchdogThread: Power off sleep time: %d.",
 			DEVICES_WATCHDOG_POWER_OFF_SLEEP_TIMEOUT));
@@ -469,18 +609,14 @@ static void DevicesWatchdogThread(void *pvData)
 	PVR_LOGRN_IF_ERROR(eError, "OSEventObjectOpen");
 
 	/* Loop continuously checking the device status every few seconds. */
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-	while ((psPVRSRVData->eServicesState == PVRSRV_SERVICES_STATE_OK) &&
-			!psPVRSRVData->bUnload)
-#else
 	while (!psPVRSRVData->bUnload)
-#endif
 	{
+		IMG_UINT32 i;
 		IMG_BOOL bPwrIsOn = IMG_FALSE;
 
 		/* Wait time between polls (done at the start of the loop to allow devices
 		   to initialise) or for the event signal (shutdown or power on). */
-		eError = OSEventObjectWaitTimeout(hOSEvent, (IMG_UINT64)ui32Timeout * 1000);
+		eError = OSEventObjectWaitTimeout(hOSEvent, ui32Timeout);
 
 #ifdef PVR_TESTING_UTILS
 		psPVRSRVData->ui32DevicesWdWakeupCounter++;
@@ -504,24 +640,92 @@ static void DevicesWatchdogThread(void *pvData)
 					"Error (%d) when waiting for event!", eError));
 		}
 
-		bPwrIsOn = List_PVRSRV_DEVICE_NODE_IMG_BOOL_Any(psPVRSRVData->psDeviceNodeList,
-														DevicesWatchdogThread_Powered_Any);
-		if (bPwrIsOn || psPVRSRVData->ui32DevicesWatchdogPwrTrans)
+		eError = PVRSRVPowerLock();
+		if (eError == PVRSRV_ERROR_RETRY)
 		{
-			psPVRSRVData->ui32DevicesWatchdogPwrTrans = 0;
-			ui32Timeout = psPVRSRVData->ui32DevicesWatchdogTimeout = DEVICES_WATCHDOG_POWER_ON_SLEEP_TIMEOUT;
+			/* power lock cannot be acquired at this time (sys power is off) */
+			ui32Timeout = psPVRSRVData->ui32DevicesWatchdogTimeout = DEVICES_WATCHDOG_POWER_OFF_SLEEP_TIMEOUT;
+		}
+		else if (eError != PVRSRV_OK)
+		{
+			/* any other error is unexpected */
+			PVR_DPF((PVR_DBG_ERROR,"DevicesWatchdogThread: Failed to acquire power lock (%s)", PVRSRVGetErrorStringKM(eError)));
 		}
 		else
 		{
-			ui32Timeout = psPVRSRVData->ui32DevicesWatchdogTimeout = DEVICES_WATCHDOG_POWER_OFF_SLEEP_TIMEOUT;
+			/* Check if at least one of the devices is on. */
+			for (i = 0; i < psPVRSRVData->ui32RegisteredDevices && !bPwrIsOn; i++)
+			{
+				if (PVRSRVGetDevicePowerState(i, &ePowerState) == PVRSRV_OK)
+				{
+					bPwrIsOn = ePowerState == PVRSRV_DEV_POWER_STATE_ON;
+					break;
+				}
+			}
+
+			if (bPwrIsOn || psPVRSRVData->ui32DevicesWatchdogPwrTrans)
+			{
+				psPVRSRVData->ui32DevicesWatchdogPwrTrans = 0;
+				ui32Timeout = psPVRSRVData->ui32DevicesWatchdogTimeout = DEVICES_WATCHDOG_POWER_ON_SLEEP_TIMEOUT;
+			}
+			else
+			{
+				ui32Timeout = psPVRSRVData->ui32DevicesWatchdogTimeout = DEVICES_WATCHDOG_POWER_OFF_SLEEP_TIMEOUT;
+			}
+
+			PVRSRVPowerUnlock();
 		}
 
-		List_PVRSRV_DEVICE_NODE_ForEach_va(psPVRSRVData->psDeviceNodeList,
-										   DevicesWatchdogThread_ForEachVaCb,
-										   &ePreviousHealthStatus);
+		for (i = 0;  i < psPVRSRVData->ui32RegisteredDevices; i++)
+		{
+			PVRSRV_DEVICE_NODE* psDeviceNode = psPVRSRVData->apsRegisteredDevNodes[i];
+			PVRSRV_RGXDEV_INFO* psDevInfo = (PVRSRV_RGXDEV_INFO*) psDeviceNode->pvDevice;
+			
+			if (psDeviceNode->pfnUpdateHealthStatus != NULL)
+			{
+				eError = psDeviceNode->pfnUpdateHealthStatus(psDeviceNode, IMG_TRUE);
+				if (eError != PVRSRV_OK)
+				{
+					PVR_DPF((PVR_DBG_WARNING, "DevicesWatchdogThread: "
+							"Could not check for fatal error (%d)!",
+							eError));
+				}
+			}
 
-#if defined(SUPPORT_GPUVIRT_VALIDATION) && defined(EMULATOR)
-		SysPrintAndResetFaultStatusRegister();
+			if (psDeviceNode->eHealthStatus != PVRSRV_DEVICE_HEALTH_STATUS_OK)
+			{
+				if (psDeviceNode->eHealthStatus != ePreviousHealthStatus)
+				{
+					if (!(psDevInfo->ui32DeviceFlags & RGXKM_DEVICE_STATE_DISABLE_DW_LOGGING_EN))
+					{
+						PVR_DPF((PVR_DBG_ERROR, "DevicesWatchdogThread: Device not responding!!!"));
+						PVRSRVDebugRequest(DEBUG_REQUEST_VERBOSITY_MAX, NULL, NULL);
+					}
+				}
+			}
+			ePreviousHealthStatus = psDeviceNode->eHealthStatus;
+			
+			/* Attempt to service the HWPerf buffer to regularly transport 
+			 * idle / periodic packets to host buffer. */
+			if (psDeviceNode->pfnServiceHWPerf != NULL)
+			{
+				eError = psDeviceNode->pfnServiceHWPerf(psDeviceNode);
+				if (eError != PVRSRV_OK)
+				{
+					PVR_DPF((PVR_DBG_WARNING, "DevicesWatchdogThread: "
+							"Error occurred when servicing HWPerf buffer (%d)",
+							eError));
+				}
+			}
+		}
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+		{
+			#if defined(EMULATOR)
+			{
+				SysPrintAndResetFaultStatusRegister();
+			}
+			#endif
+		}
 #endif
 	}
 
@@ -535,36 +739,47 @@ PVRSRV_DATA *PVRSRVGetPVRSRVData()
 	return gpsPVRSRVData;
 }
 
-PVRSRV_ERROR IMG_CALLCONV
-PVRSRVDriverInit(void)
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVInit(void *hDevice)
 {
-	PVRSRV_ERROR eError;
+	PVRSRV_ERROR	eError;
+	PVRSRV_SYSTEM_CONFIG *psSysConfig;
+	IMG_UINT32 i;
 	PVRSRV_DATA	*psPVRSRVData = NULL;
 
-	IMG_UINT32 ui32AppHintCleanupThreadPriority;
-	IMG_UINT32 ui32AppHintCleanupThreadWeight;
-	IMG_UINT32 ui32AppHintWatchdogThreadPriority;
-	IMG_UINT32 ui32AppHintWatchdogThreadWeight;
+#if defined (SUPPORT_RGX)
+	sRegisterDevice[PVRSRV_DEVICE_TYPE_RGX] = RGXRegisterDevice;
+#endif
 
-	void *pvAppHintState = NULL;
-	IMG_UINT32 ui32AppHintDefault;
-
-	/*
-	 * As this function performs one time driver initialisation, use the
-	 * Services global device-independent data to determine whether or not
-	 * this function has already been called.
-	 */
-	if (gpsPVRSRVData)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Driver already initialised", __func__));
-		return PVRSRV_ERROR_ALREADY_EXISTS;
-	}
+	SET_LOG2_PAGESIZE(OSGetPageShift());
 
 	eError = PhysHeapInit();
 	if (eError != PVRSRV_OK)
 	{
 		goto Error;
 	}
+
+	/* Get the system config */
+	eError = SysCreateConfigData(&psSysConfig, hDevice);
+	if (eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	if (psSysConfig->uiDeviceCount > 1)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "PVRSRVInit: System config contains too many devices"));
+		eError = PVRSRV_ERROR_INVALID_DEVICE;
+		goto Error;
+	}
+
+#if defined(SUPPORT_PVRSRV_GPUVIRT)
+	/* Perform virtualization initliazation if any */
+	PVRSRVVirtInit(psSysConfig);
+#endif
+
+	/* Save to global pointer for later */
+	gpsSysConfig = psSysConfig;
 
 	/*
 	 * Allocate the device-independent data
@@ -576,6 +791,30 @@ PVRSRVDriverInit(void)
 		goto Error;
 	}
 
+	psPVRSRVData->ui32NumDevices = psSysConfig->uiDeviceCount;
+
+	for (i=0;i<SYS_DEVICE_COUNT;i++)
+	{
+		psPVRSRVData->sDeviceID[i].uiID = i;
+		psPVRSRVData->sDeviceID[i].bInUse = IMG_FALSE;
+	}
+
+	/*
+	 * Register the physical memory heaps
+	 */
+	PVR_ASSERT(psSysConfig->ui32PhysHeapCount <= SYS_PHYS_HEAP_COUNT);
+	for (i=0;i<psSysConfig->ui32PhysHeapCount;i++)
+	{
+		eError = PhysHeapRegister(&psSysConfig->pasPhysHeaps[i],
+								  &psPVRSRVData->apsRegisteredPhysHeaps[i]);
+		if (eError != PVRSRV_OK)
+		{
+			/* point gpsPVRSRVData to the actual data, so it will be freed */
+			gpsPVRSRVData = psPVRSRVData;
+			goto Error;
+		}
+		psPVRSRVData->ui32RegisteredPhysHeaps++;
+	}
 	/* Now it is set up, point gpsPVRSRVData to the actual data */
 	gpsPVRSRVData = psPVRSRVData;
 
@@ -595,27 +834,19 @@ PVRSRVDriverInit(void)
 
 	if(eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Failed to initialise DevicememHistoryInitKM", __func__));
+		PVR_DPF((PVR_DBG_ERROR, "Failed to initialise DevicememHistory"));
 		goto Error;
 	}
 #endif
 
-	eError = BridgeInit();
+	eError = BridgeBufferPoolCreate();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to initialise bridge",
-				 __func__));
+		PVR_DPF((PVR_DBG_ERROR, "Failed to initialise bridge buffer pool."));
 		goto Error;
 	}
 
 	eError = PMRInit();
-	if (eError != PVRSRV_OK)
-	{
-		goto Error;
-	}
-
-	eError = CacheOpInit();
 	if (eError != PVRSRV_OK)
 	{
 		goto Error;
@@ -629,6 +860,17 @@ PVRSRVDriverInit(void)
 	}
 #endif
 
+	/* Initialise Power Manager Lock */
+	eError = OSLockCreate(&gpsPVRSRVData->hPowerLock, LOCK_TYPE_PASSIVE);
+	if (eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	/* Initialise system power state */
+	gpsPVRSRVData->eCurrentPowerState = PVRSRV_SYS_POWER_STATE_ON;
+	gpsPVRSRVData->eFailedPowerState = PVRSRV_SYS_POWER_STATE_Unspecified;
+
 	/* Initialise overall system state */
 	gpsPVRSRVData->eServicesState = PVRSRV_SERVICES_STATE_OK;
 
@@ -640,7 +882,34 @@ PVRSRVDriverInit(void)
 	}
 	gpsPVRSRVData->ui32GEOConsecutiveTimeouts = 0;
 
-	eError = PVRSRVCmdCompleteInit();
+	/* initialise list of command complete notifiers */
+	dllist_init(&sCmdCompNotifyHead);
+
+	/* Create a lock of the list notifiers */
+	eError = OSWRLockCreate(&hNotifyLock);
+	if (eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	/* Create a lock of the debug notifiers */
+	eError = OSWRLockCreate(&g_hDbgNotifyLock);
+	if (eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	eError = PVRSRVRegisterDbgTable(g_aui32DebugOrderTable,
+									sizeof(g_aui32DebugOrderTable)/sizeof(g_aui32DebugOrderTable[0]),
+									&g_hDebugTable);
+	if (eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	PVRSRVRegisterDbgRequestNotify(&g_hDbgSysNotify, &_SysDebugRequestNotify, DEBUG_REQUEST_SYS, gpsPVRSRVData);
+
+	eError = ServerSyncInit();
 	if (eError != PVRSRV_OK)
 	{
 		goto Error;
@@ -655,7 +924,35 @@ PVRSRVDriverInit(void)
 
 	g_ui32InitFlags |= INIT_DATA_ENABLE_PDUMPINIT;
 
+	/* Register all the system devices */
+	for (i=0;i<psSysConfig->uiDeviceCount;i++)
+	{
+		eError = PVRSRVRegisterDevice(&psSysConfig->pasDevices[i]);
+		if (eError != PVRSRV_OK)
+		{
+			goto Error;
+		}
+
+		/* Initialise the Transport Layer.
+		 * Need to remember the RGX device node for use in the Transport Layer
+		 * when allocating stream buffers that are shared with clients.
+		 * Note however when the device is an LMA device our buffers will not
+		 * be in host memory but card memory.
+		 */
+		if (gpsPVRSRVData->apsRegisteredDevNodes[gpsPVRSRVData->ui32RegisteredDevices-1]->psDevConfig->eDeviceType == PVRSRV_DEVICE_TYPE_RGX)
+		{
+			eError = TLInit(gpsPVRSRVData->apsRegisteredDevNodes[gpsPVRSRVData->ui32RegisteredDevices-1]);
+			PVR_LOGG_IF_ERROR(eError, "TLInit", Error);
+		}
+	}
+
 	eError = PVRSRVHandleInit();
+	if(eError != PVRSRV_OK)
+	{
+		goto Error;
+	}
+
+	eError = PVRSRVConnectionInit();
 	if(eError != PVRSRV_OK)
 	{
 		goto Error;
@@ -666,40 +963,13 @@ PVRSRVDriverInit(void)
 
 	/* Create a thread which is used to do the deferred cleanup */
 	eError = OSThreadCreatePriority(&gpsPVRSRVData->hCleanupThread,
-							"pvr_defer_free",
+							"pvr_defer_free" PVRSRV_GPUVIRT_OSID_STR,
 							CleanupThread,
 							gpsPVRSRVData,
 							OS_THREAD_LOWEST_PRIORITY);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to create deferred cleanup thread",
-				 __func__));
-		goto Error;
-	}
-
-	OSCreateKMAppHintState(&pvAppHintState);
-	ui32AppHintDefault = PVRSRV_APPHINT_CLEANUPTHREADPRIORITY;
-	OSGetKMAppHintUINT32(pvAppHintState, CleanupThreadPriority,
-	                     &ui32AppHintDefault, &ui32AppHintCleanupThreadPriority);
-	ui32AppHintDefault = PVRSRV_APPHINT_CLEANUPTHREADWEIGHT;
-	OSGetKMAppHintUINT32(pvAppHintState, CleanupThreadWeight,
-	                     &ui32AppHintDefault, &ui32AppHintCleanupThreadWeight);
-	ui32AppHintDefault = PVRSRV_APPHINT_WATCHDOGTHREADPRIORITY;
-	OSGetKMAppHintUINT32(pvAppHintState, WatchdogThreadPriority,
-	                     &ui32AppHintDefault, &ui32AppHintWatchdogThreadPriority);
-	ui32AppHintDefault = PVRSRV_APPHINT_WATCHDOGTHREADWEIGHT;
-	OSGetKMAppHintUINT32(pvAppHintState, WatchdogThreadWeight,
-	                     &ui32AppHintDefault, &ui32AppHintWatchdogThreadWeight);
-	OSFreeKMAppHintState(pvAppHintState);
-	pvAppHintState = NULL;
-
-	eError = OSSetThreadPriority(gpsPVRSRVData->hCleanupThread,
-								 ui32AppHintCleanupThreadPriority,
-								 ui32AppHintCleanupThreadWeight);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to set thread priority of deferred cleanup thread.",
-				 __func__));	
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVInit: Failed to create deferred cleanup thread"));
 		goto Error;
 	}
 
@@ -709,102 +979,72 @@ PVRSRVDriverInit(void)
 
 	/* Create a thread which is used to detect fatal errors */
 	eError = OSThreadCreate(&gpsPVRSRVData->hDevicesWatchdogThread,
-							"pvr_device_wdg",
+							"pvr_device_wdg" PVRSRV_GPUVIRT_OSID_STR,
 							DevicesWatchdogThread,
 							gpsPVRSRVData);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to create devices watchdog thread",
-				 __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVInit: Failed to create devices watchdog thread"));
 		goto Error;
 	}
 
-	eError = OSSetThreadPriority(gpsPVRSRVData->hDevicesWatchdogThread,
-								 ui32AppHintWatchdogThreadPriority,
-								 ui32AppHintWatchdogThreadWeight);
+#if defined(PVR_TESTING_UTILS)
+	TUtilsInit();
+#endif
+
+#if defined(PVR_DVFS)
+	eError = InitDVFS(gpsPVRSRVData, hDevice);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to set thread priority of the watchdog thread.",
-				 __func__));	
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVInit: Failed to start DVFS"));
 		goto Error;
 	}
-
-	gpsPVRSRVData->psProcessHandleBase_Table = HASH_Create(PVRSRV_PROC_HANDLE_BASE_INIT);
-
-	if (gpsPVRSRVData->psProcessHandleBase_Table == NULL)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				"%s: Failed to create hash table for process handle base.",
-				__func__));
-		eError = PVRSRV_ERROR_UNABLE_TO_CREATE_HASH_TABLE;
-		goto Error;
-	}
-
-	eError = OSLockCreate(&gpsPVRSRVData->hProcessHandleBase_Lock, LOCK_TYPE_PASSIVE);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				"%s: Failed to create lock for process handle base.",
-				__func__));
-		goto Error;
-	}
+#endif
 
 	return 0;
 
 Error:
-	PVRSRVDriverDeInit();
+	PVRSRVDeInit(hDevice);
 	return eError;
 }
 
-void IMG_CALLCONV
-PVRSRVDriverDeInit(void)
+
+void IMG_CALLCONV PVRSRVDeInit(void *hDevice)
 {
-	PVRSRV_ERROR eError = PVRSRV_OK;
+	PVRSRV_DATA		*psPVRSRVData = PVRSRVGetPVRSRVData();
+	PVRSRV_ERROR	eError;
+	IMG_UINT32		i;
 
 	if (gpsPVRSRVData == NULL)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: missing device-independent data",
-				 __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit failed - invalid gpsPVRSRVData"));
 		return;
 	}
 
-	gpsPVRSRVData->bUnload = IMG_TRUE;
+#if defined(PVR_TESTING_UTILS)
+	TUtilsDeinit();
+#endif
 
-	if (gpsPVRSRVData->hProcessHandleBase_Lock)
-	{
-		OSLockDestroy(gpsPVRSRVData->hProcessHandleBase_Lock);
-		gpsPVRSRVData->hProcessHandleBase_Lock = NULL;
-	}
+#if defined (SUPPORT_RGX)
+	sUnregisterDevice[PVRSRV_DEVICE_TYPE_RGX] = DevDeInitRGX;
+#endif
 
-	if (gpsPVRSRVData->psProcessHandleBase_Table)
+	psPVRSRVData->bUnload = IMG_TRUE;
+	if (psPVRSRVData->hGlobalEventObject)
 	{
-		HASH_Delete(gpsPVRSRVData->psProcessHandleBase_Table);
-		gpsPVRSRVData->psProcessHandleBase_Table = NULL;
-	}
-
-	if (gpsPVRSRVData->hGlobalEventObject)
-	{
-		OSEventObjectSignal(gpsPVRSRVData->hGlobalEventObject);
+		OSEventObjectSignal(psPVRSRVData->hGlobalEventObject);
 	}
 
 	/* Stop and cleanup the devices watchdog thread */
-	if (gpsPVRSRVData->hDevicesWatchdogThread)
+	if (psPVRSRVData->hDevicesWatchdogThread)
 	{
-		if (gpsPVRSRVData->hDevicesWatchdogEvObj)
+		if (psPVRSRVData->hDevicesWatchdogEvObj)
 		{
-			eError = OSEventObjectSignal(gpsPVRSRVData->hDevicesWatchdogEvObj);
+			eError = OSEventObjectSignal(psPVRSRVData->hDevicesWatchdogEvObj);
 			PVR_LOG_IF_ERROR(eError, "OSEventObjectSignal");
 		}
-		LOOP_UNTIL_TIMEOUT(OS_THREAD_DESTROY_TIMEOUT_US)
-		{
-			eError = OSThreadDestroy(gpsPVRSRVData->hDevicesWatchdogThread);
-			if (PVRSRV_OK == eError)
-			{
-				gpsPVRSRVData->hDevicesWatchdogThread = NULL;
-				break;
-			}
-			OSWaitus(OS_THREAD_DESTROY_TIMEOUT_US/OS_THREAD_DESTROY_RETRY_COUNT);
-		} END_LOOP_UNTIL_TIMEOUT();
+		eError = OSThreadDestroy(gpsPVRSRVData->hDevicesWatchdogThread);
+		gpsPVRSRVData->hDevicesWatchdogThread = NULL;
 		PVR_LOG_IF_ERROR(eError, "OSThreadDestroy");
 	}
 
@@ -818,23 +1058,15 @@ PVRSRVDriverDeInit(void)
 	/* Stop and cleanup the deferred clean up thread, event object and
 	 * deferred context list.
 	 */
-	if (gpsPVRSRVData->hCleanupThread)
+	if (psPVRSRVData->hCleanupThread)
 	{
-		if (gpsPVRSRVData->hCleanupEventObject)
+		if (psPVRSRVData->hCleanupEventObject)
 		{
-			eError = OSEventObjectSignal(gpsPVRSRVData->hCleanupEventObject);
+			eError = OSEventObjectSignal(psPVRSRVData->hCleanupEventObject);
 			PVR_LOG_IF_ERROR(eError, "OSEventObjectSignal");
 		}
-		LOOP_UNTIL_TIMEOUT(OS_THREAD_DESTROY_TIMEOUT_US)
-		{
-			eError = OSThreadDestroy(gpsPVRSRVData->hCleanupThread);
-			if (PVRSRV_OK == eError)
-			{
-				gpsPVRSRVData->hCleanupThread = NULL;
-				break;
-			}
-			OSWaitus(OS_THREAD_DESTROY_TIMEOUT_US/OS_THREAD_DESTROY_RETRY_COUNT);
-		} END_LOOP_UNTIL_TIMEOUT();
+		eError = OSThreadDestroy(gpsPVRSRVData->hCleanupThread);
+		gpsPVRSRVData->hCleanupThread = NULL;
 		PVR_LOG_IF_ERROR(eError, "OSThreadDestroy");
 	}
 
@@ -846,14 +1078,83 @@ PVRSRVDriverDeInit(void)
 	}
 
 	/* Tear down the HTB before PVRSRVHandleDeInit() removes its TL handle */
-	/* HTB De-init happens in device de-registration currently */
-	eError = HTBDeInit();
-	PVR_LOG_IF_ERROR(eError, "HTBDeInit");
+	HTBDeInit();
+
+	eError = PVRSRVConnectionDeInit();
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: PVRSRVConnectionDataDeInit failed"));
+	}
 
 	eError = PVRSRVHandleDeInit();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: PVRSRVHandleDeInit failed", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: PVRSRVHandleDeInit failed"));
+	}
+
+	/* Unregister all the system devices */
+	for (i=0;i<psPVRSRVData->ui32RegisteredDevices;i++)
+	{
+		PVRSRV_DEVICE_NODE *psDeviceNode = psPVRSRVData->apsRegisteredDevNodes[i];
+
+		/* set device state */
+		psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_DEINIT;
+
+		/* Counter part to what gets done in PVRSRVFinaliseSystem */
+		if (psDeviceNode->hSyncPrimContext != NULL)
+		{
+			if (psDeviceNode->psSyncPrim != NULL)
+			{
+				/* Free general pupose sync primitive */
+				SyncPrimFree(psDeviceNode->psSyncPrim);
+				psDeviceNode->psSyncPrim = NULL;
+			}
+
+			SyncPrimContextDestroy(psDeviceNode->hSyncPrimContext);
+			psDeviceNode->hSyncPrimContext = NULL;
+		}
+
+		PVRSRVUnregisterDevice(psDeviceNode);
+		psPVRSRVData->apsRegisteredDevNodes[i] = NULL;
+	}
+
+#if defined(SUPPORT_PVRSRV_GPUVIRT)
+	/* Perform virtualization deinitliazation if any */
+	PVRSRVVirtDeInit(gpsSysConfig);
+#endif
+
+	SysDestroyConfigData(gpsSysConfig);
+
+#if defined(PVR_DVFS)
+	DeinitDVFS(gpsPVRSRVData, hDevice);
+#endif
+
+	/* Clean up Transport Layer resources that remain. 
+	 * Done after RGX node clean up as HWPerf stream is destroyed during 
+	 * this
+	 */
+	TLDeInit();
+
+	ServerSyncDeinit();
+
+	if (g_hDbgSysNotify)
+	{
+		PVRSRVUnregisterDbgRequestNotify(g_hDbgSysNotify);
+	}
+
+	if (g_hDebugTable)
+	{
+		PVRSRVUnregisterDbgTable(g_hDebugTable);
+	}
+
+	if (g_hDbgNotifyLock)
+	{
+		OSWRLockDestroy(g_hDbgNotifyLock);
+	}
+
+	if (hNotifyLock)
+	{
+		OSWRLockDestroy(hNotifyLock);
 	}
 
 	/* deinitialise pdump */
@@ -869,29 +1170,46 @@ PVRSRVDriverDeInit(void)
 		gpsPVRSRVData->hGlobalEventObject = NULL;
 	}
 
-	PVRSRVCmdCompleteDeinit();
+	/* Check there is no notify function */
+	if (!dllist_is_empty(&sCmdCompNotifyHead))
+	{
+		PDLLIST_NODE psNode = dllist_get_next_node(&sCmdCompNotifyHead);
+
+		/* some device did not unregistered properly */
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: Notify list for cmd complete is not empty!!"));
+
+		/* clean the nodes anyway */
+		while (psNode != NULL)
+		{
+			PVRSRV_CMDCOMP_NOTIFY	*psNotify;
+
+			dllist_remove_node(psNode);
+			
+			psNotify = IMG_CONTAINER_OF(psNode, PVRSRV_CMDCOMP_NOTIFY, sListNode);
+			OSFreeMem(psNotify);
+
+			psNode = dllist_get_next_node(&sCmdCompNotifyHead);
+		}
+	}
+
+	OSLockDestroy(gpsPVRSRVData->hPowerLock);
 
 #if defined(SUPPORT_DISPLAY_CLASS)
 	eError = DCDeInit();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: DCDeInit failed", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: DCInit() failed"));
 	}
 #endif
 
-    eError = CacheOpDeInit();
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: CacheOpDeInit failed", __func__));
-	}
 
     eError = PMRDeInit();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: PMRDeInit failed", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: PMRDeInit() failed"));
 	}
 
-	BridgeDeinit();
+	BridgeBufferPoolDestroy();
 
 #if defined(PVR_RI_DEBUG)
 	RIDeInitKM();
@@ -903,14 +1221,171 @@ PVRSRVDriverDeInit(void)
 	
 	OSDeInitEnvData();
 
+	for (i=0;i<gpsPVRSRVData->ui32RegisteredPhysHeaps;i++)
+	{
+		PhysHeapUnregister(gpsPVRSRVData->apsRegisteredPhysHeaps[i]);
+	}
 	eError = PhysHeapDeinit();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: PhysHeapDeinit failed", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVDeInit: PhysHeapDeinit() failed"));
 	}
 
 	OSFreeMem(gpsPVRSRVData);
 	gpsPVRSRVData = NULL;
+}
+
+PVRSRV_ERROR LMA_PhyContigPagesAlloc(PVRSRV_DEVICE_NODE *psDevNode, size_t uiSize,
+							PG_HANDLE *psMemHandle, IMG_DEV_PHYADDR *psDevPAddr)
+{
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+	IMG_UINT32  ui32OSid = 0;
+#endif
+	IMG_BOOL bSuccess;
+	RA_BASE_T uiCardAddr;
+	RA_LENGTH_T uiActualSize;
+	RA_ARENA *pArena=psDevNode->psLocalDevMemArena;
+	IMG_UINT32 ui32Log2NumPages = 0;
+	
+	PVR_ASSERT(uiSize != 0);
+	ui32Log2NumPages = OSGetOrder(uiSize);
+	uiSize = (1 << ui32Log2NumPages) * OSGetPageSize();
+
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+{
+	IMG_UINT32	ui32OSidReg = 0;
+
+	IMG_PID		pId = OSGetCurrentClientProcessIDKM();
+
+	RetrieveOSidsfromPidList(pId, &ui32OSid, &ui32OSidReg);
+
+	pArena = psDevNode->psOSidSubArena[ui32OSid];
+}
+#endif
+
+	bSuccess = RA_Alloc(pArena,
+						uiSize,
+						RA_NO_IMPORT_MULTIPLIER,
+						0,							/* No flags */
+						OSGetPageSize(),
+						&uiCardAddr,
+						&uiActualSize,
+						NULL);					/* No private handle */
+
+#if defined(SUPPORT_GPUVIRT_VALIDATION)
+{
+	PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): LMA_PhyContigPagesAlloc: Address:%llu, size:%llu", uiCardAddr,uiActualSize));
+}
+#endif
+
+	PVR_ASSERT(uiSize == uiActualSize);
+
+	psMemHandle->u.ui64Handle = uiCardAddr;
+	psDevPAddr->uiAddr = (IMG_UINT64) uiCardAddr;
+
+	if (bSuccess)
+	{
+#if defined(PVRSRV_ENABLE_PROCESS_STATS)
+#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
+	PVRSRVStatsIncrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA, uiSize);
+#else
+		IMG_CPU_PHYADDR	sCpuPAddr;
+		sCpuPAddr.uiAddr = psDevPAddr->uiAddr;
+
+		PVRSRVStatsAddMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA,
+															 NULL,
+															 sCpuPAddr,
+															 uiSize,
+															 NULL);
+#endif
+#endif
+		psMemHandle->ui32Order = ui32Log2NumPages;
+		return PVRSRV_OK;
+	}
+	else
+		return PVRSRV_ERROR_OUT_OF_MEMORY;
+}
+
+void LMA_PhyContigPagesFree(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle)
+{
+	RA_BASE_T uiCardAddr = (RA_BASE_T) psMemHandle->u.ui64Handle;
+
+#if defined(PVRSRV_ENABLE_PROCESS_STATS)
+#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
+	IMG_UINT32 ui32NumPages = (1 << psMemHandle->ui32Order);
+	PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA, ui32NumPages * OSGetPageSize());
+#else
+		PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA, (IMG_UINT64)uiCardAddr);
+#endif
+#endif
+	RA_Free(psDevNode->psLocalDevMemArena, uiCardAddr);
+	psMemHandle->ui32Order = 0;
+}
+
+PVRSRV_ERROR LMA_PhyContigPagesMap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle,
+							size_t uiSize, IMG_DEV_PHYADDR *psDevPAddr,
+							void **pvPtr)
+{
+	IMG_CPU_PHYADDR sCpuPAddr;
+	IMG_UINT32 ui32NumPages = (1 << psMemHandle->ui32Order);
+	PVR_UNREFERENCED_PARAMETER(psMemHandle);
+	PVR_UNREFERENCED_PARAMETER(uiSize);
+
+	PhysHeapDevPAddrToCpuPAddr(psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], 1, &sCpuPAddr, psDevPAddr);
+	*pvPtr = OSMapPhysToLin(sCpuPAddr,
+							ui32NumPages * OSGetPageSize(),
+							0);
+	if (*pvPtr == NULL)
+	{
+		return PVRSRV_ERROR_OUT_OF_MEMORY;
+	}
+	else
+	{
+#if defined(PVRSRV_ENABLE_PROCESS_STATS)
+#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
+		PVRSRVStatsIncrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, ui32NumPages * OSGetPageSize());
+#else
+		{
+			PVRSRVStatsAddMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA,
+										 *pvPtr,
+										 sCpuPAddr,
+										 ui32NumPages * OSGetPageSize(),
+										 NULL);
+		}
+#endif
+#endif
+		return PVRSRV_OK;
+	}
+}
+
+void LMA_PhyContigPagesUnmap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle,
+						void *pvPtr)
+{
+	IMG_UINT32 ui32NumPages = (1 << psMemHandle->ui32Order);
+	PVR_UNREFERENCED_PARAMETER(psMemHandle);
+	PVR_UNREFERENCED_PARAMETER(psDevNode);
+
+#if defined(PVRSRV_ENABLE_PROCESS_STATS)
+#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
+		PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, ui32NumPages * OSGetPageSize());
+#else
+	PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, (IMG_UINT64)(uintptr_t)pvPtr);
+#endif
+#endif
+
+	OSUnMapPhysToLin(pvPtr, ui32NumPages * OSGetPageSize(), 0);
+}
+
+PVRSRV_ERROR LMA_PhyContigPagesClean(PG_HANDLE *psMemHandle,
+                                     IMG_UINT32 uiOffset,
+                                     IMG_UINT32 uiLength)
+{
+	/* No need to flush because we map as uncached */
+	PVR_UNREFERENCED_PARAMETER(psMemHandle);
+	PVR_UNREFERENCED_PARAMETER(uiOffset);
+	PVR_UNREFERENCED_PARAMETER(uiLength);
+
+	return PVRSRV_OK;
 }
 
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
@@ -921,7 +1396,7 @@ static PVRSRV_ERROR CreateLMASubArenas(PVRSRV_DEVICE_NODE *psDeviceNode)
 	for (uiCounter = 0; uiCounter < GPUVIRT_VALIDATION_NUM_OS; uiCounter++)
 	{
 		psDeviceNode->psOSidSubArena[uiCounter] =
-			RA_Create(psDeviceNode->apszRANames[0],
+			RA_Create(psDeviceNode->szRAName,
 					  OSGetPageShift(),			/* Use host page size, keeps things simple */
 					  RA_LOCKCLASS_0,			/* This arena doesn't use any other arenas. */
 					  NULL,					/* No Import */
@@ -949,7 +1424,7 @@ static PVRSRV_ERROR CreateLMASubArenas(PVRSRV_DEVICE_NODE *psDeviceNode)
 		return PVRSRV_ERROR_OUT_OF_MEMORY;
 	}
 
-	psDeviceNode->apsLocalDevMemArenas[0] = psDeviceNode->psOSidSubArena[0];
+	psDeviceNode->psLocalDevMemArena = psDeviceNode->psOSidSubArena[0];
 
 	return PVRSRV_OK;
 }
@@ -989,265 +1464,153 @@ error:
 
 #endif
 
-static void _SysDebugRequestNotify(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle,
-					IMG_UINT32 ui32VerbLevel,
-					DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
-					void *pvDumpDebugFile)
-{
-	/* Only dump info once */
-	if (ui32VerbLevel == DEBUG_REQUEST_VERBOSITY_LOW)
-	{
-		PVRSRV_DEVICE_NODE *psDeviceNode =
-			(PVRSRV_DEVICE_NODE *) hDebugRequestHandle;
+/*!
+******************************************************************************
 
-		switch (psDeviceNode->eCurrentSysPowerState)
-		{
-			case PVRSRV_SYS_POWER_STATE_OFF:
-				PVR_DUMPDEBUG_LOG("Device System Power State: OFF");
-				break;
-			case PVRSRV_SYS_POWER_STATE_ON:
-				PVR_DUMPDEBUG_LOG("Device System Power State: ON");
-				break;
-			default:
-				PVR_DUMPDEBUG_LOG("Device System Power State: UNKNOWN (%d)",
-								   psDeviceNode->eCurrentSysPowerState);
-				break;
-		}
+ @Function	PVRSRVRegisterDevice
 
-		SysDebugInfo(psDeviceNode->psDevConfig, pfnDumpDebugPrintf, pvDumpDebugFile);
-	}
-}
+ @Description
 
-PVRSRV_ERROR IMG_CALLCONV PVRSRVDeviceCreate(void *pvOSDevice,
-											 PVRSRV_DEVICE_NODE **ppsDeviceNode)
+ registers a device with the system
+
+ @Input	   psDevConfig			: Device configuration structure
+
+ @Return   PVRSRV_ERROR  :
+
+******************************************************************************/
+static PVRSRV_ERROR IMG_CALLCONV PVRSRVRegisterDevice(PVRSRV_DEVICE_CONFIG *psDevConfig)
 {
 	PVRSRV_DATA				*psPVRSRVData = PVRSRVGetPVRSRVData();
 	PVRSRV_ERROR			eError;
-	PVRSRV_DEVICE_CONFIG	*psDevConfig;
 	PVRSRV_DEVICE_NODE		*psDeviceNode;
 	PVRSRV_DEVICE_PHYS_HEAP	physHeapIndex;
-	IMG_UINT32				i;
 
-#if !defined(SUPPORT_KERNEL_SRVINIT)
-	if (0 != psPVRSRVData->ui32RegisteredDevices)
+	if (psDevConfig->eDeviceType != PVRSRV_DEVICE_TYPE_RGX)
 	{
-		return PVRSRV_ERROR_NOT_SUPPORTED;
-	}
-#endif
-	psDeviceNode = OSAllocZMem(sizeof(*psDeviceNode));
-	if (!psDeviceNode)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to allocate device node",
-				 __func__));
-		return PVRSRV_ERROR_OUT_OF_MEMORY;
+		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRegisterDevice : Unsupported device type %d",
+			 psDevConfig->eDeviceType));
+		return PVRSRV_ERROR_INVALID_DEVICE;
 	}
 
-	eError = SysDevInit(pvOSDevice, &psDevConfig);
-	if (eError)
+	/* Allocate device node */
+	psDeviceNode = OSAllocMem(sizeof(PVRSRV_DEVICE_NODE));
+	if (psDeviceNode == NULL)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to get device config (%s)",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterDevice : Failed to alloc memory for psDeviceNode"));
+		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		goto e0;
 	}
+	OSMemSet(psDeviceNode, 0, sizeof(PVRSRV_DEVICE_NODE));
 
-	PVR_ASSERT(psDevConfig);
-	PVR_ASSERT(psDevConfig->pvOSDevice == pvOSDevice);
-	PVR_ASSERT(!psDevConfig->psDevNode);
-
-	/* Store the device node in the device config for the system layer to use */
-	psDevConfig->psDevNode = psDeviceNode;
-
+	/* set device state */
 	psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_INIT;
-	psDeviceNode->psDevConfig = psDevConfig;
-	psDeviceNode->eCurrentSysPowerState = PVRSRV_SYS_POWER_STATE_ON;
 
-	eError = PVRSRVRegisterDbgTable(psDeviceNode,
-									g_aui32DebugOrderTable,
-									IMG_ARR_NUM_ELEMS(g_aui32DebugOrderTable));
+	/* The physical backing storage for the following physical heaps [CPU,GPU,FW]  may or may not come from the same underlying source */
+	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL]);
 	if (eError != PVRSRV_OK)
 	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterDevice : Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL physical memory heap"));
+		goto e1;
+	}
+	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL], &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL]);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterDevice : Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL physical memory heap"));
+		goto e1;
+	}
+	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL], &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL]);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterDevice : Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL physical memory heap"));
 		goto e1;
 	}
 
-	eError = OSLockCreate(&psDeviceNode->hPowerLock, LOCK_TYPE_PASSIVE);
-	if (eError != PVRSRV_OK)
-	{
-		goto e2;
-	}
-
-	/* Register the physical memory heaps */
-	psDeviceNode->papsRegisteredPhysHeaps =
-		OSAllocZMem(sizeof(*psDeviceNode->papsRegisteredPhysHeaps) *
-					psDevConfig->ui32PhysHeapCount);
-	if (!psDeviceNode->papsRegisteredPhysHeaps)
-	{
-		goto e3;
-	}
-
-	for (i = 0; i < psDevConfig->ui32PhysHeapCount; i++)
-	{
-		eError = PhysHeapRegister(&psDevConfig->pasPhysHeaps[i],
-								  &psDeviceNode->papsRegisteredPhysHeaps[i]);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to register physical heap %d (%s)",
-					 __func__, psDevConfig->pasPhysHeaps[i].ui32PhysHeapID,
-					 PVRSRVGetErrorStringKM(eError)));
-			goto e4;
-		}
-
-		psDeviceNode->ui32RegisteredPhysHeaps++;
-	}
-
-	/*
-	 * The physical backing storage for the following physical heaps
-	 * [CPU,GPU,FW] may or may not come from the same underlying source
-	 */
-	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL],
-							 &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL]);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL physical memory heap",
-				 __func__));
-		goto e4;
-	}
-
-	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL],
-							 &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL]);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL physical memory heap",
-				 __func__));
-		goto e5;
-	}
-
-	eError = PhysHeapAcquire(psDevConfig->aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL],
-							 &psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL]);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Failed to acquire PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL physical memory heap",
-				 __func__));
-		goto e5;
-	}
-
-	/* Do we have card memory? If so create RAs to manage it */
+	/* Do we have card memory? If so create an RA to manage it */
 	if (PhysHeapGetType(psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL]) == PHYS_HEAP_TYPE_LMA)
 	{
 		RA_BASE_T uBase;
 		RA_LENGTH_T uSize;
 		IMG_UINT64 ui64Size;
 		IMG_CPU_PHYADDR sCpuPAddr;
-		IMG_DEV_PHYADDR sDevPAddr;
 
-		IMG_UINT32 ui32NumOfLMARegions;
-		IMG_UINT32 ui32RegionId;
-		PHYS_HEAP* psLMAHeap;
-
-		psLMAHeap = psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL];
-		ui32NumOfLMARegions = PhysHeapNumberOfRegions(psLMAHeap);
-
-		if (ui32NumOfLMARegions == 0)
+		eError = PhysHeapGetAddress(psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], &sCpuPAddr);
+		if (eError != PVRSRV_OK)
 		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: LMA heap has no memory regions defined.", __func__));
-			eError = PVRSRV_ERROR_DEVICEMEM_INVALID_LMA_HEAP;
-			goto e5;
+			/* We can only get here if there is a bug in this module */
+			PVR_ASSERT(IMG_FALSE);
+			return eError;
 		}
 
-		/* Allocate memory for RA pointers and name strings */
-		psDeviceNode->apsLocalDevMemArenas = OSAllocMem(sizeof(RA_ARENA*) * ui32NumOfLMARegions);
-		psDeviceNode->ui32NumOfLocalMemArenas = ui32NumOfLMARegions;
-		psDeviceNode->apszRANames = OSAllocMem(ui32NumOfLMARegions * sizeof(IMG_PCHAR));
-
-		for (ui32RegionId = 0; ui32RegionId < ui32NumOfLMARegions; ui32RegionId++)
+		eError = PhysHeapGetSize(psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], &ui64Size);
+		if (eError != PVRSRV_OK)
 		{
-			eError = PhysHeapRegionGetSize(psLMAHeap, ui32RegionId, &ui64Size);
-			if (eError != PVRSRV_OK)
-			{
-				/* We can only get here if there is a bug in this module */
-				PVR_ASSERT(IMG_FALSE);
-				return eError;
-			}
-
-			eError = PhysHeapRegionGetCpuPAddr(psLMAHeap, ui32RegionId, &sCpuPAddr);
-			if (eError != PVRSRV_OK)
-			{
-				/* We can only get here if there is a bug in this module */
-				PVR_ASSERT(IMG_FALSE);
-				return eError;
-			}
-
-			eError = PhysHeapRegionGetDevPAddr(psLMAHeap, ui32RegionId, &sDevPAddr);
-			if (eError != PVRSRV_OK)
-			{
-				/* We can only get here if there is a bug in this module */
-				PVR_ASSERT(IMG_FALSE);
-				return eError;
-			}
-
-			PVR_DPF((PVR_DBG_MESSAGE,
-					 "Creating RA for card memory - region %d - 0x%016llx-0x%016llx",
-					 ui32RegionId, (IMG_UINT64) sCpuPAddr.uiAddr,
-					 sCpuPAddr.uiAddr + ui64Size));
-
-			psDeviceNode->apszRANames[ui32RegionId] =
-				OSAllocMem(PVRSRV_MAX_RA_NAME_LENGTH);
-			OSSNPrintf(psDeviceNode->apszRANames[ui32RegionId],
-					   PVRSRV_MAX_RA_NAME_LENGTH,
-					   "%s card mem",
-					   psDevConfig->pszName);
-
-			uBase = sDevPAddr.uiAddr;
-			uSize = (RA_LENGTH_T) ui64Size;
-			PVR_ASSERT(uSize == ui64Size);
-
-			/* Use host page size, keeps things simple */
-			psDeviceNode->apsLocalDevMemArenas[ui32RegionId] =
-				RA_Create(psDeviceNode->apszRANames[ui32RegionId],
-						  OSGetPageShift(), RA_LOCKCLASS_0, NULL, NULL, NULL,
-						  IMG_FALSE);
-
-			if (psDeviceNode->apsLocalDevMemArenas[ui32RegionId] == NULL)
-			{
-				PVR_DPF((PVR_DBG_ERROR, "%s: Failed to create LMA memory arena",
-						 __func__));
-				eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-				goto e6;
-			}
-
-			if (!RA_Add(psDeviceNode->apsLocalDevMemArenas[ui32RegionId],
-						uBase, uSize, 0, NULL))
-			{
-				PVR_DPF((PVR_DBG_ERROR,
-						 "%s: Failed to add memory to LMA memory arena",
-						 __func__));
-				eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-				goto e6;
-			}
+			/* We can only get here if there is a bug in this module */
+			PVR_ASSERT(IMG_FALSE);
+			return eError;
 		}
+
+		eError = PhysHeapGetBase(psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], (IMG_UINT64*)&uBase);
+		if (eError != PVRSRV_OK)
+		{
+			/* We can only get here if there is a bug in this module */
+			PVR_ASSERT(IMG_FALSE);
+			return eError;
+		}
+
+		PVR_DPF((PVR_DBG_MESSAGE, "Creating RA for card memory 0x%016llx-0x%016llx",
+				 (IMG_UINT64) sCpuPAddr.uiAddr, sCpuPAddr.uiAddr + ui64Size));
+
+		OSSNPrintf(psDeviceNode->szRAName, sizeof(psDeviceNode->szRAName),
+											"%s card mem",
+											psDevConfig->pszName);
+
+		if (gpsSysConfig->uiSysFlags & PVRSRV_SYSTEM_CONFIG_APPLY_OFFSET)
+		{
+			uBase = gpsSysConfig->ui64DevMemPhysOffset;
+		}
+
+		uSize = (RA_LENGTH_T) ui64Size;
+		PVR_ASSERT(uSize == ui64Size);
 
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
+{
 		eError = CreateLMASubArenas(psDeviceNode);
 		if (eError != PVRSRV_OK)
 		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to create LMA memory sub-arenas", __func__));
-			goto e6;
+			goto e2;
+		}
+}
+#else
+		psDeviceNode->psLocalDevMemArena =
+			RA_Create(psDeviceNode->szRAName,
+						OSGetPageShift(),	/* Use host page size, keeps things simple */
+						RA_LOCKCLASS_0,     /* This arena doesn't use any other arenas. */
+						NULL,			/* No Import */
+						NULL,			/* No free import */
+						NULL,			/* No import handle */
+						IMG_FALSE);
+
+		if (psDeviceNode->psLocalDevMemArena == NULL)
+		{
+			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+			goto e2;
+		}
+
+		if (!RA_Add(psDeviceNode->psLocalDevMemArena, uBase, uSize, 0 /* No flags */, NULL /* No private data */))
+		{
+			RA_Delete(psDeviceNode->psLocalDevMemArena);
+			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+			goto e2;		
 		}
 #endif
 
-		/* If additional psDeviceNode->pfnDevPx* callbacks are added, 
-		   update the corresponding virtualization-specific override
-		   in pvrsrv_vz.c:PVRSRVVzDeviceCreate() */
+
 		psDeviceNode->pfnDevPxAlloc = LMA_PhyContigPagesAlloc;
 		psDeviceNode->pfnDevPxFree = LMA_PhyContigPagesFree;
 		psDeviceNode->pfnDevPxMap = LMA_PhyContigPagesMap;
 		psDeviceNode->pfnDevPxUnMap = LMA_PhyContigPagesUnmap;
 		psDeviceNode->pfnDevPxClean = LMA_PhyContigPagesClean;
+		psDeviceNode->uiMMUPxLog2AllocGran = OSGetPageShift();
 		psDeviceNode->pfnCreateRamBackedPMR[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL] = PhysmemNewLocalRamBackedPMR;
 	}
 	else
@@ -1285,489 +1648,605 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVDeviceCreate(void *pvOSDevice,
 		psDeviceNode->pfnCreateRamBackedPMR[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL] = PhysmemNewOSRamBackedPMR;
 	}
 
+#if defined(SUPPORT_PVRSRV_GPUVIRT)
+	/* Perform additional virtualization device registration if any */
+	PVRSRVVirtRegisterDevice(gpsSysConfig, psDevConfig, psDeviceNode);
+#endif
+
+	psDeviceNode->pszMMUPxPDumpMemSpaceName = PhysHeapPDumpMemspaceName(psDeviceNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL]);
 	psDeviceNode->uiMMUPxLog2AllocGran = OSGetPageShift();
 
-	eError = ServerSyncInit(psDeviceNode);
+	/* Add the devnode to our list so we can unregister it later */
+	psPVRSRVData->apsRegisteredDevNodes[psPVRSRVData->ui32RegisteredDevices++] = psDeviceNode;
+
+	psDeviceNode->psDevConfig = psDevConfig;
+
+	/* all devices need a unique identifier */
+	AllocateDeviceID(psPVRSRVData, &psDeviceNode->sDevId.ui32DeviceIndex);
+
+	/* Device type and class will be setup during this callback */
+	eError = sRegisterDevice[psDevConfig->eDeviceType](psDeviceNode);
 	if (eError != PVRSRV_OK)
 	{
-		goto e6;
-	}
-
-#if defined(SUPPORT_PVRSRV_GPUVIRT)
-	/* Perform virtualization device creation */
-	PVRSRVVzDeviceCreate(psDeviceNode);
-#endif
-
-	/*
-	 * This is registered before doing device specific initialisation to ensure
-	 * generic device information is dumped first during a debug request.
-	 */
-	eError = PVRSRVRegisterDbgRequestNotify(&psDeviceNode->hDbgReqNotify,
-											psDeviceNode,
-											_SysDebugRequestNotify,
-											DEBUG_REQUEST_SYS,
-											psDeviceNode);
-	PVR_LOG_IF_ERROR(eError, "PVRSRVRegisterDbgRequestNotify");
-
-	eError = HTBDeviceCreate(psDeviceNode);
-	PVR_LOG_IF_ERROR(eError, "HTBDeviceCreate");
-
-	psPVRSRVData->ui32RegisteredDevices++;
-
-#if defined(SUPPORT_RGX)
-	eError = RGXRegisterDevice(psDeviceNode);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to register device", __func__));
+		OSFreeMem(psDeviceNode);
+		/*not nulling pointer, out of scope*/
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterDevice : Failed to register device"));
 		eError = PVRSRV_ERROR_DEVICE_REGISTER_FAILED;
-		goto e7;
+		goto e3;
 	}
-#endif
 
-#if defined(PVR_DVFS)
-	eError = InitDVFS(psDeviceNode);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to start DVFS", __func__));
-#if defined(SUPPORT_RGX)
-		DevDeInitRGX(psDeviceNode);
-#endif
-		goto e7;
-	}
-#endif
 
-#if defined(PVR_TESTING_UTILS)
-	TUtilsInit(psDeviceNode);
-#endif
-
-	dllist_init(&psDeviceNode->sMemoryContextPageFaultNotifyListHead);
-
-	/*
-	 * Initialise the Transport Layer.
-	 * Need to remember the RGX device node for use in the Transport Layer
-	 * when allocating stream buffers that are shared with clients.
-	 * Note however when the device is an LMA device our buffers will not
-	 * be in host memory but card memory.
-	 */
-	eError = TLInit(psDeviceNode);
-	PVR_LOG_IF_ERROR(eError, "TLInit");
-
-	PVR_DPF((PVR_DBG_MESSAGE, "Registered device %p", psDeviceNode));
-	PVR_DPF((PVR_DBG_MESSAGE, "Register bank address = 0x%08lx",
-			 (unsigned long)psDevConfig->sRegsCpuPBase.uiAddr));
+	PVR_DPF((PVR_DBG_MESSAGE, "Registered device %d of type %d", psDeviceNode->sDevId.ui32DeviceIndex, psDeviceNode->sDevId.eDeviceType));
+	PVR_DPF((PVR_DBG_MESSAGE, "Register bank address = 0x%08lx", (unsigned long)psDevConfig->sRegsCpuPBase.uiAddr));
 	PVR_DPF((PVR_DBG_MESSAGE, "IRQ = %d", psDevConfig->ui32IRQ));
+	
+	/* and finally insert the device into the dev-list */
+	List_PVRSRV_DEVICE_NODE_Insert(&psPVRSRVData->psDeviceNodeList, psDeviceNode);
 
-	/* Finally insert the device into the dev-list and set it as active */
-	List_PVRSRV_DEVICE_NODE_InsertTail(&psPVRSRVData->psDeviceNodeList,
-									   psDeviceNode);
-
-	*ppsDeviceNode = psDeviceNode;
+	/* set device state */
+	psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_ACTIVE;
 
 	return PVRSRV_OK;
-
-#if defined(SUPPORT_RGX) || defined(PVR_DVFS)
-e7:
-	psPVRSRVData->ui32RegisteredDevices--;
-
-	if (psDeviceNode->hDbgReqNotify)
+e3:
+	if (psDeviceNode->psLocalDevMemArena)
 	{
-		PVRSRVUnregisterDbgRequestNotify(psDeviceNode->hDbgReqNotify);
+		RA_Delete(psDeviceNode->psLocalDevMemArena);
 	}
-
-#if defined(SUPPORT_PVRSRV_GPUVIRT)
-	/* Perform virtualization device destruction */
-	PVRSRVVzDeviceDestroy(psDeviceNode);
-#endif
-	ServerSyncDeinit(psDeviceNode);
-#endif
-e6:
-	{
-		IMG_UINT32 ui32RegionId;
-
-		for (ui32RegionId = 0;
-			 ui32RegionId < psDeviceNode->ui32NumOfLocalMemArenas;
-			 ui32RegionId++)
-		{
-			if (psDeviceNode->apsLocalDevMemArenas[ui32RegionId])
-			{
-				RA_Delete(psDeviceNode->apsLocalDevMemArenas[ui32RegionId]);
-			}
-		}
-	}
-
-e5:
-	for (physHeapIndex = 0;
-		 physHeapIndex < IMG_ARR_NUM_ELEMS(psDeviceNode->apsPhysHeap);
-		 physHeapIndex++)
+e2:
+e1:
+	for(physHeapIndex=0; physHeapIndex < PVRSRV_DEVICE_PHYS_HEAP_LAST; physHeapIndex++)
 	{
 		if (psDeviceNode->apsPhysHeap[physHeapIndex])
 		{
 			PhysHeapRelease(psDeviceNode->apsPhysHeap[physHeapIndex]);
 		}
 	}
-e4:
-	for (i = 0; i < psDeviceNode->ui32RegisteredPhysHeaps; i++)
-	{
-		PhysHeapUnregister(psDeviceNode->papsRegisteredPhysHeaps[i]);
-	}
-
-	OSFreeMem(psDeviceNode->papsRegisteredPhysHeaps);
-e3:
-	OSLockDestroy(psDeviceNode->hPowerLock);
-e2:
-	PVRSRVUnregisterDbgTable(psDeviceNode);
-e1:
-	psDevConfig->psDevNode = NULL;
-	SysDevDeInit(psDevConfig);
-e0:
 	OSFreeMem(psDeviceNode);
+e0:
 	return eError;
 }
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-static PVRSRV_ERROR _SetDeviceFlag(const PVRSRV_DEVICE_NODE *psDevice,
-                                  const void *psPrivate, IMG_BOOL bValue)
+PVRSRV_ERROR IMG_CALLCONV PVRSRVSysPrePowerState(PVRSRV_SYS_POWER_STATE eNewPowerState, IMG_BOOL bForced)
 {
-	PVRSRV_ERROR eResult = PVRSRV_OK;
-	IMG_UINT32 ui32Flag = (IMG_UINT32)((uintptr_t)psPrivate);
+	PVRSRV_ERROR eError = PVRSRV_OK;
 
-	if (!ui32Flag)
+	PVR_UNREFERENCED_PARAMETER(bForced);
+
+	if (gpsSysConfig->pfnSysPrePowerState)
 	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
+		eError = gpsSysConfig->pfnSysPrePowerState(eNewPowerState);
 	}
-
-	eResult = RGXSetDeviceFlags((PVRSRV_RGXDEV_INFO *)psDevice->pvDevice,
-	                            ui32Flag, bValue);
-
-	return eResult;
+	return eError;
 }
 
-static PVRSRV_ERROR _ReadDeviceFlag(const PVRSRV_DEVICE_NODE *psDevice,
-                                   const void *psPrivate, IMG_BOOL *pbValue)
+PVRSRV_ERROR IMG_CALLCONV PVRSRVSysPostPowerState(PVRSRV_SYS_POWER_STATE eNewPowerState, IMG_BOOL bForced)
 {
-	PVRSRV_ERROR eResult = PVRSRV_OK;
-	IMG_UINT32 ui32Flag = (IMG_UINT32)((uintptr_t)psPrivate);
-	IMG_UINT32 ui32State;
+	PVRSRV_ERROR eError = PVRSRV_OK;
 
-	if (!ui32Flag)
+	PVR_UNREFERENCED_PARAMETER(bForced);
+
+	if (gpsSysConfig->pfnSysPostPowerState)
 	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
+		eError = gpsSysConfig->pfnSysPostPowerState(eNewPowerState);
 	}
-
-	eResult = RGXGetDeviceFlags((PVRSRV_RGXDEV_INFO *)psDevice->pvDevice,
-	                            &ui32State);
-
-	if (PVRSRV_OK == eResult)
-	{
-		*pbValue = (ui32State & ui32Flag)? IMG_TRUE: IMG_FALSE;
-	}
-
-	return eResult;
-}
-static PVRSRV_ERROR _SetStateFlag(const PVRSRV_DEVICE_NODE *psDevice,
-                                  const void *psPrivate, IMG_BOOL bValue)
-{
-	PVRSRV_ERROR eResult = PVRSRV_OK;
-	IMG_UINT32 ui32Flag = (IMG_UINT32)((uintptr_t)psPrivate);
-
-	if (!ui32Flag)
-	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	/* EnableHWR is a special case
-	 * only possible to disable after FW is running
-	 */
-	if (bValue && RGXFWIF_INICFG_HWR_EN == ui32Flag)
-	{
-		return PVRSRV_ERROR_NOT_SUPPORTED;
-	}
-
-	eResult = RGXStateFlagCtrl((PVRSRV_RGXDEV_INFO *)psDevice->pvDevice,
-	                           ui32Flag, NULL, bValue);
-
-	return eResult;
+	return eError;
 }
 
-static PVRSRV_ERROR _ReadStateFlag(const PVRSRV_DEVICE_NODE *psDevice,
-                                   const void *psPrivate, IMG_BOOL *pbValue)
+PVRSRV_ERROR IMG_CALLCONV PVRSRVRegisterExtDevice(PVRSRV_DEVICE_NODE *psDeviceNode,
+													IMG_UINT32 *pui32DeviceIndex,
+													IMG_UINT32 ui32PhysHeapID)
 {
-	PVRSRV_ERROR eResult = PVRSRV_OK;
-	IMG_UINT32 ui32Flag = (IMG_UINT32)((uintptr_t)psPrivate);
-	IMG_UINT32 ui32State;
-
-	if (!ui32Flag)
-	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	eResult = RGXStateFlagCtrl((PVRSRV_RGXDEV_INFO *)psDevice->pvDevice,
-	                           0, &ui32State, IMG_FALSE);
-
-	if (PVRSRV_OK == eResult)
-	{
-		*pbValue = (ui32State & ui32Flag)? IMG_TRUE: IMG_FALSE;
-	}
-
-	return eResult;
-}
-
-PVRSRV_ERROR PVRSRVDeviceInitialise(PVRSRV_DEVICE_NODE *psDeviceNode)
-{
-	IMG_BOOL bInitSuccesful = IMG_FALSE;
+	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
+	PHYS_HEAP   *psPhysHeapTmp;
+	PVRSRV_DEVICE_PHYS_HEAP eDevPhysHeap;
 	PVRSRV_ERROR eError;
 
-	if (psDeviceNode->eDevState != PVRSRV_DEVICE_STATE_INIT)
+	eError = PhysHeapAcquire(ui32PhysHeapID, &psPhysHeapTmp);
+	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Device already initialised", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterExtDevice: Failed to acquire physical memory heap"));
+		goto e0;
+	}
+	if (PhysHeapGetType(psPhysHeapTmp) == PHYS_HEAP_TYPE_LMA)
+	{
+		eDevPhysHeap = PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL;
+	}
+	else
+	{
+		eDevPhysHeap = PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL;
+	}
+	psDeviceNode->apsPhysHeap[eDevPhysHeap] = psPhysHeapTmp;
+
+	/* allocate a unique device id */
+	eError = AllocateDeviceID(psPVRSRVData, &psDeviceNode->sDevId.ui32DeviceIndex);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVRegisterExtDevice: Failed to allocate Device ID"));
+		goto e1;
+	}
+
+	if (pui32DeviceIndex)
+	{
+		*pui32DeviceIndex = psDeviceNode->sDevId.ui32DeviceIndex;
+	}
+
+	List_PVRSRV_DEVICE_NODE_Insert(&psPVRSRVData->psDeviceNodeList, psDeviceNode);
+
+	return PVRSRV_OK;
+e1:
+	PhysHeapRelease(psDeviceNode->apsPhysHeap[eDevPhysHeap]);
+e0:
+	return eError;
+}
+
+void IMG_CALLCONV PVRSRVUnregisterExtDevice(PVRSRV_DEVICE_NODE *psDeviceNode)
+{
+	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
+	PVRSRV_DEVICE_PHYS_HEAP eDevPhysHeap;
+
+	List_PVRSRV_DEVICE_NODE_Remove(psDeviceNode);
+	(void)FreeDeviceID(psPVRSRVData, psDeviceNode->sDevId.ui32DeviceIndex);
+	for (eDevPhysHeap = 0; eDevPhysHeap < PVRSRV_DEVICE_PHYS_HEAP_LAST; eDevPhysHeap++)
+	{
+		if (psDeviceNode->apsPhysHeap[eDevPhysHeap])
+		{
+			PhysHeapRelease(psDeviceNode->apsPhysHeap[eDevPhysHeap]);
+		}
+	}
+}
+
+static PVRSRV_ERROR PVRSRVFinaliseSystem_SetPowerState_AnyCb(PVRSRV_DEVICE_NODE *psDeviceNode, va_list va)
+{
+	PVRSRV_ERROR eError;
+	PVRSRV_DEV_POWER_STATE ePowState;
+
+	ePowState = va_arg(va, PVRSRV_DEV_POWER_STATE);
+
+	eError = PVRSRVSetDevicePowerStateKM(psDeviceNode->sDevId.ui32DeviceIndex,
+										 ePowState,
+										 IMG_TRUE);
+
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed PVRSRVSetDevicePowerStateKM call (%s, device index: %d)", 
+						PVRSRVGetErrorStringKM(eError),
+						psDeviceNode->sDevId.ui32DeviceIndex));
+	}
+
+	return eError;
+}
+
+/*wraps the PVRSRVDevInitCompatCheck call and prints a debugging message if failed*/
+static PVRSRV_ERROR PVRSRVFinaliseSystem_CompatCheck_Any_va(PVRSRV_DEVICE_NODE *psDeviceNode, va_list va)
+{
+	PVRSRV_ERROR eError;
+	IMG_UINT32 *pui32ClientBuildOptions;
+
+	pui32ClientBuildOptions = va_arg(va, IMG_UINT32*);
+
+	eError = PVRSRVDevInitCompatCheck(psDeviceNode, *pui32ClientBuildOptions);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed PVRSRVDevInitCompatCheck call (device index: %d)", psDeviceNode->sDevId.ui32DeviceIndex));
+	}
+	return eError;
+}
+
+static PVRSRV_ERROR PVRSRVFinaliseSystem_SetIdleState_AnyCb(PVRSRV_DEVICE_NODE *psDeviceNode, va_list va)
+{
+	PVRSRV_ERROR eError;
+	PVRSRV_DEV_POWER_STATE ePowState;
+
+	ePowState = va_arg(va, PVRSRV_DEV_POWER_STATE);
+
+	eError = PVRSRVDeviceIdleRequestKM(IMG_FALSE, psDeviceNode->sDevId.ui32DeviceIndex, &PVRSRVDeviceIsDefaultStateOFF, IMG_TRUE);
+	if ((eError != PVRSRV_OK) && (eError != PVRSRV_ERROR_DEVICE_IDLE_REQUEST_DENIED))
+	{
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed PVRSRVDeviceIdleRequestKM call (%s, device index: %d)",
+						PVRSRVGetErrorStringKM(eError),
+						psDeviceNode->sDevId.ui32DeviceIndex));
+	}
+
+	return eError;
+}
+/*!
+******************************************************************************
+
+ @Function	PVRSRVFinaliseSystem
+
+ @Description
+
+ Final part of system initialisation.
+
+ @Input	   ui32DevIndex : Index to the required device
+
+ @Return   PVRSRV_ERROR  :
+
+******************************************************************************/
+PVRSRV_ERROR IMG_CALLCONV PVRSRVFinaliseSystem(IMG_BOOL bInitSuccessful, IMG_UINT32 ui32ClientBuildOptions)
+{
+	PVRSRV_DATA			*psPVRSRVData = PVRSRVGetPVRSRVData();
+	PVRSRV_ERROR		eError;
+	IMG_UINT32			i;
+	PVRSRV_DEVICE_NODE *psRGXDeviceNode = NULL;
+	PVR_DPF((PVR_DBG_MESSAGE, "PVRSRVFinaliseSystem"));
+
+	if (bInitSuccessful)
+	{
+		for (i=0;i<psPVRSRVData->ui32RegisteredDevices;i++)
+		{
+			PVRSRV_DEVICE_NODE *psDeviceNode = psPVRSRVData->apsRegisteredDevNodes[i];
+			if(psDeviceNode->sDevId.eDeviceType == PVRSRV_DEVICE_TYPE_RGX)
+			{
+				psRGXDeviceNode = psDeviceNode; 
+			}
+#if defined(SUPPORT_KERNEL_SRVINIT)
+			/* take the PMR lock, because there isn't a bridge call to take it */
+			PMRLock();
+#endif
+			eError = SyncPrimContextCreate(psDeviceNode,
+								  &psDeviceNode->hSyncPrimContext);
+			if (eError != PVRSRV_OK)
+			{
+				PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed to create SyncPrimContext (%u)", eError));
+#if defined(SUPPORT_KERNEL_SRVINIT)
+				PMRUnlock();
+#endif
+				return eError;
+			}
+
+			/* Allocate general purpose sync primitive */
+			eError = SyncPrimAlloc(psDeviceNode->hSyncPrimContext, &psDeviceNode->psSyncPrim, "pvrsrv dev general");
+			if (eError != PVRSRV_OK)
+			{
+				PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed to allocate sync primitive with error (%u)", eError));
+#if defined(SUPPORT_KERNEL_SRVINIT)
+				PMRUnlock();
+#endif
+				return eError;
+			}
+#if defined(SUPPORT_KERNEL_SRVINIT)
+			PMRUnlock();
+#endif
+		}
+
+		eError = PVRSRVPowerLock();
+		if (eError != PVRSRV_OK)
+		{
+			PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem_SetPowerState_AnyCb: Failed to acquire power lock"));
+			return eError;
+		}
+
+		/* Always ensure a single power on command appears in the pdump.
+		 * This should be the only power related call outside of PDUMPPOWCMDSTART/END.
+		 * Place all devices into ON power state. */
+		eError = List_PVRSRV_DEVICE_NODE_PVRSRV_ERROR_Any_va(psPVRSRVData->psDeviceNodeList,
+														&PVRSRVFinaliseSystem_SetPowerState_AnyCb,
+														PVRSRV_DEV_POWER_STATE_ON);
+		if (eError != PVRSRV_OK)
+		{
+			PVRSRVPowerUnlock();
+			return eError;
+		}
+
+		/* Verify firmware compatibility for devices */
+		eError = List_PVRSRV_DEVICE_NODE_PVRSRV_ERROR_Any_va(psPVRSRVData->psDeviceNodeList,
+													&PVRSRVFinaliseSystem_CompatCheck_Any_va,
+													&ui32ClientBuildOptions);
+		if (eError != PVRSRV_OK)
+		{
+			PVRSRVPowerUnlock();
+			PVRSRVDebugRequest(DEBUG_REQUEST_VERBOSITY_MAX, NULL, NULL);
+			return eError;
+		}
+
+		PDUMPPOWCMDSTART();
+		LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
+		{ /* Force idle all devices whose default power state is off*/
+			eError = List_PVRSRV_DEVICE_NODE_PVRSRV_ERROR_Any_va(psPVRSRVData->psDeviceNodeList,
+													&PVRSRVFinaliseSystem_SetIdleState_AnyCb,
+													&ui32ClientBuildOptions);
+
+			if (eError == PVRSRV_OK)
+			{
+				break;
+			}
+			else if (eError == PVRSRV_ERROR_DEVICE_IDLE_REQUEST_DENIED)
+			{
+				PVRSRV_ERROR		eError2;
+
+				PVRSRVPowerUnlock();
+				OSWaitus(MAX_HW_TIME_US/WAIT_TRY_COUNT);
+				eError2 = PVRSRVPowerLock();
+
+				if (eError2 != PVRSRV_OK)
+				{
+					PVR_DPF((PVR_DBG_ERROR,"PVRSRVFinaliseSystem: Failed to acquire power lock"));
+					return eError2;
+				}
+			}
+			else
+			{
+				PVRSRVPowerUnlock();
+				return eError;
+			}
+
+		} END_LOOP_UNTIL_TIMEOUT();
+
+		/* Place all devices into their default power state. */
+		eError = List_PVRSRV_DEVICE_NODE_PVRSRV_ERROR_Any_va(psPVRSRVData->psDeviceNodeList,
+														&PVRSRVFinaliseSystem_SetPowerState_AnyCb,
+														PVRSRV_DEV_POWER_STATE_DEFAULT);
+		PDUMPPOWCMDEND();
+
+		if (eError != PVRSRV_OK)
+		{
+			PVRSRVPowerUnlock();
+			return eError;
+		}
+
+		PVRSRVPowerUnlock();
+
+/* If PDUMP is enabled and RGX device is supported, then initialise the performance counters that can be further modified in PDUMP.
+   Then, before ending the init phase of the pdump, drain the commands put in the kCCB during the init phase */
+#if defined(SUPPORT_RGX) && defined(PDUMP)
+		if(psRGXDeviceNode)
+		{
+			PVRSRV_RGXDEV_INFO 	*psDevInfo = (PVRSRV_RGXDEV_INFO *) (psRGXDeviceNode->pvDevice);
+
+			eError = PVRSRVRGXInitHWPerfCountersKM(psRGXDeviceNode);
+			if (eError != PVRSRV_OK)
+			{
+				PVR_DPF((PVR_DBG_ERROR, "PVSRVFinaliseSystem: failed to init hwperf counters(%d)", eError));
+				return eError;
+			}
+
+			eError = RGXPdumpDrainKCCB(psDevInfo, psDevInfo->psKernelCCBCtl->ui32WriteOffset);
+			if (eError != PVRSRV_OK)
+			{
+				PVR_DPF((PVR_DBG_ERROR, "PVSRVFinaliseSystem: problem draining kCCB (%d)", eError));
+				return eError;
+			}
+		}
+#endif
+	}
+
+	/* Give PDump control a chance to end the init phase, depends on OS */
+	PDumpStopInitPhase(IMG_FALSE, IMG_TRUE);
+
+	return PVRSRV_OK;
+}
+
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode,IMG_UINT32 ui32ClientBuildOptions)
+{
+	/* Only check devices which specify a compatibility check callback */
+	if (psDeviceNode->pfnInitDeviceCompatCheck)
+		return psDeviceNode->pfnInitDeviceCompatCheck(psDeviceNode, ui32ClientBuildOptions);
+	else
+		return PVRSRV_OK;
+}
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVAcquireDeviceDataKM
+
+ @Description
+
+ Matchs a device given a device type and a device index.
+
+ @input	psDeviceNode :The device node to be matched.
+
+ @Input	   va : Variable argument list with:
+			eDeviceType : Required device type. If type is unknown use ui32DevIndex
+						 to locate device data
+
+ 			ui32DevIndex : Index to the required device obtained from the
+						PVRSRVEnumerateDevice function
+
+ @Return   PVRSRV_ERROR  :
+
+******************************************************************************/
+static void * PVRSRVAcquireDeviceDataKM_Match_AnyVaCb(PVRSRV_DEVICE_NODE *psDeviceNode, va_list va)
+{
+	PVRSRV_DEVICE_TYPE eDeviceType;
+	IMG_UINT32 ui32DevIndex;
+
+	eDeviceType = va_arg(va, PVRSRV_DEVICE_TYPE);
+	ui32DevIndex = va_arg(va, IMG_UINT32);
+
+	if ((eDeviceType != PVRSRV_DEVICE_TYPE_UNKNOWN &&
+		psDeviceNode->sDevId.eDeviceType == eDeviceType) ||
+		(eDeviceType == PVRSRV_DEVICE_TYPE_UNKNOWN &&
+		 psDeviceNode->sDevId.ui32DeviceIndex == ui32DevIndex))
+	{
+		return psDeviceNode;
+	}
+	else
+	{
+		return NULL;
+	}
+}
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVAcquireDeviceDataKM
+
+ @Description
+
+ Returns device information
+
+ @Input	   ui32DevIndex : Index to the required device obtained from the
+						PVRSRVEnumerateDevice function
+
+ @Input	   eDeviceType : Required device type. If type is unknown use ui32DevIndex
+						 to locate device data
+
+ @Output  *phDevCookie : Dev Cookie
+
+
+ @Return   PVRSRV_ERROR  :
+
+******************************************************************************/
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVAcquireDeviceDataKM (IMG_UINT32			ui32DevIndex,
+													 PVRSRV_DEVICE_TYPE	eDeviceType,
+													 IMG_HANDLE			*phDevCookie)
+{
+	PVRSRV_DATA			*psPVRSRVData = PVRSRVGetPVRSRVData();
+	PVRSRV_DEVICE_NODE	*psDeviceNode;
+
+	PVR_DPF((PVR_DBG_MESSAGE, "PVRSRVAcquireDeviceDataKM"));
+
+	/* Find device in the list */
+	psDeviceNode = List_PVRSRV_DEVICE_NODE_Any_va(psPVRSRVData->psDeviceNodeList,
+												&PVRSRVAcquireDeviceDataKM_Match_AnyVaCb,
+												eDeviceType,
+												ui32DevIndex);
+
+
+	if (!psDeviceNode)
+	{
+		/* device can't be found in the list so it isn't in the system */
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVAcquireDeviceDataKM: requested device is not present"));
 		return PVRSRV_ERROR_INIT_FAILURE;
 	}
 
-#if defined(SUPPORT_RGX)
-	eError = RGXInit(psDeviceNode);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Initialisation of Rogue device failed (%s)",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
-		goto Exit;
-	}
-#endif
+/*FoundDevice:*/
 
-	bInitSuccesful = IMG_TRUE;
-
-#if defined(SUPPORT_RGX)
-Exit:
-#endif
-	eError = PVRSRVDeviceFinalise(psDeviceNode, bInitSuccesful);
-	if (eError != PVRSRV_OK)
+	/* return the dev cookie? */
+	if (phDevCookie)
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Services failed to finalise the device (%s)",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
+		*phDevCookie = (IMG_HANDLE)psDeviceNode;
 	}
 
-
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_DisableClockGating,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_DISABLE_CLKGATING_EN));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_DisableDMOverlap,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_DISABLE_DM_OVERLAP));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_AssertOnHWRTrigger,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_ASSERT_ON_HWR_TRIGGER));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_AssertOutOfMemory,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_ASSERT_ON_OUTOFMEMORY));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_CheckMList,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_CHECK_MLIST_EN));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_EnableHWR,
-	                                  _ReadStateFlag, _SetStateFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXFWIF_INICFG_HWR_EN));
-
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_DisableFEDLogging,
-	                                  _ReadDeviceFlag, _SetDeviceFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXKMIF_DEVICE_STATE_DISABLE_DW_LOGGING_EN));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_ZeroFreelist,
-	                                  _ReadDeviceFlag, _SetDeviceFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXKMIF_DEVICE_STATE_ZERO_FREELIST));
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_DustRequestInject,
-	                                  _ReadDeviceFlag, _SetDeviceFlag,
-	                                  psDeviceNode,
-	                                  (void*)((uintptr_t)RGXKMIF_DEVICE_STATE_DUST_REQUEST_INJECT_EN));
-
-	PVRSRVAppHintRegisterHandlersBOOL(APPHINT_ID_DisablePDumpPanic,
-	                                  RGXQueryPdumpPanicEnable, RGXSetPdumpPanicEnable,
-	                                  psDeviceNode,
-	                                  NULL);
-	return eError;
+	return PVRSRV_OK;
 }
-#endif /* defined(SUPPORT_KERNEL_SRVINIT) */
 
-PVRSRV_ERROR IMG_CALLCONV PVRSRVDeviceDestroy(PVRSRV_DEVICE_NODE *psDeviceNode)
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVReleaseDeviceDataKM (IMG_HANDLE hDevCookie)
+{
+	PVR_UNREFERENCED_PARAMETER(hDevCookie);
+
+	/* 
+	  Empty release body as the lifetime of this resource accessed by 
+	  PVRSRVAcquireDeviceDataKM is linked to driver lifetime, not API allocation.
+	  This is one reason why this type crosses the bridge with a shared handle.
+	  Thus no server release action is required, just bridge action to ensure
+	  associated handle is freed.
+    */ 
+	return PVRSRV_OK;
+}
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVUnregisterDevice
+
+ @Description
+
+ This De-inits device
+
+ @Input	   ui32DevIndex : Index to the required device
+
+ @Return   PVRSRV_ERROR  :
+
+******************************************************************************/
+static PVRSRV_ERROR IMG_CALLCONV PVRSRVUnregisterDevice(PVRSRV_DEVICE_NODE *psDeviceNode)
 {
 	PVRSRV_DATA				*psPVRSRVData = PVRSRVGetPVRSRVData();
 	PVRSRV_DEVICE_PHYS_HEAP ePhysHeapIdx;
-	IMG_UINT32 				ui32RegionIdx;
-	IMG_UINT32				i;
 	PVRSRV_ERROR			eError;
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-	IMG_BOOL				bForceUnload = IMG_FALSE;
 
-	if (PVRSRVGetPVRSRVData()->eServicesState != PVRSRV_SERVICES_STATE_OK)
-	{
-		bForceUnload = IMG_TRUE;
-	}
-#endif
-
-	psPVRSRVData->ui32RegisteredDevices--;
-
-	psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_DEINIT;
-
-#if defined(PVR_TESTING_UTILS)
-	TUtilsDeinit(psDeviceNode);
-#endif
-
-	/* Counter part to what gets done in PVRSRVDeviceFinalise */
-	if (psDeviceNode->hSyncPrimContext)
-	{
-		if (psDeviceNode->psSyncPrim)
-		{
-			/* Free general pupose sync primitive */
-			SyncPrimFree(psDeviceNode->psSyncPrim);
-			psDeviceNode->psSyncPrim = NULL;
-		}
-
-		if (psDeviceNode->psMMUCacheSyncPrim)
-		{
-			PVRSRV_CLIENT_SYNC_PRIM *psSync = psDeviceNode->psMMUCacheSyncPrim;
-
-			/* Important to set the device node pointer to NULL
-			 * before we free the sync-prim to make sure we don't
-			 * defer the freeing of the sync-prim's page tables itself.
-			 * The sync is used to defer the MMU page table
-			 * freeing. */
-			psDeviceNode->psMMUCacheSyncPrim = NULL;
-
-			/* Free general pupose sync primitive */
-			SyncPrimFree(psSync);
-
-		}
-
-		SyncPrimContextDestroy(psDeviceNode->hSyncPrimContext);
-		psDeviceNode->hSyncPrimContext = NULL;
-	}
-
-	eError = PVRSRVPowerLock(psDeviceNode);
+	eError = PVRSRVPowerLock();
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to acquire power lock", __func__));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVUnregisterDevice: Failed to acquire power lock"));
 		return eError;
 	}
 
 	LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
 	{
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-		if (bForceUnload)
-		{
-			/*
-			 * Firmware probably not responding but we still want to unload the
-			 * driver.
-			 */
-			break;
-		}
-#endif
-		/* Force idle device */
-		eError = PVRSRVDeviceIdleRequestKM(psDeviceNode, NULL, IMG_TRUE);
+		/* Force idle device*/
+		eError = PVRSRVDeviceIdleRequestKM(IMG_FALSE,
+							psDeviceNode->sDevId.ui32DeviceIndex,
+							NULL,
+							IMG_TRUE);
+
 		if (eError == PVRSRV_OK)
 		{
 			break;
 		}
 		else if (eError == PVRSRV_ERROR_DEVICE_IDLE_REQUEST_DENIED)
 		{
-			PVRSRV_ERROR eError2;
+			PVRSRV_ERROR	eError2;
 
-			PVRSRVPowerUnlock(psDeviceNode);
-
+			PVRSRVPowerUnlock();
 			OSWaitus(MAX_HW_TIME_US/WAIT_TRY_COUNT);
-
-			eError2 = PVRSRVPowerLock(psDeviceNode);
+			eError2 = PVRSRVPowerLock();
 			if (eError2 != PVRSRV_OK)
 			{
-				PVR_DPF((PVR_DBG_ERROR, "%s: Failed to acquire power lock",
-						 __func__));
+				PVR_DPF((PVR_DBG_ERROR,"PVRSRVUnregisterDevice: Failed to acquire power lock"));
 				return eError2;
 			}
 		}
 		else
 		{
-			PVRSRVPowerUnlock(psDeviceNode);
+			PVRSRVPowerUnlock();
 			return eError;
 		}
 	} END_LOOP_UNTIL_TIMEOUT();
-
-	/* Power down the device if necessary */
-	eError = PVRSRVSetDevicePowerStateKM(psDeviceNode,
+	/*
+		Power down the device if necessary.
+	 */
+	eError = PVRSRVSetDevicePowerStateKM(psDeviceNode->sDevId.ui32DeviceIndex,
 										 PVRSRV_DEV_POWER_STATE_OFF,
 										 IMG_TRUE);
-	PVRSRVPowerUnlock(psDeviceNode);
+
+	PVRSRVPowerUnlock();
 
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "%s: Failed PVRSRVSetDevicePowerStateKM call (%s). Dump debug.",
-				 __func__, PVRSRVGetErrorStringKM(eError)));
+		PVR_DPF((PVR_DBG_ERROR,"PVRSRVUnregisterDevice: Failed PVRSRVSetDevicePowerStateKM call (%s). Dump debug.", PVRSRVGetErrorStringKM(eError)));
 
-		PVRSRVDebugRequest(psDeviceNode, DEBUG_REQUEST_VERBOSITY_MAX, NULL, NULL);
+		PVRSRVDebugRequest(DEBUG_REQUEST_VERBOSITY_MAX, NULL, NULL);
 
-		/*
-		 * If the driver is okay then return the error, otherwise we can ignore
-		 * this error.
-		 */
+		/* If the driver is okay then return the error, otherwise we can ignore this error. */
 		if (PVRSRVGetPVRSRVData()->eServicesState == PVRSRV_SERVICES_STATE_OK)
 		{
 			return eError;
 		}
 		else
 		{
-			PVR_DPF((PVR_DBG_MESSAGE,
-					 "%s: Will continue to unregister as driver status is not OK",
-					 __func__));
+			PVR_DPF((PVR_DBG_MESSAGE,"PVRSRVUnregisterDevice: Will continue to unregister as driver status is not OK"));
 		}
 	}
 
-#if defined(SUPPORT_RGX)
-	DevDeInitRGX(psDeviceNode);
-#endif
-
-	HTBDeviceDestroy(psDeviceNode);
-
-	if (psDeviceNode->hDbgReqNotify)
-	{
-		PVRSRVUnregisterDbgRequestNotify(psDeviceNode->hDbgReqNotify);
-	}
+	/*
+		De-init the device.
+	*/
+	sUnregisterDevice[psDeviceNode->sDevId.eDeviceType](psDeviceNode);
 
 #if defined(SUPPORT_PVRSRV_GPUVIRT)
-	/* Perform virtualization device destruction */
-	PVRSRVVzDeviceDestroy(psDeviceNode);
+	/* Perform additional virtualization device deregistration if any */
+	PVRSRVVirtUnregisterDevice(psDeviceNode);
 #endif
 
-	ServerSyncDeinit(psDeviceNode);
-
-	/* Remove RAs and RA names for local card memory */
-	for (ui32RegionIdx = 0;
-		 ui32RegionIdx < psDeviceNode->ui32NumOfLocalMemArenas;
-		 ui32RegionIdx++)
+	/* Remove RA for local card memory */
+	if (psDeviceNode->psLocalDevMemArena)
 	{
-		if (psDeviceNode->apsLocalDevMemArenas[ui32RegionIdx])
-		{
-			RA_Delete(psDeviceNode->apsLocalDevMemArenas[ui32RegionIdx]);
-		}
-
-		if (psDeviceNode->apszRANames[ui32RegionIdx])
-		{
-			OSFreeMem(psDeviceNode->apszRANames[ui32RegionIdx]);
-		}
+		RA_Delete(psDeviceNode->psLocalDevMemArena);
 	}
 
-	OSFreeMem(psDeviceNode->apsLocalDevMemArenas);
-	OSFreeMem(psDeviceNode->apszRANames);
-
+	/* remove node from list */
 	List_PVRSRV_DEVICE_NODE_Remove(psDeviceNode);
 
-	for (ePhysHeapIdx = 0;
-		 ePhysHeapIdx < IMG_ARR_NUM_ELEMS(psDeviceNode->apsPhysHeap);
-		 ePhysHeapIdx++)
+	/* deallocate id and memory */
+	(void)FreeDeviceID(psPVRSRVData, psDeviceNode->sDevId.ui32DeviceIndex);
+
+	for (ePhysHeapIdx = 0; ePhysHeapIdx < PVRSRV_DEVICE_PHYS_HEAP_LAST; ePhysHeapIdx++)
 	{
 		if (psDeviceNode->apsPhysHeap[ePhysHeapIdx])
 		{
@@ -1775,409 +2254,12 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVDeviceDestroy(PVRSRV_DEVICE_NODE *psDeviceNode)
 		}
 	}
 
-	for (i = 0; i < psDeviceNode->ui32RegisteredPhysHeaps; i++)
-	{
-		PhysHeapUnregister(psDeviceNode->papsRegisteredPhysHeaps[i]);
-	}
-
-	OSFreeMem(psDeviceNode->papsRegisteredPhysHeaps);
-
-#if defined(PVR_DVFS)
-	DeinitDVFS(psDeviceNode);
-#endif
-
-	OSLockDestroy(psDeviceNode->hPowerLock);
-
-	PVRSRVUnregisterDbgTable(psDeviceNode);
-
-	psDeviceNode->psDevConfig->psDevNode = NULL;
-	SysDevDeInit(psDeviceNode->psDevConfig);
-
-	/*
-	 * Clean up Transport Layer resources that remain. Done after RGX node clean
-	 * up as HWPerf stream is destroyed during this.
-	 */
-	TLDeInit(psDeviceNode);
-
 	OSFreeMem(psDeviceNode);
+	/*not nulling pointer, out of scope*/
 
-	return PVRSRV_OK;
+	return (PVRSRV_OK);
 }
 
-PVRSRV_ERROR LMA_PhyContigPagesAlloc(PVRSRV_DEVICE_NODE *psDevNode, size_t uiSize,
-							PG_HANDLE *psMemHandle, IMG_DEV_PHYADDR *psDevPAddr)
-{
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-	IMG_UINT32  ui32OSid = 0;
-#endif
-	RA_BASE_T uiCardAddr;
-	RA_LENGTH_T uiActualSize;
-	PVRSRV_ERROR eError;
-
-	RA_ARENA *pArena=psDevNode->apsLocalDevMemArenas[0];
-	IMG_UINT32 ui32Log2NumPages = 0;
-
-	PVR_ASSERT(uiSize != 0);
-	ui32Log2NumPages = OSGetOrder(uiSize);
-	uiSize = (1 << ui32Log2NumPages) * OSGetPageSize();
-
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-{
-	IMG_UINT32  ui32OSidReg = 0;
-	IMG_BOOL    bOSidAxiProt;
-
-	IMG_PID     pId = OSGetCurrentClientProcessIDKM();
-
-	RetrieveOSidsfromPidList(pId, &ui32OSid, &ui32OSidReg, &bOSidAxiProt);
-
-	pArena = psDevNode->psOSidSubArena[ui32OSid];
-}
-#endif
-
-	eError = RA_Alloc(pArena,
-	                  uiSize,
-	                  RA_NO_IMPORT_MULTIPLIER,
-	                  0,                         /* No flags */
-	                  OSGetPageSize(),
-	                  "LMA_PhyContigPagesAlloc",
-	                  &uiCardAddr,
-	                  &uiActualSize,
-	                  NULL);                     /* No private handle */
-
-	PVR_ASSERT(uiSize == uiActualSize);
-
-#if defined(SUPPORT_GPUVIRT_VALIDATION)
-{
-	PVR_DPF((PVR_DBG_MESSAGE,"(GPU Virtualization Validation): LMA_PhyContigPagesAlloc: Address:%llu, size:%llu", uiCardAddr,uiActualSize));
-}
-#endif
-
-	psMemHandle->u.ui64Handle = uiCardAddr;
-	psDevPAddr->uiAddr = (IMG_UINT64) uiCardAddr;
-
-	if (PVRSRV_OK == eError)
-	{
-#if defined(PVRSRV_ENABLE_PROCESS_STATS)
-#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
-	    PVRSRVStatsIncrMemAllocStatAndTrack(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA,
-	                                        uiSize,
-	                                        (IMG_UINT64)(uintptr_t) psMemHandle);
-#else
-		IMG_CPU_PHYADDR sCpuPAddr;
-		sCpuPAddr.uiAddr = psDevPAddr->uiAddr;
-
-		PVRSRVStatsAddMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA,
-		                             NULL,
-		                             sCpuPAddr,
-		                             uiSize,
-		                             NULL);
-#endif
-#endif
-		psMemHandle->ui32Order = ui32Log2NumPages;
-	}
-
-	return eError;
-}
-
-void LMA_PhyContigPagesFree(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle)
-{
-	RA_BASE_T uiCardAddr = (RA_BASE_T) psMemHandle->u.ui64Handle;
-
-#if defined(PVRSRV_ENABLE_PROCESS_STATS)
-#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
-	PVRSRVStatsDecrMemAllocStatAndUntrack(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA,
-	                                      (IMG_UINT64)(uintptr_t) psMemHandle);
-#else
-		PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_ALLOC_PAGES_PT_LMA, (IMG_UINT64)uiCardAddr);
-#endif
-#endif
-	RA_Free(psDevNode->apsLocalDevMemArenas[0], uiCardAddr);
-	psMemHandle->ui32Order = 0;
-}
-
-PVRSRV_ERROR LMA_PhyContigPagesMap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle,
-							size_t uiSize, IMG_DEV_PHYADDR *psDevPAddr,
-							void **pvPtr)
-{
-	IMG_CPU_PHYADDR sCpuPAddr;
-	IMG_UINT32 ui32NumPages = (1 << psMemHandle->ui32Order);
-	PVR_UNREFERENCED_PARAMETER(psMemHandle);
-	PVR_UNREFERENCED_PARAMETER(uiSize);
-
-	PhysHeapDevPAddrToCpuPAddr(psDevNode->apsPhysHeap[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL], 1, &sCpuPAddr, psDevPAddr);
-	*pvPtr = OSMapPhysToLin(sCpuPAddr,
-							ui32NumPages * OSGetPageSize(),
-							PVRSRV_MEMALLOCFLAG_CPU_WRITE_COMBINE);
-	if (*pvPtr == NULL)
-	{
-		return PVRSRV_ERROR_OUT_OF_MEMORY;
-	}
-	else
-	{
-#if defined(PVRSRV_ENABLE_PROCESS_STATS)
-#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
-		PVRSRVStatsIncrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, ui32NumPages * OSGetPageSize());
-#else
-		{
-			PVRSRVStatsAddMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA,
-										 *pvPtr,
-										 sCpuPAddr,
-										 ui32NumPages * OSGetPageSize(),
-										 NULL);
-		}
-#endif
-#endif
-		return PVRSRV_OK;
-	}
-}
-
-void LMA_PhyContigPagesUnmap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle,
-						void *pvPtr)
-{
-	IMG_UINT32 ui32NumPages = (1 << psMemHandle->ui32Order);
-	PVR_UNREFERENCED_PARAMETER(psMemHandle);
-	PVR_UNREFERENCED_PARAMETER(psDevNode);
-
-#if defined(PVRSRV_ENABLE_PROCESS_STATS)
-#if !defined(PVRSRV_ENABLE_MEMORY_STATS)
-		PVRSRVStatsDecrMemAllocStat(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, ui32NumPages * OSGetPageSize());
-#else
-	PVRSRVStatsRemoveMemAllocRecord(PVRSRV_MEM_ALLOC_TYPE_IOREMAP_PT_LMA, (IMG_UINT64)(uintptr_t)pvPtr);
-#endif
-#endif
-
-	OSUnMapPhysToLin(pvPtr, ui32NumPages * OSGetPageSize(),
-					 PVRSRV_MEMALLOCFLAG_CPU_UNCACHED);
-}
-
-PVRSRV_ERROR LMA_PhyContigPagesClean(PVRSRV_DEVICE_NODE *psDevNode,
-                                     PG_HANDLE *psMemHandle,
-                                     IMG_UINT32 uiOffset,
-                                     IMG_UINT32 uiLength)
-{
-	/* No need to flush because we map as uncached */
-	PVR_UNREFERENCED_PARAMETER(psDevNode);
-	PVR_UNREFERENCED_PARAMETER(psMemHandle);
-	PVR_UNREFERENCED_PARAMETER(uiOffset);
-	PVR_UNREFERENCED_PARAMETER(uiLength);
-
-	return PVRSRV_OK;
-}
-
-/**************************************************************************/ /*!
-@Function     PVRSRVDeviceFinalise
-@Description  Performs the final parts of device initialisation.
-@Input        psDeviceNode            Device node of the device to finish
-                                      initialising
-@Input        bInitSuccessful         Whether or not device specific
-                                      initialisation was successful
-@Return       PVRSRV_ERROR     PVRSRV_OK on success and an error otherwise
-*/ /***************************************************************************/
-PVRSRV_ERROR IMG_CALLCONV PVRSRVDeviceFinalise(PVRSRV_DEVICE_NODE *psDeviceNode,
-											   IMG_BOOL bInitSuccessful)
-{
-	PVRSRV_ERROR eError;
-
-	if (bInitSuccessful)
-	{
-		eError = SyncPrimContextCreate(psDeviceNode,
-									   &psDeviceNode->hSyncPrimContext);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to create sync prim context (%s)",
-					 __func__, PVRSRVGetErrorStringKM(eError)));
-			goto ErrorExit;
-		}
-
-		/* Allocate general purpose sync primitive */
-		eError = SyncPrimAlloc(psDeviceNode->hSyncPrimContext,
-							   &psDeviceNode->psSyncPrim,
-							   "pvrsrv dev general");
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to allocate sync primitive with error (%s)",
-					 __func__, PVRSRVGetErrorStringKM(eError)));
-			goto ErrorExit;
-		}
-
-		/* Allocate MMU cache invalidate sync */
-		eError = SyncPrimAlloc(psDeviceNode->hSyncPrimContext,
-							   &psDeviceNode->psMMUCacheSyncPrim,
-							   "pvrsrv dev MMU cache");
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to allocate sync primitive with error (%s)",
-					 __func__, PVRSRVGetErrorStringKM(eError)));
-			goto ErrorExit;
-		}
-
-		/* Next update value will be 1 since sync prim starts with 0 */
-		psDeviceNode->ui32NextMMUInvalidateUpdate = 1;
-
-		eError = PVRSRVPowerLock(psDeviceNode);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: Failed to acquire power lock (%s)",
-					 __func__, PVRSRVGetErrorStringKM(eError)));
-			goto ErrorExit;
-		}
-
-		/*
-		 * Always ensure a single power on command appears in the pdump. This
-		 * should be the only power related call outside of PDUMPPOWCMDSTART
-		 * and PDUMPPOWCMDEND.
-		 */
-		eError = PVRSRVSetDevicePowerStateKM(psDeviceNode,
-											 PVRSRV_DEV_POWER_STATE_ON, IMG_TRUE);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to set device %p power state to 'on' (%s)",
-					 __func__, psDeviceNode, PVRSRVGetErrorStringKM(eError)));
-			PVRSRVPowerUnlock(psDeviceNode);
-			goto ErrorExit;
-		}
-
-		/* Verify firmware compatibility for device */
-		eError = PVRSRVDevInitCompatCheck(psDeviceNode);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed compatibility check for device %p (%s)",
-					 __func__, psDeviceNode, PVRSRVGetErrorStringKM(eError)));
-			PVRSRVPowerUnlock(psDeviceNode);
-			PVRSRVDebugRequest(psDeviceNode, DEBUG_REQUEST_VERBOSITY_MAX, NULL, NULL);
-			goto ErrorExit;
-		}
-
-		PDUMPPOWCMDSTART();
-		LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
-		{
-			/* Force the device to idle if its default power state is off */
-			eError = PVRSRVDeviceIdleRequestKM(psDeviceNode,
-											   &PVRSRVDeviceIsDefaultStateOFF,
-											   IMG_TRUE);
-			if (eError == PVRSRV_OK)
-			{
-				break;
-			}
-			else if (eError == PVRSRV_ERROR_DEVICE_IDLE_REQUEST_DENIED)
-			{
-				PVRSRVPowerUnlock(psDeviceNode);
-				OSWaitus(MAX_HW_TIME_US/WAIT_TRY_COUNT);
-
-				eError = PVRSRVPowerLock(psDeviceNode);
-				if (eError != PVRSRV_OK)
-				{
-					PVR_DPF((PVR_DBG_ERROR,
-							 "%s: Failed to acquire power lock (%s)",
-							 __func__, PVRSRVGetErrorStringKM(eError)));
-					goto ErrorExit;
-				}
-			}
-			else
-			{
-				PVR_DPF((PVR_DBG_ERROR, "%s: Failed to idle device %p (%s)",
-						 __func__, psDeviceNode,
-						 PVRSRVGetErrorStringKM(eError)));
-				PVRSRVPowerUnlock(psDeviceNode);
-				goto ErrorExit;
-			}
-		} END_LOOP_UNTIL_TIMEOUT();
-
-		/* Place device into its default power state. */
-		eError = PVRSRVSetDevicePowerStateKM(psDeviceNode,
-											 PVRSRV_DEV_POWER_STATE_DEFAULT,
-											 IMG_TRUE);
-		PDUMPPOWCMDEND();
-
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					 "%s: Failed to set device %p into its default power state (%s)",
-					 __func__, psDeviceNode, PVRSRVGetErrorStringKM(eError)));
-
-			PVRSRVPowerUnlock(psDeviceNode);
-			goto ErrorExit;
-		}
-
-		PVRSRVPowerUnlock(psDeviceNode);
-
-		/*
-		 * If PDUMP is enabled and RGX device is supported, then initialise the
-		 * performance counters that can be further modified in PDUMP. Then,
-		 * before ending the init phase of the pdump, drain the commands put in
-		 * the kCCB during the init phase.
-		 */
-#if defined(SUPPORT_RGX) && defined(PDUMP)
-		{
-			PVRSRV_RGXDEV_INFO *psDevInfo =
-				(PVRSRV_RGXDEV_INFO *)(psDeviceNode->pvDevice);
-
-			eError = PVRSRVRGXInitHWPerfCountersKM(psDeviceNode);
-			if (eError != PVRSRV_OK)
-			{
-				PVR_DPF((PVR_DBG_ERROR,
-						 "%s: Failed to init hwperf counters (%s)",
-						 __func__, PVRSRVGetErrorStringKM(eError)));
-				goto ErrorExit;
-			}
-
-			eError = RGXPdumpDrainKCCB(psDevInfo,
-									   psDevInfo->psKernelCCBCtl->ui32WriteOffset);
-			if (eError != PVRSRV_OK)
-			{
-				PVR_DPF((PVR_DBG_ERROR, "%s: Problem draining kCCB (%s)",
-						 __func__, PVRSRVGetErrorStringKM(eError)));
-				goto ErrorExit;
-			}
-		}
-#endif
-
-		/* Now that the device(s) are fully initialised set them as active */
-		psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_ACTIVE;
-
-#if defined(SUPPORT_RGX) && defined(PVRSRV_GPUVIRT_GUESTDRV)
-		eError = RGXFWOSConfig((PVRSRV_RGXDEV_INFO *)(psDeviceNode->pvDevice));
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: Cannot kick initialization configuration to the Device (%s)",
-					 __func__, PVRSRVGetErrorStringKM(eError)));
-
-			goto ErrorExit;
-		}
-#endif
-	}
-	else
-	{
-		/* Initialisation failed so set the device(s) into a bad state */
-		psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_BAD;
-		eError = PVRSRV_ERROR_NOT_INITIALISED;
-	}
-
-	/* Give PDump control a chance to end the init phase, depends on OS */
-	PDumpStopInitPhase(IMG_FALSE, IMG_TRUE);
-
-	return eError;
-
-ErrorExit:
-	/* Initialisation failed so set the device(s) into a bad state */
-	psDeviceNode->eDevState = PVRSRV_DEVICE_STATE_BAD;
-
-	return eError;
-}
-
-PVRSRV_ERROR IMG_CALLCONV PVRSRVDevInitCompatCheck(PVRSRV_DEVICE_NODE *psDeviceNode)
-{
-	/* Only check devices which specify a compatibility check callback */
-	if (psDeviceNode->pfnInitDeviceCompatCheck)
-		return psDeviceNode->pfnInitDeviceCompatCheck(psDeviceNode);
-	else
-		return PVRSRV_OK;
-}
 
 /*
 	PollForValueKM
@@ -2208,8 +2290,7 @@ PVRSRV_ERROR IMG_CALLCONV PollForValueKM (volatile IMG_UINT32*	pui32LinMemAddr,
 
 	LOOP_UNTIL_TIMEOUT(ui32Timeoutus)
 	{
-		ui32ActualValue = OSReadHWReg32((void *)pui32LinMemAddr, 0) & ui32Mask;
-
+		ui32ActualValue = (*pui32LinMemAddr & ui32Mask);
 		if(ui32ActualValue == ui32Value)
 		{
 			return PVRSRV_OK;
@@ -2359,9 +2440,46 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVWaitForValueKMAndHoldBridgeLockKM(volatile IMG_U
 	return WaitForValueKM(pui32LinMemAddr, ui32Value, ui32Mask, IMG_TRUE);
 }
 
-int PVRSRVGetDriverStatus(void)
+void IMG_CALLCONV PVRSRVCheckStatus(PVRSRV_CMDCOMP_HANDLE hCmdCompCallerHandle)
 {
-	return PVRSRVGetPVRSRVData()->eServicesState;
+	PVRSRV_DATA			*psPVRSRVData = PVRSRVGetPVRSRVData();
+#if !defined(NO_HARDWARE)
+	DLLIST_NODE			*psNode, *psNext;
+#endif
+
+	/* notify any registered device to check if block work items can now proceed */
+#if !defined(NO_HARDWARE)
+	OSWRLockAcquireRead(hNotifyLock);
+	dllist_foreach_node(&sCmdCompNotifyHead, psNode, psNext)
+	{
+		PVRSRV_CMDCOMP_NOTIFY *psNotify =
+			IMG_CONTAINER_OF(psNode, PVRSRV_CMDCOMP_NOTIFY, sListNode);
+
+		/* A device has finished some processing, check if that unblocks other devices */
+		if (hCmdCompCallerHandle != psNotify->hCmdCompHandle)
+		{
+			psNotify->pfnCmdCompleteNotify(psNotify->hCmdCompHandle);
+		}
+	}
+	OSWRLockReleaseRead(hNotifyLock);
+#endif
+
+	/* signal global event object */
+	if (psPVRSRVData->hGlobalEventObject)
+	{
+		IMG_HANDLE hOSEventKM = psPVRSRVData->hGlobalEventObject;
+		if(hOSEventKM)
+		{
+			OSEventObjectSignal(hOSEventKM);
+		}
+	}
+}
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVKickDevicesKM(void)
+{
+	PVR_DPF((PVR_DBG_ERROR, "PVRSRVKickDevicesKM"));
+	PVRSRVCheckStatus(NULL);
+	return PVRSRV_OK;
 }
 
 /*!
@@ -2400,40 +2518,52 @@ const IMG_CHAR *PVRSRVGetErrorStringKM(PVRSRV_ERROR eError)
 }
 
 /*
+	PVRSRVSystemDebugInfo
+ */
+PVRSRV_ERROR PVRSRVSystemDebugInfo(DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
+					void *pvDumpDebugFile)
+{
+	return SysDebugInfo(gpsSysConfig, pfnDumpDebugPrintf, pvDumpDebugFile);
+}
+
+/*
+	PVRSRVGetSystemName
+*/
+const IMG_CHAR *PVRSRVGetSystemName(void)
+{
+	return gpsSysConfig->pszSystemName;
+}
+
+/*
 	PVRSRVSystemHasCacheSnooping
 */
-IMG_BOOL PVRSRVSystemHasCacheSnooping(PVRSRV_DEVICE_CONFIG *psDevConfig)
+IMG_BOOL PVRSRVSystemHasCacheSnooping(void)
 {
-	if (psDevConfig->eCacheSnoopingMode != PVRSRV_DEVICE_SNOOP_NONE)
+	if (gpsSysConfig->eCacheSnoopingMode != PVRSRV_SYSTEM_SNOOP_NONE)
 	{
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;
 }
 
-IMG_BOOL PVRSRVSystemSnoopingOfCPUCache(PVRSRV_DEVICE_CONFIG *psDevConfig)
+IMG_BOOL PVRSRVSystemSnoopingOfCPUCache(void)
 {
-	if ((psDevConfig->eCacheSnoopingMode == PVRSRV_DEVICE_SNOOP_CPU_ONLY) ||
-		(psDevConfig->eCacheSnoopingMode == PVRSRV_DEVICE_SNOOP_CROSS))
+	if ((gpsSysConfig->eCacheSnoopingMode == PVRSRV_SYSTEM_SNOOP_CPU_ONLY) ||
+		(gpsSysConfig->eCacheSnoopingMode == PVRSRV_SYSTEM_SNOOP_CROSS))
 	{
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;	
 }
 
-IMG_BOOL PVRSRVSystemSnoopingOfDeviceCache(PVRSRV_DEVICE_CONFIG *psDevConfig)
+IMG_BOOL PVRSRVSystemSnoopingOfDeviceCache(void)
 {
-	if ((psDevConfig->eCacheSnoopingMode == PVRSRV_DEVICE_SNOOP_DEVICE_ONLY) ||
-		(psDevConfig->eCacheSnoopingMode == PVRSRV_DEVICE_SNOOP_CROSS))
+	if ((gpsSysConfig->eCacheSnoopingMode == PVRSRV_SYSTEM_SNOOP_DEVICE_ONLY) ||
+		(gpsSysConfig->eCacheSnoopingMode == PVRSRV_SYSTEM_SNOOP_CROSS))
 	{
 		return IMG_TRUE;
 	}
 	return IMG_FALSE;
-}
-
-IMG_BOOL PVRSRVSystemHasNonMappableLocalMemory(PVRSRV_DEVICE_CONFIG *psDevConfig)
-{
-	return psDevConfig->bHasNonMappableLocalMemory;
 }
 
 /*
@@ -2462,92 +2592,360 @@ void PVRSRVSystemWaitCycles(PVRSRV_DEVICE_CONFIG *psDevConfig, IMG_UINT32 ui32Cy
 	OSWaitus(ui32Delayus);
 }
 
-static void *
-PVRSRVSystemInstallDeviceLISR_Match_AnyVaCb(PVRSRV_DEVICE_NODE *psDeviceNode,
-											va_list va)
+/*
+	PVRSRVRegisterCmdCompleteNotify
+*/
+PVRSRV_ERROR PVRSRVRegisterCmdCompleteNotify(IMG_HANDLE *phNotify, PFN_CMDCOMP_NOTIFY pfnCmdCompleteNotify, PVRSRV_CMDCOMP_HANDLE hCmdCompHandle)
 {
-	void *pvOSDevice = va_arg(va, void *);
+	PVRSRV_CMDCOMP_NOTIFY *psNotify;
 
-	if (psDeviceNode->psDevConfig->pvOSDevice == pvOSDevice)
+	if ((phNotify == NULL) || (pfnCmdCompleteNotify == NULL) || (hCmdCompHandle == NULL))
 	{
-		return psDeviceNode;
-	}
-
-	return NULL;
-}
-
-PVRSRV_ERROR PVRSRVSystemInstallDeviceLISR(void *pvOSDevice,
-										   IMG_UINT32 ui32IRQ,
-										   const IMG_CHAR *pszName,
-										   PFN_LISR pfnLISR,
-										   void *pvData,
-										   IMG_HANDLE *phLISRData)
-{
-	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
-	PVRSRV_DEVICE_NODE *psDeviceNode;
-
-	psDeviceNode =
-		List_PVRSRV_DEVICE_NODE_Any_va(psPVRSRVData->psDeviceNodeList,
-									   &PVRSRVSystemInstallDeviceLISR_Match_AnyVaCb,
-									   pvOSDevice);
-	if (!psDeviceNode)
-	{
-		/* Device can't be found in the list so it isn't in the system */
-		PVR_DPF((PVR_DBG_ERROR, "%s: device %p with irq %d is not present",
-				 __func__, pvOSDevice, ui32IRQ));
-		return PVRSRV_ERROR_INVALID_DEVICE;
-	}
-
-	return SysInstallDeviceLISR(psDeviceNode->psDevConfig->hSysData, ui32IRQ,
-								pszName, pfnLISR, pvData, phLISRData);
-}
-
-PVRSRV_ERROR PVRSRVSystemUninstallDeviceLISR(IMG_HANDLE hLISRData)
-{
-	return SysUninstallDeviceLISR(hLISRData);
-}
-
-PVRSRV_ERROR
-PVRSRVSystemBIFTilingHeapGetXStride(PVRSRV_DEVICE_CONFIG *psDevConfig,
-									IMG_UINT32 uiHeapNum,
-									IMG_UINT32 *puiXStride)
-{
-	PVR_ASSERT(puiXStride != NULL);
-
-	if (uiHeapNum < 1 || uiHeapNum > psDevConfig->ui32BIFTilingHeapCount)
-	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Bad arguments (%p, %p, %p)", __FUNCTION__, phNotify, pfnCmdCompleteNotify, hCmdCompHandle));
 		return PVRSRV_ERROR_INVALID_PARAMS;
 	}
 
-	*puiXStride = psDevConfig->pui32BIFTilingHeapConfigs[uiHeapNum - 1];
+	psNotify = OSAllocMem(sizeof(*psNotify));
+	if (psNotify == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Not enough memory to allocate CmdCompleteNotify function", __FUNCTION__));
+		return PVRSRV_ERROR_OUT_OF_MEMORY;		
+	}
+
+	/* Set-up the notify data */
+	psNotify->hCmdCompHandle = hCmdCompHandle;
+	psNotify->pfnCmdCompleteNotify = pfnCmdCompleteNotify;
+
+	/* Add it to the list of Notify functions */
+	OSWRLockAcquireWrite(hNotifyLock);
+	dllist_add_to_tail(&sCmdCompNotifyHead, &psNotify->sListNode);
+	OSWRLockReleaseWrite(hNotifyLock);
+
+	*phNotify = psNotify;
 
 	return PVRSRV_OK;
 }
 
-PVRSRV_ERROR
-PVRSRVSystemBIFTilingGetConfig(PVRSRV_DEVICE_CONFIG  *psDevConfig,
-                               RGXFWIF_BIFTILINGMODE *peBifTilingMode,
-                               IMG_UINT32            *puiNumHeaps)
+/*
+	PVRSRVUnregisterCmdCompleteNotify
+*/
+PVRSRV_ERROR PVRSRVUnregisterCmdCompleteNotify(IMG_HANDLE hNotify)
 {
-	*peBifTilingMode = psDevConfig->eBIFTilingMode;
-	*puiNumHeaps = psDevConfig->ui32BIFTilingHeapCount;
+	PVRSRV_CMDCOMP_NOTIFY *psNotify = (PVRSRV_CMDCOMP_NOTIFY*) hNotify;
+
+	if (psNotify == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Bad arguments (%p)", __FUNCTION__, hNotify));
+		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
+
+	/* remove the node from the list */
+	OSWRLockAcquireWrite(hNotifyLock);
+	dllist_remove_node(&psNotify->sListNode);
+	OSWRLockReleaseWrite(hNotifyLock);
+
+	/* free the notify structure that holds the node */
+	OSFreeMem(psNotify);
+
+	return PVRSRV_OK;
+
+}
+
+static void _SysDebugRequestNotify(PVRSRV_DBGREQ_HANDLE hDebugRequestHandle, IMG_UINT32 ui32VerbLevel,
+	DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf, void *pvDumpDebugFile)
+{
+	PVRSRV_DATA *psPVRSRVData = (PVRSRV_DATA*) hDebugRequestHandle;
+
+	/* only dump info on the lowest verbosity level */
+	if (ui32VerbLevel != DEBUG_REQUEST_VERBOSITY_LOW)
+	{
+		return;
+	}
+
+	PVR_DUMPDEBUG_LOG("DDK info: %s (%s) %s", PVRVERSION_STRING, PVR_BUILD_TYPE, PVR_BUILD_DIR);
+	PVR_DUMPDEBUG_LOG("Time now: %015llu", OSClockus64());
+
+	/* Services state */
+	switch (psPVRSRVData->eServicesState)
+	{
+		case PVRSRV_SERVICES_STATE_OK:
+		{
+			PVR_DUMPDEBUG_LOG("Services State: OK");
+			break;
+		}
+		
+		case PVRSRV_SERVICES_STATE_BAD:
+		{
+			PVR_DUMPDEBUG_LOG("Services State: BAD");
+			break;
+		}
+		
+		default:
+		{
+			PVR_DUMPDEBUG_LOG("Services State: UNKNOWN (%d)", psPVRSRVData->eServicesState);
+			break;
+		}
+	}
+
+	/* Power state */
+	switch (psPVRSRVData->eCurrentPowerState)
+	{
+		case PVRSRV_SYS_POWER_STATE_OFF:
+		{
+			PVR_DUMPDEBUG_LOG("System Power State: OFF");
+			break;
+		}
+		case PVRSRV_SYS_POWER_STATE_ON:
+		{
+			PVR_DUMPDEBUG_LOG("System Power State: ON");
+			break;
+		}
+		default:
+		{
+			PVR_DUMPDEBUG_LOG("System Power State: UNKNOWN (%d)", psPVRSRVData->eCurrentPowerState);
+			break;
+		}
+	}
+
+	/* Dump system specific debug info */
+	PVRSRVSystemDebugInfo(pfnDumpDebugPrintf, pvDumpDebugFile);
+
+}
+
+/*
+	PVRSRVDebugRequest
+*/
+void IMG_CALLCONV PVRSRVDebugRequest(IMG_UINT32 ui32VerbLevel, DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf, void *pvDumpDebugFile)
+{
+	IMG_UINT32 i,j;
+
+	if (pvDumpDebugFile == NULL)
+	{
+		/* Only dump the call stack to the kernel log if the debug text is going there. */
+		OSDumpStack();
+	}
+
+	/* notify any registered device to check if block work items can now proceed */
+	/* Lock the lists */
+	OSWRLockAcquireRead(g_hDbgNotifyLock);
+
+	PVR_DUMPDEBUG_LOG("------------[ PVR DBG: START ]------------");
+
+	/* For each verbosity level */
+	for (j=0;j<(ui32VerbLevel+1);j++)
+	{
+		/* For each requester */
+		for (i=0;i<g_psDebugTable->ui32RequestCount;i++)
+		{
+			DLLIST_NODE *psNode, *psNext;
+			dllist_foreach_node(&g_psDebugTable->asEntry[i].sListHead, psNode, psNext)
+			{
+				PVRSRV_DBGREQ_NOTIFY *psNotify =
+					IMG_CONTAINER_OF(psNode, PVRSRV_DBGREQ_NOTIFY, sListNode);
+				psNotify->pfnDbgRequestNotify(psNotify->hDbgRequestHandle, j, pfnDumpDebugPrintf, pvDumpDebugFile);
+			}
+		}
+	}
+	PVR_DUMPDEBUG_LOG("------------[ PVR DBG: END ]------------");
+
+	/* Unlock the lists */
+	OSWRLockReleaseRead(g_hDbgNotifyLock);
+}
+
+/*
+	PVRSRVRegisterDebugRequestNotify
+*/
+PVRSRV_ERROR PVRSRVRegisterDbgRequestNotify(IMG_HANDLE *phNotify, PFN_DBGREQ_NOTIFY pfnDbgRequestNotify, IMG_UINT32 ui32RequesterID, PVRSRV_DBGREQ_HANDLE hDbgRequestHandle)
+{
+	PVRSRV_DBGREQ_NOTIFY *psNotify;
+	PDLLIST_NODE psHead = NULL;
+	IMG_UINT32 i;
+	PVRSRV_ERROR eError;
+
+	if ((phNotify == NULL) || (pfnDbgRequestNotify == NULL))
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Bad arguments (%p, %p,)", __FUNCTION__, phNotify, pfnDbgRequestNotify));
+		eError = PVRSRV_ERROR_INVALID_PARAMS;
+		goto fail_params;
+	}
+
+	psNotify = OSAllocMem(sizeof(*psNotify));
+	if (psNotify == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Not enough memory to allocate DbgRequestNotify structure", __FUNCTION__));
+		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+		goto fail_alloc;
+	}
+
+	/* Set-up the notify data */
+	psNotify->hDbgRequestHandle = hDbgRequestHandle;
+	psNotify->pfnDbgRequestNotify = pfnDbgRequestNotify;
+	psNotify->ui32RequesterID = ui32RequesterID;
+
+	/* Lock down all the lists */
+	OSWRLockAcquireWrite(g_hDbgNotifyLock);
+
+	/* Find which list to add it to */
+	for (i=0;i<g_psDebugTable->ui32RequestCount;i++)
+	{
+		if (g_psDebugTable->asEntry[i].ui32RequesterID == ui32RequesterID)
+		{
+			psHead = &g_psDebugTable->asEntry[i].sListHead;
+		}
+	}
+
+	if (psHead == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Failed to find debug requester", __FUNCTION__));
+		eError = PVRSRV_ERROR_INVALID_PARAMS;
+		goto fail_add;
+	}
+
+	/* Add it to the list of Notify functions */
+	dllist_add_to_tail(psHead, &psNotify->sListNode);
+
+	/* Unlock the lists */
+	OSWRLockReleaseWrite(g_hDbgNotifyLock);
+
+	*phNotify = psNotify;
+
+	return PVRSRV_OK;
+
+fail_add:
+	OSWRLockReleaseWrite(g_hDbgNotifyLock);
+	OSFreeMem(psNotify);
+fail_alloc:
+fail_params:
+	return eError;
+}
+
+/*
+	PVRSRVUnregisterCmdCompleteNotify
+*/
+PVRSRV_ERROR PVRSRVUnregisterDbgRequestNotify(IMG_HANDLE hNotify)
+{
+	PVRSRV_DBGREQ_NOTIFY *psNotify = (PVRSRV_DBGREQ_NOTIFY*) hNotify;
+
+	if (psNotify == NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR,"%s: Bad arguments (%p)", __FUNCTION__, hNotify));
+		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
+
+	/* remove the node from the list */
+	OSWRLockAcquireWrite(g_hDbgNotifyLock);
+	dllist_remove_node(&psNotify->sListNode);
+	OSWRLockReleaseWrite(g_hDbgNotifyLock);
+
+	/* free the notify structure that holds the node */
+	OSFreeMem(psNotify);
+
 	return PVRSRV_OK;
 }
 
-#if defined(SUPPORT_GPUVIRT_VALIDATION) && defined(EMULATOR)
-void SetAxiProtOSid(IMG_UINT32 ui32OSid, IMG_BOOL bState)
+
+static PVRSRV_ERROR PVRSRVRegisterDbgTable(IMG_UINT32 *paui32Table, IMG_UINT32 ui32Length, void **phTable)
 {
-    SysSetAxiProtOSid(ui32OSid, bState);
-    return ;
+	IMG_UINT32 i;
+	if (g_psDebugTable != NULL)
+	{
+		return PVRSRV_ERROR_DBGTABLE_ALREADY_REGISTERED;
+	}
+
+	g_psDebugTable = OSAllocMem(sizeof(DEBUG_REQUEST_TABLE) + (sizeof(DEBUG_REQUEST_ENTRY) * (ui32Length-1)));
+	if (!g_psDebugTable)
+	{
+		return PVRSRV_ERROR_OUT_OF_MEMORY;
+	}
+
+	g_psDebugTable->ui32RequestCount = ui32Length;
+
+	/* Init the list heads */
+	for (i=0;i<ui32Length;i++)
+	{
+		g_psDebugTable->asEntry[i].ui32RequesterID = paui32Table[i];
+		dllist_init(&g_psDebugTable->asEntry[i].sListHead);
+	}
+
+	*phTable = g_psDebugTable;
+	return PVRSRV_OK;
 }
 
-void SetTrustedDeviceAceEnabled(void)
+static void PVRSRVUnregisterDbgTable(void *hTable)
 {
-    SysSetTrustedDeviceAceEnabled();
+	IMG_UINT32 i;
 
-    return ;
+	PVR_ASSERT(hTable == g_psDebugTable);
+
+	for (i=0;i<g_psDebugTable->ui32RequestCount;i++)
+	{
+		if (!dllist_is_empty(&g_psDebugTable->asEntry[i].sListHead))
+		{
+			PVR_DPF((PVR_DBG_ERROR, "PVRSRVUnregisterDbgTable: Found registered callback(s) on %d", i));
+		}
+	}
+	OSFREEMEM(g_psDebugTable);
+	g_psDebugTable = NULL;
 }
-#endif
+
+PVRSRV_ERROR AcquireGlobalEventObjectServer(IMG_HANDLE *phGlobalEventObject)
+{
+	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
+
+	*phGlobalEventObject = psPVRSRVData->hGlobalEventObject;
+
+	return PVRSRV_OK;
+}
+
+PVRSRV_ERROR ReleaseGlobalEventObjectServer(IMG_HANDLE hGlobalEventObject)
+{
+	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
+
+	PVR_ASSERT(psPVRSRVData->hGlobalEventObject == hGlobalEventObject);
+
+	return PVRSRV_OK;
+}
+
+PVRSRV_ERROR GetBIFTilingHeapXStride(IMG_UINT32 uiHeapNum, IMG_UINT32 *puiXStride)
+{
+	IMG_UINT32 uiMaxHeaps;
+
+	PVR_ASSERT(puiXStride != NULL);
+
+	GetNumBifTilingHeapConfigs(&uiMaxHeaps);
+
+	if(uiHeapNum < 1 || uiHeapNum > uiMaxHeaps) {
+		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
+
+	*puiXStride = gpsSysConfig->pui32BIFTilingHeapConfigs[uiHeapNum - 1];
+
+	return PVRSRV_OK;
+}
+
+PVRSRV_ERROR GetNumBifTilingHeapConfigs(IMG_UINT32 *puiNumHeaps)
+{
+	*puiNumHeaps = gpsSysConfig->ui32BIFTilingHeapCount;
+	return PVRSRV_OK;
+}
+
+/*
+	PVRSRVResetHWRLogsKM
+*/
+PVRSRV_ERROR PVRSRVResetHWRLogsKM(CONNECTION_DATA * psConnection,
+                                  PVRSRV_DEVICE_NODE *psDeviceNode)
+{
+	PVR_LOG(("User requested HWR logs reset"));
+
+	PVR_UNREFERENCED_PARAMETER(psConnection);
+	
+	if(psDeviceNode && psDeviceNode->pfnResetHWRLogs)
+	{
+		return psDeviceNode->pfnResetHWRLogs(psDeviceNode);
+	}
+
+	return PVRSRV_ERROR_NO_DEVICENODE_FOUND;
+}
 
 /*****************************************************************************
  End of file (pvrsrv.c)

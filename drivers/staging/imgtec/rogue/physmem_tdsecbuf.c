@@ -4,8 +4,9 @@
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @Description    Part of the memory management. This module is responsible for
                 implementing the function callbacks for physical memory imported
-                from a trusted environment. The driver cannot acquire CPU
-                mappings for this secure memory.
+                from a trusted environment. This memory is not accessible from
+                within the driver, so the only purpose of this PMR is to
+                provide physical addresses for the MMU page tables.
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -57,15 +58,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #if defined (SUPPORT_TRUSTED_DEVICE)
 
-#if !defined(NO_HARDWARE)
-
 typedef struct _PMR_TDSECBUF_DATA_ {
-	PVRSRV_DEVICE_NODE    *psDevNode;
 	PHYS_HEAP             *psTDSecBufPhysHeap;
+	PFN_TD_SECUREBUF_FREE pfnTDSecureBufFree;
 	IMG_CPU_PHYADDR       sCpuPAddr;
 	IMG_DEV_PHYADDR       sDevPAddr;
 	IMG_UINT64            ui64Size;
-	IMG_UINT32            ui32Log2PageSize;
 	IMG_UINT64            ui64SecBufHandle;
 } PMR_TDSECBUF_DATA;
 
@@ -75,7 +73,6 @@ typedef struct _PMR_TDSECBUF_DATA_ {
  */
 
 static PVRSRV_ERROR PMRSysPhysAddrTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
-                                              IMG_UINT32 ui32Log2PageSize,
                                               IMG_UINT32 ui32NumOfPages,
                                               IMG_DEVMEM_OFFSET_T *puiOffset,
                                               IMG_BOOL *pbValid,
@@ -83,11 +80,6 @@ static PVRSRV_ERROR PMRSysPhysAddrTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
 {
 	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
 	IMG_UINT32 i;
-
-	if (psPrivData->ui32Log2PageSize != ui32Log2PageSize)
-	{
-		return PVRSRV_ERROR_PMR_INCOMPATIBLE_CONTIGUITY;
-	}
 
 	for (i = 0; i < ui32NumOfPages; i++)
 	{
@@ -100,11 +92,9 @@ static PVRSRV_ERROR PMRSysPhysAddrTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
 static PVRSRV_ERROR PMRFinalizeTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv)
 {
 	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-	PVRSRV_DEVICE_CONFIG *psDevConfig = psPrivData->psDevNode->psDevConfig;
 	PVRSRV_ERROR eError;
 
-	eError = psDevConfig->pfnTDSecureBufFree(psDevConfig->hSysData,
-											 psPrivData->ui64SecBufHandle);
+	eError = psPrivData->pfnTDSecureBufFree(psPrivData->ui64SecBufHandle);
 	if (eError != PVRSRV_OK)
 	{
 		if (eError == PVRSRV_ERROR_NOT_IMPLEMENTED)
@@ -125,8 +115,34 @@ static PVRSRV_ERROR PMRFinalizeTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv)
 }
 
 static PMR_IMPL_FUNCTAB _sPMRTDSecBufFuncTab = {
-	.pfnDevPhysAddr = &PMRSysPhysAddrTDSecBufMem,
-	.pfnFinalize = &PMRFinalizeTDSecBufMem,
+	/* pfnLockPhysAddresses */
+	NULL,
+	/* pfnUnlockPhysAddresses */
+	NULL,
+	/* pfnDevPhysAddr */
+	&PMRSysPhysAddrTDSecBufMem,
+	/* pfnPDumpSymbolicAddr */
+	NULL,
+	/* pfnAcquireKernelMappingData */
+	NULL,
+	/* pfnReleaseKernelMappingData */
+	NULL,
+	/* pfnReadBytes */
+	NULL,
+	/* pfnWriteBytes */
+	NULL,
+	/* pfnUnpinMem */
+	NULL,
+	/* pfnPinMem */
+	NULL,
+	/* pfnChangeSparseMem */
+	NULL,
+	/* pfnChangeSparseMemCPUMap */
+	NULL,
+	/* pfnMMap */
+	NULL,
+	/* pfnFinalize */
+	&PMRFinalizeTDSecBufMem
 };
 
 
@@ -136,8 +152,8 @@ static PMR_IMPL_FUNCTAB _sPMRTDSecBufFuncTab = {
 PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
                                       PVRSRV_DEVICE_NODE *psDevNode,
                                       IMG_DEVMEM_SIZE_T uiSize,
-                                      PMR_LOG2ALIGN_T uiLog2Align,
                                       PVRSRV_MEMALLOCFLAGS_T uiFlags,
+                                      IMG_UINT32 *pui32Align,
                                       PMR **ppsPMRPtr,
                                       IMG_UINT64 *pui64SecBufHandle)
 {
@@ -145,12 +161,13 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 	RGX_DATA *psRGXData = (RGX_DATA *)(psDevConfig->hDevData);
 	PMR_TDSECBUF_DATA *psPrivData = NULL;
 	PMR *psPMR = NULL;
-	IMG_UINT32 uiMappingTable = 0;
+	IMG_HANDLE hPDumpAllocInfo = NULL;
+	PMR_LOG2ALIGN_T uiLog2PageSize = OSGetPageShift();
+	IMG_BOOL bMappingTable = IMG_TRUE;
 	PMR_FLAGS_T uiPMRFlags;
 	PVRSRV_ERROR eError;
 
 	PVR_UNREFERENCED_PARAMETER(psConnection);
-
 
 	/* In this instance, we simply pass flags straight through.
 	 * Generically, uiFlags can include things that control the PMR
@@ -197,18 +214,17 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 	{
 		PVRSRV_TD_SECBUF_PARAMS sTDSecBufParams;
 
-		psPrivData->psDevNode = psDevNode;
+		psPrivData->pfnTDSecureBufFree = psDevConfig->pfnTDSecureBufFree;
 
 		/* Ask the Trusted Device to allocate secure memory */
 		sTDSecBufParams.uiSize = uiSize;
-		sTDSecBufParams.uiAlign = 1 << uiLog2Align;
+		sTDSecBufParams.uiAlign = 1 << uiLog2PageSize;
 
 		/* These will be returned by pfnTDSecureBufAlloc on success */
 		sTDSecBufParams.psSecBufAddr = &psPrivData->sCpuPAddr;
 		sTDSecBufParams.pui64SecBufHandle = &psPrivData->ui64SecBufHandle;
 
-		eError = psDevConfig->pfnTDSecureBufAlloc(psDevConfig->hSysData,
-												  &sTDSecBufParams);
+		eError = psDevConfig->pfnTDSecureBufAlloc(&sTDSecBufParams);
 		if (eError != PVRSRV_OK)
 		{
 			if (eError == PVRSRV_ERROR_NOT_IMPLEMENTED)
@@ -234,35 +250,28 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 	                           &psPrivData->sDevPAddr,
 	                           &psPrivData->sCpuPAddr);
 
-	/* Check that the secure buffer has the requested alignment */
-	if ((((1ULL << uiLog2Align) - 1) & psPrivData->sCpuPAddr.uiAddr) != 0)
 	/* Check that the secure buffer is aligned to a Rogue cache line */
+	if ((psPrivData->sDevPAddr.uiAddr & (ROGUE_CACHE_LINE_SIZE - 1)) != 0)
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-				 "Trusted Device physical heap has the wrong alignment!"
-				 "Physical address 0x%llx, alignment mask 0x%llx",
-				 (unsigned long long) psPrivData->sCpuPAddr.uiAddr,
-				 ((1ULL << uiLog2Align) - 1)));
+		PVR_DPF((PVR_DBG_ERROR, "Trusted Device physical heap not aligned to a Rogue cache line!"));
 		eError = PVRSRV_ERROR_REQUEST_TDSECUREBUF_PAGES_FAIL;
 		goto errorOnCheckAlign;
 	}
 
-	psPrivData->ui32Log2PageSize = uiLog2Align;
 
-	eError = PMRCreatePMR(psDevNode,
-	                      psPrivData->psTDSecBufPhysHeap,
+	eError = PMRCreatePMR(psPrivData->psTDSecBufPhysHeap,
 	                      psPrivData->ui64Size,
 	                      psPrivData->ui64Size,
 	                      1,                 /* ui32NumPhysChunks */
 	                      1,                 /* ui32NumVirtChunks */
-	                      &uiMappingTable,   /* pui32MappingTable (not used) */
-	                      uiLog2Align,
+	                      &bMappingTable,    /* pui32MappingTable (not used) */
+	                      uiLog2PageSize,
 	                      uiPMRFlags,
-	                      "TDSECUREBUF_PMR",
+	                      "PMRTDSECUREBUF",
 	                      &_sPMRTDSecBufFuncTab,
 	                      psPrivData,
-	                      PMR_TYPE_TDSECBUF,
 	                      &psPMR,
+	                      &hPDumpAllocInfo,
 	                      IMG_FALSE);
 	if (eError != PVRSRV_OK)
 	{
@@ -282,6 +291,7 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 	}
 #endif
 
+	*pui32Align = 1 << uiLog2PageSize;
 	*ppsPMRPtr = psPMR;
 	*pui64SecBufHandle = psPrivData->ui64SecBufHandle;
 
@@ -290,8 +300,7 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 
 errorOnCreatePMR:
 errorOnCheckAlign:
-	eError = psDevConfig->pfnTDSecureBufFree(psDevConfig->hSysData,
-											 psPrivData->ui64SecBufHandle);
+	eError = psDevConfig->pfnTDSecureBufFree(psPrivData->ui64SecBufHandle);
 	if (eError != PVRSRV_OK)
 	{
 		if (eError == PVRSRV_ERROR_NOT_IMPLEMENTED)
@@ -314,256 +323,21 @@ errorOnAllocData:
 	return eError;
 }
 
-#else /* NO_HARDWARE */
-
-#include "physmem_osmem.h"
-
-typedef struct _PMR_TDSECBUF_DATA_ {
-	PHYS_HEAP  *psTDSecBufPhysHeap;
-	PMR        *psOSMemPMR;
-	IMG_UINT32 ui32Log2PageSize;
-} PMR_TDSECBUF_DATA;
-
-
-/*
- * Implementation of callback functions
- */
-
-static PVRSRV_ERROR
-PMRLockPhysAddressesTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-
-	return PMRLockSysPhysAddresses(psPrivData->psOSMemPMR);
-}
-
-static PVRSRV_ERROR
-PMRUnlockPhysAddressesTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-
-	return PMRUnlockSysPhysAddresses(psPrivData->psOSMemPMR);
-}
-
-static PVRSRV_ERROR
-PMRSysPhysAddrTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
-                          IMG_UINT32 ui32Log2PageSize,
-                          IMG_UINT32 ui32NumOfPages,
-                          IMG_DEVMEM_OFFSET_T *puiOffset,
-                          IMG_BOOL *pbValid,
-                          IMG_DEV_PHYADDR *psDevPAddr)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-
-	/* On the assumption that this PMR was created with
-	 * NumPhysChunks == NumVirtChunks then
-	 * puiOffset[0] == uiLogicalOffset
-	 */
-
-	return PMR_DevPhysAddr(psPrivData->psOSMemPMR,
-	                       ui32Log2PageSize,
-	                       ui32NumOfPages,
-	                       puiOffset[0],
-	                       psDevPAddr,
-	                       pbValid);
-}
-
-static PVRSRV_ERROR
-PMRAcquireKernelMappingDataTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
-                                       size_t uiOffset,
-                                       size_t uiSize,
-                                       void **ppvKernelAddressOut,
-                                       IMG_HANDLE *phHandleOut,
-                                       PMR_FLAGS_T ulFlags)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-	size_t uiLengthOut;
-
-	PVR_UNREFERENCED_PARAMETER(ulFlags);
-
-	return PMRAcquireKernelMappingData(psPrivData->psOSMemPMR,
-	                                   uiOffset,
-	                                   uiSize,
-	                                   ppvKernelAddressOut,
-	                                   &uiLengthOut,
-	                                   phHandleOut);
-}
-
-static void
-PMRReleaseKernelMappingDataTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv,
-                                       IMG_HANDLE hHandle)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-
-	PMRReleaseKernelMappingData(psPrivData->psOSMemPMR, hHandle);
-}
-
-static PVRSRV_ERROR PMRFinalizeTDSecBufMem(PMR_IMPL_PRIVDATA pvPriv)
-{
-	PMR_TDSECBUF_DATA *psPrivData = pvPriv;
-
-	PMRUnrefPMR(psPrivData->psOSMemPMR);
-	PhysHeapRelease(psPrivData->psTDSecBufPhysHeap);
-	OSFreeMem(psPrivData);
-
-	return PVRSRV_OK;
-}
-
-static PMR_IMPL_FUNCTAB _sPMRTDSecBufFuncTab = {
-	.pfnLockPhysAddresses = &PMRLockPhysAddressesTDSecBufMem,
-	.pfnUnlockPhysAddresses = &PMRUnlockPhysAddressesTDSecBufMem,
-	.pfnDevPhysAddr = &PMRSysPhysAddrTDSecBufMem,
-	.pfnAcquireKernelMappingData = &PMRAcquireKernelMappingDataTDSecBufMem,
-	.pfnReleaseKernelMappingData = &PMRReleaseKernelMappingDataTDSecBufMem,
-	.pfnFinalize = &PMRFinalizeTDSecBufMem,
-};
-
-
-/*
- * Public functions
- */
-PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
-                                      PVRSRV_DEVICE_NODE *psDevNode,
-                                      IMG_DEVMEM_SIZE_T uiSize,
-                                      PMR_LOG2ALIGN_T uiLog2Align,
-                                      PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                                      PMR **ppsPMRPtr,
-                                      IMG_UINT64 *pui64SecBufHandle)
-{
-	PVRSRV_DEVICE_CONFIG *psDevConfig = psDevNode->psDevConfig;
-	RGX_DATA *psRGXData = (RGX_DATA *)(psDevConfig->hDevData);
-	PMR_TDSECBUF_DATA *psPrivData = NULL;
-	PMR *psPMR = NULL;
-	PMR *psOSPMR = NULL;
-	IMG_UINT32 uiMappingTable = 0;
-	PMR_FLAGS_T uiPMRFlags;
-	PVRSRV_ERROR eError;
-
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-	/* In this instance, we simply pass flags straight through.
-	 * Generically, uiFlags can include things that control the PMR
-	 * factory, but we don't need any such thing (at the time of
-	 * writing!), and our caller specifies all PMR flags so we don't
-	 * need to meddle with what was given to us.
-	 */
-	uiPMRFlags = (PMR_FLAGS_T)(uiFlags & PVRSRV_MEMALLOCFLAGS_PMRFLAGSMASK);
-
-	/* Check no significant bits were lost in cast due to different bit widths for flags */
-	PVR_ASSERT(uiPMRFlags == (uiFlags & PVRSRV_MEMALLOCFLAGS_PMRFLAGSMASK));
-
-	psPrivData = OSAllocZMem(sizeof(PMR_TDSECBUF_DATA));
-	if (psPrivData == NULL)
-	{
-		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-		goto errorOnAllocData;
-	}
-
-	/* Get required info for the TD Secure Buffer physical heap */
-	if (!psRGXData->bHasTDSecureBufPhysHeap)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "Trusted Device physical heap not available!"));
-		eError = PVRSRV_ERROR_REQUEST_TDSECUREBUF_PAGES_FAIL;
-		goto errorOnAcquireHeap;
-	}
-
-	eError = PhysHeapAcquire(psRGXData->uiTDSecureBufPhysHeapID,
-	                         &psPrivData->psTDSecBufPhysHeap);
-	if (eError != PVRSRV_OK) goto errorOnAcquireHeap;
-
-	psPrivData->ui32Log2PageSize = uiLog2Align;
-
-	/* Note that this PMR is only used to copy the FW blob to memory and
-	 * to dump this memory to pdump, it doesn't need to have the alignment
-	 * requested by the caller
-	 */
-	eError = PhysmemNewOSRamBackedPMR(psDevNode,
-	                                  uiSize,
-	                                  uiSize,
-	                                  1,                 /* ui32NumPhysChunks */
-	                                  1,                 /* ui32NumVirtChunks */
-	                                  &uiMappingTable,
-	                                  psPrivData->ui32Log2PageSize,
-	                                  uiFlags,
-	                                  "TDSECUREBUF_OSMEM",
-	                                  &psOSPMR);
-	if (eError != PVRSRV_OK)
-	{
-		goto errorOnCreateOSPMR;
-	}
-
-	/* This is the primary PMR dumped with correct memspace and alignment */
-	eError = PMRCreatePMR(psDevNode,
-	                      psPrivData->psTDSecBufPhysHeap,
-	                      uiSize,
-	                      uiSize,
-	                      1,               /* ui32NumPhysChunks */
-	                      1,               /* ui32NumVirtChunks */
-	                      &uiMappingTable, /* pui32MappingTable (not used) */
-	                      uiLog2Align,
-	                      uiPMRFlags,
-	                      "TDSECUREBUF_PMR",
-	                      &_sPMRTDSecBufFuncTab,
-	                      psPrivData,
-	                      PMR_TYPE_TDSECBUF,
-	                      &psPMR,
-	                      IMG_FALSE);
-	if (eError != PVRSRV_OK)
-	{
-		goto errorOnCreateTDPMR;
-	}
-
-#if defined(PVR_RI_DEBUG)
-	eError = RIWritePMREntryKM(psPMR,
-	                           sizeof("TDSecureBuffer"),
-	                           "TDSecureBuffer",
-	                           psPrivData->ui64Size);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_WARNING,
-		         "%s: Failed to write PMR entry (%s)",
-		         __func__, PVRSRVGetErrorStringKM(eError)));
-	}
-#endif
-
-	psPrivData->psOSMemPMR = psOSPMR;
-	*ppsPMRPtr = psPMR;
-	*pui64SecBufHandle = 0x0ULL;
-
-	return PVRSRV_OK;
-
-errorOnCreateTDPMR:
-	PMRUnrefPMR(psOSPMR);
-
-errorOnCreateOSPMR:
-	PhysHeapRelease(psPrivData->psTDSecBufPhysHeap);
-
-errorOnAcquireHeap:
-	OSFreeMem(psPrivData);
-
-errorOnAllocData:
-	PVR_ASSERT(eError != PVRSRV_OK);
-
-	return eError;
-}
-
-#endif /* NO_HARDWARE */
-
 #else /* SUPPORT_TRUSTED_DEVICE */
 
 PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
                                       PVRSRV_DEVICE_NODE *psDevNode,
                                       IMG_DEVMEM_SIZE_T uiSize,
-                                      PMR_LOG2ALIGN_T uiLog2Align,
                                       PVRSRV_MEMALLOCFLAGS_T uiFlags,
+                                      IMG_UINT32 *pui32Align,
                                       PMR **ppsPMRPtr,
                                       IMG_UINT64 *pui64SecBufHandle)
 {
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	PVR_UNREFERENCED_PARAMETER(psDevNode);
 	PVR_UNREFERENCED_PARAMETER(uiSize);
-	PVR_UNREFERENCED_PARAMETER(uiLog2Align);
 	PVR_UNREFERENCED_PARAMETER(uiFlags);
+	PVR_UNREFERENCED_PARAMETER(pui32Align);
 	PVR_UNREFERENCED_PARAMETER(ppsPMRPtr);
 	PVR_UNREFERENCED_PARAMETER(pui64SecBufHandle);
 
@@ -575,16 +349,16 @@ PVRSRV_ERROR PhysmemNewTDSecureBufPMR(CONNECTION_DATA *psConnection,
 PVRSRV_ERROR PhysmemImportSecBuf(CONNECTION_DATA *psConnection,
                                  PVRSRV_DEVICE_NODE *psDevNode,
                                  IMG_DEVMEM_SIZE_T uiSize,
-                                 IMG_UINT32 ui32Log2Align,
                                  PVRSRV_MEMALLOCFLAGS_T uiFlags,
+                                 IMG_UINT32 *pui32Align,
                                  PMR **ppsPMRPtr,
                                  IMG_UINT64 *pui64SecBufHandle)
 {
 	return PhysmemNewTDSecureBufPMR(psConnection,
 	                                psDevNode,
 	                                uiSize,
-	                                (PMR_LOG2ALIGN_T)ui32Log2Align,
 	                                uiFlags,
+	                                pui32Align,
 	                                ppsPMRPtr,
 	                                pui64SecBufHandle);
 };

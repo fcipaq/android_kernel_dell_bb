@@ -91,6 +91,7 @@ void dllist_init(PDLLIST_NODE psListHead)
 	psListHead->psNextNode = psListHead;
 }
 
+
 /*************************************************************************/ /*!
 @Function       dllist_is_empty
 
@@ -103,9 +104,10 @@ void dllist_init(PDLLIST_NODE psListHead)
 static INLINE
 IMG_BOOL dllist_is_empty(PDLLIST_NODE psListHead)
 {
-	return (IMG_BOOL) ((psListHead->psPrevNode == psListHead)
-	                   && (psListHead->psNextNode == psListHead));
+	return ((psListHead->psPrevNode == psListHead) 
+				&& (psListHead->psNextNode == psListHead));
 }
+
 
 /*************************************************************************/ /*!
 @Function       dllist_add_to_head
@@ -156,6 +158,7 @@ void dllist_add_to_tail(PDLLIST_NODE psListHead, PDLLIST_NODE psNewNode)
 	psNewNode->psNextNode = psListHead;
 }
 
+
 /*************************************************************************/ /*!
 @Function       dllist_node_is_in_list
 
@@ -168,8 +171,9 @@ void dllist_add_to_tail(PDLLIST_NODE psListHead, PDLLIST_NODE psNewNode)
 static INLINE
 IMG_BOOL dllist_node_is_in_list(PDLLIST_NODE psNode)
 {
-	return (IMG_BOOL) (psNode->psNextNode != 0);
+	return (psNode->psNextNode != 0);
 }
+
 
 /*************************************************************************/ /*!
 @Function       dllist_get_next_node
@@ -215,43 +219,6 @@ void dllist_remove_node(PDLLIST_NODE psListNode)
 	psListNode->psNextNode = 0;
 }
 
-/*************************************************************************/ /*!
-@Function       dllist_replace_head
-
-@Description    Moves the list from psOldHead to psNewHead
-
-@Input          psOldHead       List node to be replaced. Will become a head
-                                node of an empty list.
-@Input          psNewHead       List node to be inserted. Must be an empty list
-                                head.
-
-*/
-/*****************************************************************************/
-static INLINE
-void dllist_replace_head(PDLLIST_NODE psOldHead, PDLLIST_NODE psNewHead)
-{
-	if (dllist_is_empty(psOldHead))
-	{
-		psNewHead->psNextNode = psNewHead;
-		psNewHead->psPrevNode = psNewHead;
-	}
-	else
-	{
-		/* Change the neighbouring nodes */
-		psOldHead->psNextNode->psPrevNode = psNewHead;
-		psOldHead->psPrevNode->psNextNode = psNewHead;
-
-		/* Copy the old data to the new node */
-		psNewHead->psNextNode = psOldHead->psNextNode;
-		psNewHead->psPrevNode = psOldHead->psPrevNode;
-
-		/* Remove links to the previous list */
-		psOldHead->psNextNode = psOldHead;
-		psOldHead->psPrevNode = psOldHead;
-	}
-
-
-}
 
 /*************************************************************************/ /*!
 @Function       dllist_foreach_node

@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for dmabuf
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for dmabuf
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for dmabuf
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,8 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_DMABUF_BRIDGE_H
 #define COMMON_DMABUF_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
@@ -56,8 +54,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_DMABUF_CMD_FIRST			0
 #define PVRSRV_BRIDGE_DMABUF_PHYSMEMIMPORTDMABUF			PVRSRV_BRIDGE_DMABUF_CMD_FIRST+0
 #define PVRSRV_BRIDGE_DMABUF_PHYSMEMEXPORTDMABUF			PVRSRV_BRIDGE_DMABUF_CMD_FIRST+1
-#define PVRSRV_BRIDGE_DMABUF_PHYSMEMIMPORTSPARSEDMABUF			PVRSRV_BRIDGE_DMABUF_CMD_FIRST+2
-#define PVRSRV_BRIDGE_DMABUF_CMD_LAST			(PVRSRV_BRIDGE_DMABUF_CMD_FIRST+2)
+#define PVRSRV_BRIDGE_DMABUF_CMD_LAST			(PVRSRV_BRIDGE_DMABUF_CMD_FIRST+1)
 
 
 /*******************************************
@@ -97,31 +94,6 @@ typedef struct PVRSRV_BRIDGE_OUT_PHYSMEMEXPORTDMABUF_TAG
 	IMG_INT iFd;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_PHYSMEMEXPORTDMABUF;
-
-
-/*******************************************
-            PhysmemImportSparseDmaBuf          
- *******************************************/
-
-/* Bridge in structure for PhysmemImportSparseDmaBuf */
-typedef struct PVRSRV_BRIDGE_IN_PHYSMEMIMPORTSPARSEDMABUF_TAG
-{
-	IMG_INT ifd;
-	PVRSRV_MEMALLOCFLAGS_T uiFlags;
-	IMG_DEVMEM_SIZE_T uiChunkSize;
-	IMG_UINT32 ui32NumPhysChunks;
-	IMG_UINT32 ui32NumVirtChunks;
-	IMG_UINT32 * pui32MappingTable;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_PHYSMEMIMPORTSPARSEDMABUF;
-
-/* Bridge out structure for PhysmemImportSparseDmaBuf */
-typedef struct PVRSRV_BRIDGE_OUT_PHYSMEMIMPORTSPARSEDMABUF_TAG
-{
-	IMG_HANDLE hPMRPtr;
-	IMG_DEVMEM_SIZE_T uiSize;
-	IMG_DEVMEM_ALIGN_T sAlign;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_PHYSMEMIMPORTSPARSEDMABUF;
 
 
 #endif /* COMMON_DMABUF_BRIDGE_H */

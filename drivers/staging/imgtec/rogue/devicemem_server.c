@@ -59,8 +59,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "osfunc.h"
 #include "lock.h"
 
-#include "rgx_bvnc_defs_km.h"
-
 #if defined(SUPPORT_BUFFER_SYNC)
 #include <linux/sched.h>
 #include "pvr_buffer_sync.h"
@@ -83,12 +81,6 @@ struct _DEVMEMINT_CTX_
        memory context is created and they need to store private data that
        is associated with the context. */
     IMG_HANDLE hPrivData;
-
-	/* The following tracks UM applications that need to be notified of a
-	 * page fault */
-	DLLIST_NODE sProcessNotifyListHead;
-	/* The following is a node for the list of registered devmem contexts */
-	DLLIST_NODE sPageFaultNotifyListElem;
 };
 
 struct _DEVMEMINT_CTX_EXPORT_ 
@@ -120,12 +112,6 @@ struct _DEVMEMINT_MAPPING_
     IMG_UINT32 uiNumPages;
 };
 
-struct _DEVMEMINT_PF_NOTIFY_
-{
-	IMG_UINT32  ui32PID;
-	DLLIST_NODE sProcessNotifyListElem;
-};
-
 /*************************************************************************/ /*!
 @Function       _DevmemIntCtxAcquire
 @Description    Acquire a reference to the provided device memory context.
@@ -149,25 +135,7 @@ static INLINE void _DevmemIntCtxRelease(DEVMEMINT_CTX *psDevmemCtx)
 	{
 		/* The last reference has gone, destroy the context */
 		PVRSRV_DEVICE_NODE *psDevNode = psDevmemCtx->psDevNode;
-		DLLIST_NODE *psNode, *psNodeNext;
-
-		/* If there are any PIDs registered for page fault notification.
-		 * Loop through the registered PIDs and free each one */
-		dllist_foreach_node(&(psDevmemCtx->sProcessNotifyListHead), psNode, psNodeNext)
-		{
-			DEVMEMINT_PF_NOTIFY *psNotifyNode =
-				IMG_CONTAINER_OF(psNode, DEVMEMINT_PF_NOTIFY, sProcessNotifyListElem);
-			dllist_remove_node(psNode);
-			OSFreeMem(psNotifyNode);
-		}
-
-		/* If this context is in the list registered for a debugger, remove
-		 * from that list */
-		if (dllist_node_is_in_list(&psDevmemCtx->sPageFaultNotifyListElem))
-		{
-			dllist_remove_node(&psDevmemCtx->sPageFaultNotifyListElem);
-		}
-
+	
 		if (psDevNode->pfnUnregisterMemoryContext)
 		{
 			psDevNode->pfnUnregisterMemoryContext(psDevmemCtx->hPrivData);
@@ -344,25 +312,20 @@ DevmemIntCtxCreate(CONNECTION_DATA *psConnection,
                    PVRSRV_DEVICE_NODE *psDeviceNode,
                    IMG_BOOL bKernelMemoryCtx,
                    DEVMEMINT_CTX **ppsDevmemCtxPtr,
-                   IMG_HANDLE *hPrivData,
-                   IMG_UINT32 *pui32CPUCacheLineSize
-                   )
+                   IMG_HANDLE *hPrivData)
 {
 	PVRSRV_ERROR eError;
 	DEVMEMINT_CTX *psDevmemCtx;
 	IMG_HANDLE hPrivDataInt = NULL;
 	MMU_DEVICEATTRIBS      *psMMUDevAttrs;
 
-	if((psDeviceNode->pfnCheckDeviceFeature) && \
-			psDeviceNode->pfnCheckDeviceFeature(psDeviceNode, RGX_FEATURE_MIPS_BIT_MASK))
-	{
-		psMMUDevAttrs = bKernelMemoryCtx ? psDeviceNode->psFirmwareMMUDevAttrs:
-											psDeviceNode->psMMUDevAttrs;
-	}else
-	{
-		psMMUDevAttrs = psDeviceNode->psMMUDevAttrs;
-		PVR_UNREFERENCED_PARAMETER(bKernelMemoryCtx);
-	}
+#if defined(RGX_FEATURE_META)
+	psMMUDevAttrs = psDeviceNode->psMMUDevAttrs;
+	PVR_UNREFERENCED_PARAMETER(bKernelMemoryCtx);
+#else
+	psMMUDevAttrs = bKernelMemoryCtx ? psDeviceNode->psFirmwareMMUDevAttrs:
+									   psDeviceNode->psMMUDevAttrs;
+#endif
 
 
 	PVR_DPF((PVR_DBG_MESSAGE, "%s", __FUNCTION__));
@@ -374,17 +337,17 @@ DevmemIntCtxCreate(CONNECTION_DATA *psConnection,
 	{
 		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
 		PVR_DPF ((PVR_DBG_ERROR, "%s: Alloc failed", __FUNCTION__));
-		goto fail_alloc;
+        	goto fail_alloc;
 	}
 
 	OSAtomicWrite(&psDevmemCtx->hRefCount, 1);
-	psDevmemCtx->psDevNode = psDeviceNode;
+   	psDevmemCtx->psDevNode = psDeviceNode;
 
 	/* Call down to MMU context creation */
 
-	eError = MMU_ContextCreate(psDeviceNode,
-	                           &psDevmemCtx->psMMUContext,
-	                           psMMUDevAttrs);
+   	eError = MMU_ContextCreate(psDeviceNode,
+                                   &psDevmemCtx->psMMUContext,
+                                   psMMUDevAttrs);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "%s: MMU_ContextCreate failed", __FUNCTION__));
@@ -407,23 +370,39 @@ DevmemIntCtxCreate(CONNECTION_DATA *psConnection,
 	*hPrivData = hPrivDataInt;
 	*ppsDevmemCtxPtr = psDevmemCtx;
 
-	/* Pass the CPU cache line size through the bridge to the user mode as it can't be queried in user mode.*/
-	*pui32CPUCacheLineSize = OSCPUCacheAttributeSize(PVR_DCACHE_LINE_SIZE);
-
-	/* Initialise the PID notify list */
-	dllist_init(&(psDevmemCtx->sProcessNotifyListHead));
-	psDevmemCtx->sPageFaultNotifyListElem.psNextNode = NULL;
-	psDevmemCtx->sPageFaultNotifyListElem.psPrevNode = NULL;
-
 	return PVRSRV_OK;
 
 fail_register:
-	MMU_ContextDestroy(psDevmemCtx->psMMUContext);
+    MMU_ContextDestroy(psDevmemCtx->psMMUContext);
 fail_mmucontext:
-	OSFreeMem(psDevmemCtx);
+	OSFREEMEM(psDevmemCtx);
 fail_alloc:
-	PVR_ASSERT(eError != PVRSRV_OK);
-	return eError;
+    PVR_ASSERT(eError != PVRSRV_OK);
+    return eError;
+}
+
+/*************************************************************************/ /*!
+@Function       DevmemIntCtxCreateCLS
+@Description    Creates and initialises a device memory context.
+@Return         valid Device Memory context handle - Success
+                PVRSRV_ERROR failure code
+*/ /**************************************************************************/
+PVRSRV_ERROR
+DevmemIntCtxCreateCLS(CONNECTION_DATA *psConnection,
+                      PVRSRV_DEVICE_NODE *psDeviceNode,
+                      IMG_BOOL bKernelMemoryCtx,
+                      DEVMEMINT_CTX **ppsDevmemCtxPtr,
+                      IMG_HANDLE *hPrivData,
+                      IMG_UINT32 *pui32CPUCacheLineSize)
+{
+	/* Pass the CPU cache line size through the bridge to the user mode as it can't be queried in user mode.*/
+	*pui32CPUCacheLineSize = OSCPUCacheAttributeSize(PVR_DCACHE_LINE_SIZE);
+
+	return DevmemIntCtxCreate(psConnection,
+	                          psDeviceNode,
+	                          bKernelMemoryCtx,
+	                          ppsDevmemCtxPtr,
+	                          hPrivData);
 }
 
 /*************************************************************************/ /*!
@@ -509,7 +488,7 @@ static PVRSRV_ERROR DevmemIntAllocDummyPage(DEVMEMINT_HEAP *psDevmemHeap)
 				u8Value,
 				bInitPage,
 #if	defined(PDUMP)
-				psDevNode->psMMUDevAttrs->pszMMUPxPDumpMemSpaceName,
+				psDevNode->pszMMUPxPDumpMemSpaceName,
 				DUMMY_PAGE,
 				&psDevNode->sDummyPage.hPdumpDummyPg,
 #endif
@@ -579,18 +558,6 @@ DevmemIntMapPages(DEVMEMINT_RESERVATION *psReservation,
 {
 	PVRSRV_ERROR eError;
 
-	if (psReservation->psDevmemHeap->uiLog2PageSize > PMR_GetLog2Contiguity(psPMR))
-	{
-		PVR_DPF ((PVR_DBG_ERROR,
-				"%s: Device heap and PMR have incompatible Log2Contiguity (%u - %u). "
-				"PMR contiguity must be a multiple of the heap contiguity!",
-				__func__,
-				psReservation->psDevmemHeap->uiLog2PageSize,
-				PMR_GetLog2Contiguity(psPMR) ));
-		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto e0;
-	}
-
 	eError = MMU_MapPages(psReservation->psDevmemHeap->psDevmemCtx->psMMUContext,
 	                      uiFlags,
 	                      sDevVAddrBase,
@@ -600,7 +567,6 @@ DevmemIntMapPages(DEVMEMINT_RESERVATION *psReservation,
 	                      NULL,
 	                      psReservation->psDevmemHeap->uiLog2PageSize);
 
-e0:
 	return eError;
 }
 
@@ -641,17 +607,6 @@ DevmemIntMapPMR(DEVMEMINT_HEAP *psDevmemHeap,
 	PVRSRV_DEVICE_NODE *psDevNode;
 	 PMR_FLAGS_T uiPMRFlags;
 
-	if (uiLog2Contiguity > PMR_GetLog2Contiguity(psPMR))
-	{
-		PVR_DPF ((PVR_DBG_ERROR,
-				"%s: Device heap and PMR have incompatible contiguity (%u - %u). "
-				"Heap contiguity must be a multiple of the heap contiguity!",
-				__func__,
-				uiLog2Contiguity,
-				PMR_GetLog2Contiguity(psPMR) ));
-		eError = PVRSRV_ERROR_INVALID_PARAMS;
-		goto e0;
-	}
 	psDevNode = psDevmemHeap->psDevmemCtx->psDevNode;
 
 	/* allocate memory to record the mapping info */
@@ -669,7 +624,8 @@ DevmemIntMapPMR(DEVMEMINT_HEAP *psDevmemHeap,
     ui32NumDevPages = 0xffffffffU & ( ( (uiAllocationSize - 1) >> uiLog2Contiguity) + 1);
     PVR_ASSERT(ui32NumDevPages << uiLog2Contiguity == uiAllocationSize);
 
-    eError = PMRLockSysPhysAddresses(psPMR);
+    eError = PMRLockSysPhysAddresses(psPMR,
+                                     uiLog2Contiguity);
     if (eError != PVRSRV_OK)
 	{
         goto e2;
@@ -691,11 +647,11 @@ DevmemIntMapPMR(DEVMEMINT_HEAP *psDevmemHeap,
 			 * As the allocation fails we need to fail the map request and
 			 * return appropriate error
 			 *
-			 * Allocation of dummy page is done after locking the pages for PMR physically
-			 * By implementing this way, the best case path of dummy page being most likely to be
-			 * allocated after physically locking down pages, is considered.
-			 * If the dummy page allocation fails, we do unlock the physical address and the impact
-			 * is a bit more in on demand mode of operation */
+			 * Wondering if we do dummy allocation first and then physically lock pages later.
+			 * But on further thought failure of dummy allocation has lesser chance than
+			 * failing of physically locking down of the pages.
+			 * Hence we unlock the locked pages if dummy allocation fails. yes this is 
+			 * time consuming but very unlikely to occur */
 			eError = DevmemIntAllocDummyPage(psDevmemHeap);
 			if(PVRSRV_OK != eError)
 			{
@@ -773,22 +729,21 @@ PVRSRV_ERROR
 DevmemIntUnmapPMR(DEVMEMINT_MAPPING *psMapping)
 {
     PVRSRV_ERROR eError;
-    DEVMEMINT_HEAP *psDevmemHeap = psMapping->psReservation->psDevmemHeap;
+    DEVMEMINT_HEAP *psDevmemHeap;
     /* device virtual address of start of allocation */
     IMG_DEV_VIRTADDR sAllocationDevVAddr;
     /* number of pages (device pages) that allocation spans */
     IMG_UINT32 ui32NumDevPages;
     IMG_BOOL bIsSparse = IMG_FALSE, bNeedBacking = IMG_FALSE;
+	PVRSRV_DEVICE_NODE *psDevNode;
 	PMR_FLAGS_T uiPMRFlags;
 #if defined(SUPPORT_BUFFER_SYNC)
-	PVRSRV_DEVICE_NODE *psDevNode = psDevmemHeap->psDevmemCtx->psDevNode;
 	bool bInterruptible = true;
 	unsigned long ulTimeout = MAX_SCHEDULE_TIMEOUT;
 	IMG_INT iErr;
 
 retry:
-	iErr = pvr_buffer_sync_wait(psDevNode->psBufferSyncContext,
-								psMapping->psPMR, bInterruptible, ulTimeout);
+	iErr = pvr_buffer_sync_wait(psMapping->psPMR, bInterruptible, ulTimeout);
 	if (iErr)
 	{
 		if (iErr == -ERESTARTSYS)
@@ -805,6 +760,9 @@ retry:
 		return PVRSRV_ERROR_STILL_MAPPED;
 	}
 #endif
+
+    psDevmemHeap = psMapping->psReservation->psDevmemHeap;
+	psDevNode = psDevmemHeap->psDevmemCtx->psDevNode;
 
     ui32NumDevPages = psMapping->uiNumPages;
     sAllocationDevVAddr = psMapping->psReservation->sBase;
@@ -967,25 +925,26 @@ DevmemIntHeapDestroy(
 }
 
 PVRSRV_ERROR
-DevmemIntChangeSparse(DEVMEMINT_HEAP *psDevmemHeap,
-                      PMR *psPMR,
-                      IMG_UINT32 ui32AllocPageCount,
-                      IMG_UINT32 *pai32AllocIndices,
-                      IMG_UINT32 ui32FreePageCount,
-                      IMG_UINT32 *pai32FreeIndices,
-                      SPARSE_MEM_RESIZE_FLAGS uiSparseFlags,
-                      PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                      IMG_DEV_VIRTADDR sDevVAddrBase,
-                      IMG_UINT64 sCpuVAddrBase)
+DeviceMemChangeSparseServer(DEVMEMINT_HEAP *psDevmemHeap,
+					PMR *psPMR,
+					IMG_UINT32 ui32AllocPageCount,
+					IMG_UINT32 *pai32AllocIndices,
+					IMG_UINT32 ui32FreePageCount,
+					IMG_UINT32 *pai32FreeIndices,
+					SPARSE_MEM_RESIZE_FLAGS uiSparseFlags,
+					PVRSRV_MEMALLOCFLAGS_T uiFlags,
+					IMG_DEV_VIRTADDR sDevVAddrBase,
+					IMG_UINT64 sCpuVAddrBase,
+					IMG_UINT32 *pui32Status)
 {
-	PVRSRV_ERROR eError;
+	PVRSRV_ERROR eError = ~PVRSRV_OK;
 
-	IMG_UINT32 uiLog2PageSize = PMR_GetLog2Contiguity(psPMR);
+	IMG_UINT32 uiLog2PageSize = GET_LOG2_PAGESIZE(),uiPageSize=0;
 
+	uiPageSize = (1 << uiLog2PageSize);
 	/*
 	 * The order of steps in which this request is done is given below. The order of
-	 * operations is very important in this case:
-	 *
+	 * operations is very important in this case
 	 * 1. The parameters are validated in function PMR_ChangeSparseMem below.
 	 * 	   A successful response indicates all the parameters are correct.
 	 * 	   In failure case we bail out from here with out processing further.
@@ -993,125 +952,125 @@ DevmemIntChangeSparse(DEVMEMINT_HEAP *psDevmemHeap,
 	 *    and the corresponding PMR status changes.
 	 *    when this call fails, it is ensured that the state of the PMR before is
 	 *    not disturbed. If it succeeds, then we can go ahead with the subsequent steps.
-	 * 3. Invalidate the GPU page table entries for the pages to be freed.
+	 * 3. Dewire the GPU page table entries for the pages to be freed.
 	 * 4. Write the GPU page table entries for the pages that got allocated.
 	 * 5. Change the corresponding CPU space map.
 	 *
 	 * The above steps can be selectively controlled using flags.
 	 */
+	*pui32Status = PVRSRV_OK;
 
 	{
-		if (uiSparseFlags & (SPARSE_REMAP_MEM | SPARSE_RESIZE_BOTH))
+		if(uiSparseFlags & (SPARSE_REMAP_MEM | SPARSE_RESIZE_BOTH))
 		{
-			/* Do the PMR specific changes first */
+			/*
+			 * Do the PMR specific changes first
+			 */
 			eError = PMR_ChangeSparseMem(psPMR,
-			                             ui32AllocPageCount,
-			                             pai32AllocIndices,
-			                             ui32FreePageCount,
-			                             pai32FreeIndices,
-			                             uiSparseFlags);
-			if (PVRSRV_OK != eError)
+					ui32AllocPageCount,
+					pai32AllocIndices,
+					ui32FreePageCount,
+					pai32FreeIndices,
+					uiSparseFlags,
+					pui32Status);
+			if(PVRSRV_OK != eError)
 			{
-				PVR_DPF((PVR_DBG_MESSAGE,
-				        "%s: Failed to do PMR specific changes.",
-				        __func__));
-				goto e0;
+				PVR_DPF((PVR_DBG_MESSAGE,"%s: Failed to do PMR specific changes......",__func__));
+				goto SparseChangeError;
 			}
 
-			/* Invalidate the page table entries for the free pages.
-			 * Optimisation later would be not to touch the ones that gets re-mapped */
-			if ((0 != ui32FreePageCount) && (uiSparseFlags & SPARSE_RESIZE_FREE))
+			/*
+			 * Dewire the page table entries for the free pages
+			 * Optimization later would be not to touch the ones that gets re-mapped
+			 */
+			if((0 != ui32FreePageCount) && (uiSparseFlags & SPARSE_RESIZE_FREE))
 			{
 				PMR_FLAGS_T uiPMRFlags;
 				IMG_BOOL bNeedBacking = IMG_FALSE;
-
 				/*Get the flags*/
 				uiPMRFlags = PMR_Flags(psPMR);
 				bNeedBacking = PVRSRV_IS_SPARSE_DUMMY_BACKING_REQUIRED(uiPMRFlags);
 
-				if (SPARSE_REMAP_MEM != (uiSparseFlags & SPARSE_REMAP_MEM))
+				if(SPARSE_REMAP_MEM != (uiSparseFlags & SPARSE_REMAP_MEM))
 				{
-					/* Unmap the pages and mark them invalid in the MMU PTE */
+					/*Unmap the pages and mark them invalid in the MMU PTE */
 					MMU_UnmapPages (psDevmemHeap->psDevmemCtx->psMMUContext,
-					                uiFlags,
-					                sDevVAddrBase,
-					                ui32FreePageCount,
-					                pai32FreeIndices,
-					                uiLog2PageSize,
-					                bNeedBacking);
+							uiFlags,
+							sDevVAddrBase,
+							ui32FreePageCount,
+							pai32FreeIndices,
+							uiLog2PageSize,
+							bNeedBacking);
 				}
 			}
 
-			/* Wire the pages tables that got allocated */
-			if ((0 != ui32AllocPageCount) && (uiSparseFlags & SPARSE_RESIZE_ALLOC))
+			/*
+			 *  Wire the pages tables that got allocated
+			 */
+			if((0 != ui32AllocPageCount) && (uiSparseFlags & SPARSE_RESIZE_ALLOC))
 			{
-				/* Map the pages and mark them Valid in the MMU PTE */
+				/*Map the pages and mark them Valid in the MMU PTE */
 				eError = MMU_MapPages (psDevmemHeap->psDevmemCtx->psMMUContext,
-				                       uiFlags,
-				                       sDevVAddrBase,
-				                       psPMR,
-				                       0,
-				                       ui32AllocPageCount,
-				                       pai32AllocIndices,
-				                       uiLog2PageSize);
+						uiFlags,
+						sDevVAddrBase,
+						psPMR,
+						0,
+						ui32AllocPageCount,
+						pai32AllocIndices,
+						uiLog2PageSize);
 
-				if (PVRSRV_OK != eError)
+				if(PVRSRV_OK != eError)
 				{
-					PVR_DPF((PVR_DBG_MESSAGE,
-					        "%s: Failed to map alloc indices.",
-					        __func__));
-					goto e0;
+					PVR_DPF((PVR_DBG_MESSAGE,"%s: Failed to map alloc indices......",__func__));
+					goto SparseChangeError;
 				}
 			}
 			
-			/* Currently only used for debug */
-			if (SPARSE_REMAP_MEM == (uiSparseFlags & SPARSE_REMAP_MEM))
+			/*Should this be a debug feature or ever used in real scenario */
+			if(SPARSE_REMAP_MEM == (uiSparseFlags & SPARSE_REMAP_MEM))
 			{
 				eError = MMU_MapPages (psDevmemHeap->psDevmemCtx->psMMUContext,
-				                       uiFlags,
-				                       sDevVAddrBase,
-				                       psPMR,
-				                       0,
-				                       ui32AllocPageCount,
-				                       pai32FreeIndices,
-				                       uiLog2PageSize);
-				if (PVRSRV_OK != eError)
+						uiFlags,
+						sDevVAddrBase,
+						psPMR,
+						0,
+						ui32AllocPageCount,
+						pai32FreeIndices,
+						uiLog2PageSize);
+				if(PVRSRV_OK != eError)
 				{
-					PVR_DPF((PVR_DBG_MESSAGE,
-					        "%s: Failed to map Free indices.",
-					        __func__));
-					goto e0;
+					PVR_DPF((PVR_DBG_MESSAGE,"%s: Failed to map Free indices......",__func__));
+					goto SparseChangeError;
 				}
 			}
 		}
 
 	}
 #ifndef PVRSRV_UNMAP_ON_SPARSE_CHANGE
-	/* Do the changes in sparse on to the CPU virtual map accordingly */
-	if (uiSparseFlags & SPARSE_MAP_CPU_ADDR)
+	/*
+	 * Do the changes in sparse on to the CPU virtual map accordingly
+	 */
+
+	if(uiSparseFlags & SPARSE_MAP_CPU_ADDR)
 	{
-		if (sCpuVAddrBase != 0)
+		if(sCpuVAddrBase != 0)
 		{
 			eError = PMR_ChangeSparseMemCPUMap(psPMR,
-			                                   sCpuVAddrBase,
-			                                   ui32AllocPageCount,
-			                                   pai32AllocIndices,
-			                                   ui32FreePageCount,
-			                                   pai32FreeIndices);
-			if (PVRSRV_OK != eError)
+												sCpuVAddrBase,
+												ui32AllocPageCount,
+												pai32AllocIndices,
+												ui32FreePageCount,
+												pai32FreeIndices,
+												pui32Status);
+			if(PVRSRV_OK != eError)
 			{
-				PVR_DPF((PVR_DBG_MESSAGE,
-				        "%s: Failed to map to CPU addr space.",
-				        __func__));
-				goto e0;
+				PVR_DPF((PVR_DBG_MESSAGE,"%s: Failed to map to CPU addr space......",__func__));
+				goto SparseChangeError;
 			}
 		}
 	}
 #endif
-
-	return PVRSRV_OK;
-
-e0:
+	SparseChangeError:
 	return eError;	
 }
 
@@ -1140,48 +1099,12 @@ DevmemIntCtxDestroy(
 	return PVRSRV_OK;
 }
 
-PVRSRV_ERROR DevmemIntIsVDevAddrValid(CONNECTION_DATA * psConnection,
-                                      PVRSRV_DEVICE_NODE *psDevNode,
-                                      DEVMEMINT_CTX *psDevMemContext,
+PVRSRV_ERROR DevmemIntIsVDevAddrValid(DEVMEMINT_CTX *psDevMemContext,
                                       IMG_DEV_VIRTADDR sDevAddr)
 {
-	IMG_UINT32 i, j, uiLog2HeapPageSize = 0;
-	DEVICE_MEMORY_INFO *psDinfo = &psDevNode->sDevMemoryInfo;
-	DEVMEM_HEAP_CONFIG *psConfig = psDinfo->psDeviceMemoryHeapConfigArray;
-
-	IMG_BOOL bFound = IMG_FALSE;
-
-	for (i = 0;
-	     i < psDinfo->uiNumHeapConfigs && !bFound;
-	     i++)
-	{
-		for (j = 0;
-		     j < psConfig[i].uiNumHeaps  && !bFound;
-		     j++)
-		{
-			IMG_DEV_VIRTADDR uiBase =
-					psConfig[i].psHeapBlueprintArray[j].sHeapBaseAddr;
-			IMG_DEVMEM_SIZE_T uiSize =
-					psConfig[i].psHeapBlueprintArray[j].uiHeapLength;
-
-			if ( (sDevAddr.uiAddr >= uiBase.uiAddr) &&
-			     (sDevAddr.uiAddr < (uiBase.uiAddr + uiSize)))
-			{
-				uiLog2HeapPageSize =
-						psConfig[i].psHeapBlueprintArray[j].uiLog2DataPageSize;
-				bFound = IMG_TRUE;
-			}
-		}
-	}
-
-	if (uiLog2HeapPageSize == 0)
-	{
-		return PVRSRV_ERROR_INVALID_GPU_ADDR;
-	}
-
-	return MMU_IsVDevAddrValid(psDevMemContext->psMMUContext,
-	                           uiLog2HeapPageSize,
-	                           sDevAddr) ? PVRSRV_OK : PVRSRV_ERROR_INVALID_GPU_ADDR;
+    return MMU_IsVDevAddrValid(psDevMemContext->psMMUContext,
+                               GET_LOG2_PAGESIZE(),
+                               sDevAddr) ? PVRSRV_OK : PVRSRV_ERROR_INVALID_GPU_ADDR;
 }
 
 
@@ -1272,179 +1195,19 @@ DevmemIntAcquireRemoteCtx(PMR *psPMR,
 }
 
 /*************************************************************************/ /*!
-@Function       DevmemIntRegisterPFNotify
-@Description    Registers a PID to be notified when a page fault occurs on a
-                specific device memory context.
-@Input          psDevmemCtx    The context to be notified about.
-@Input          ui32PID        The PID of the process that would like to be
-                               notified.
-@Input          bRegister      If true, register. If false, de-register.
-@Return         PVRSRV_ERROR.
+@Function       DevmemSLCFlushInvalRequest
+@Description    Requests a SLC Flush and Invalidate
+@Input          psDeviceNode    Device node
+@Input          psPmr           PMR
+@Return         PVRSRV_OK
 */ /**************************************************************************/
-PVRSRV_ERROR DevmemIntRegisterPFNotifyKM(DEVMEMINT_CTX *psDevmemCtx,
-                                         IMG_INT32     ui32PID,
-                                         IMG_BOOL      bRegister)
+PVRSRV_ERROR
+DevmemSLCFlushInvalRequest(PVRSRV_DEVICE_NODE *psDeviceNode,
+							PMR *psPmr)
 {
-	PVRSRV_DEVICE_NODE *psDevNode;
-	DLLIST_NODE         *psNode, *psNodeNext;
-	DEVMEMINT_PF_NOTIFY *psNotifyNode;
-	IMG_BOOL            bPresent = IMG_FALSE;
 
-	if (psDevmemCtx == NULL)
-	{
-		PVR_ASSERT(!"Devmem Context Missing");
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	psDevNode = psDevmemCtx->psDevNode;
-
-	if (bRegister)
-	{
-		/* If this is the first PID in the list, the device memory context
-		 * needs to be registered for notification */
-		if (dllist_is_empty(&psDevmemCtx->sProcessNotifyListHead))
-		{
-			dllist_add_to_tail(&psDevNode->sMemoryContextPageFaultNotifyListHead,
-			                   &psDevmemCtx->sPageFaultNotifyListElem);
-		}
-	}
-
-	/* Loop through the registered PIDs and check whether this one is
-	 * present */
-	dllist_foreach_node(&(psDevmemCtx->sProcessNotifyListHead), psNode, psNodeNext)
-	{
-		psNotifyNode = IMG_CONTAINER_OF(psNode, DEVMEMINT_PF_NOTIFY, sProcessNotifyListElem);
-
-		if (psNotifyNode->ui32PID == ui32PID)
-		{
-			bPresent = IMG_TRUE;
-			break;
-		}
-	}
-
-	if (bRegister == IMG_TRUE)
-	{
-		if (bPresent)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Trying to register a PID that is already registered",
-			         __func__));
-			return PVRSRV_ERROR_PID_ALREADY_REGISTERED;
-		}
-
-		psNotifyNode = OSAllocMem(sizeof(*psNotifyNode));
-		if (psNotifyNode == NULL)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Unable to allocate memory for the notify list",
-			          __func__));
-			return PVRSRV_ERROR_OUT_OF_MEMORY;
-		}
-		psNotifyNode->ui32PID = ui32PID;
-		dllist_add_to_tail(&(psDevmemCtx->sProcessNotifyListHead), &(psNotifyNode->sProcessNotifyListElem));
-	}
-	else
-	{
-		if (!bPresent)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Trying to unregister a PID that is not registered",
-			         __func__));
-			return PVRSRV_ERROR_PID_NOT_REGISTERED;
-		}
-		dllist_remove_node(psNode);
-		psNotifyNode = IMG_CONTAINER_OF(psNode, DEVMEMINT_PF_NOTIFY, sProcessNotifyListElem);
-		OSFreeMem(psNotifyNode);
-	}
-
-	if (!bRegister)
-	{
-		/* If the last process in the list is being unregistered, then also
-		 * unregister the device memory context from the notify list. */
-		if (dllist_is_empty(&psDevmemCtx->sProcessNotifyListHead))
-		{
-			dllist_remove_node(&psDevmemCtx->sPageFaultNotifyListElem);
-		}
-	}
-
-	return PVRSRV_OK;
-}
-
-/*************************************************************************/ /*!
-@Function       DevmemIntPFNotify
-@Description    Notifies any processes that have registered themselves to be
-                notified when a page fault happens on a specific device memory
-                context.
-@Input          *psDevNode           The device node.
-@Input          ui64FaultedPCAddress The page catalogue address that faulted.
-@Return         PVRSRV_ERROR
-*/ /**************************************************************************/
-PVRSRV_ERROR DevmemIntPFNotify(PVRSRV_DEVICE_NODE *psDevNode,
-                               IMG_UINT64         ui64FaultedPCAddress)
-{
-	DLLIST_NODE         *psNode, *psNodeNext;
-	DEVMEMINT_PF_NOTIFY *psNotifyNode;
-	PVRSRV_ERROR        eError;
-	DEVMEMINT_CTX       *psDevmemCtx = NULL;
-	IMG_BOOL            bFailed = IMG_FALSE;
-
-	if (dllist_is_empty(&(psDevNode->sMemoryContextPageFaultNotifyListHead)))
-	{
-		return PVRSRV_OK;
-	}
-
-	dllist_foreach_node(&(psDevNode->sMemoryContextPageFaultNotifyListHead), psNode, psNodeNext)
-	{
-		DEVMEMINT_CTX *psThisContext =
-			IMG_CONTAINER_OF(psNode, DEVMEMINT_CTX, sPageFaultNotifyListElem);
-		IMG_DEV_PHYADDR sPCDevPAddr;
-
-		eError = MMU_AcquireBaseAddr(psThisContext->psMMUContext, &sPCDevPAddr);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Failed to Acquire Base Address (%s)",
-			         __func__,
-			         PVRSRVGetErrorStringKM(eError)));
-			return eError;
-		}
-
-		if (sPCDevPAddr.uiAddr == ui64FaultedPCAddress)
-		{
-			psDevmemCtx = psThisContext;
-			break;
-		}
-	}
-
-	if (psDevmemCtx == NULL)
-	{
-		/* Not found, just return */
-		return PVRSRV_OK;
-	}
-
-	/* Loop through each registered PID and send a signal to the process */
-	dllist_foreach_node(&(psDevmemCtx->sProcessNotifyListHead), psNode, psNodeNext)
-	{
-		psNotifyNode = IMG_CONTAINER_OF(psNode, DEVMEMINT_PF_NOTIFY, sProcessNotifyListElem);
-
-		eError = OSDebugSignalPID(psNotifyNode->ui32PID);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Unable to signal process for PID: %u",
-			         __func__,
-			         psNotifyNode->ui32PID));
-
-			PVR_ASSERT(!"Unable to signal process");
-
-			bFailed = IMG_TRUE;
-		}
-	}
-
-	if (bFailed)
-	{
-		return PVRSRV_ERROR_SIGNAL_FAILED;
-	}
+	/* invoke SLC flush and invalidate request */
+	psDeviceNode->pfnSLCCacheInvalidateRequest(psDeviceNode, psPmr);
 
 	return PVRSRV_OK;
 }

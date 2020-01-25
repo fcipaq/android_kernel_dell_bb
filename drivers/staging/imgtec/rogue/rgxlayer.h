@@ -63,21 +63,18 @@ extern "C" {
 #include "img_defs.h"
 #include "img_types.h"
 #include "pvrsrv_error.h" /* includes pvrsrv_errors.h */
-#if defined(SUPPORT_KERNEL_SRVINIT)
-#include "rgx_bvnc_defs_km.h"
-#endif
 
 #include "rgx_firmware_processor.h"
 /* includes:
- * rgx_meta.h and rgx_mips.h,
+ * rgx_meta.h or rgx_mips.h,
  * rgxdefs_km.h,
- * rgx_cr_defs_km.h (under SUPPORT_KERNEL_SRVINIT),
+ * rgx_cr_defs_km.h,
  * RGX_BVNC_CORE_KM_HEADER (rgxcore_km_B.V.N.C.h),
  * RGX_BNC_CONFIG_KM_HEADER (rgxconfig_km_B.V.N.C.h)
  */
 
 #include "rgx_fwif_shared.h"
-/* FIXME required because of RGXFWIF_DEV_VIRTADDR but this header
+/* Required because of RGXFWIF_DEV_VIRTADDR but this header
  * includes a lot of other headers..  RGXFWIF_DEV_VIRTADDR must be moved
  * somewhere else (either img_types.h or a new header) */
 
@@ -140,8 +137,8 @@ void RGXMemSet(const void *hPrivate,
 ******************************************************************************/
 IMG_INTERNAL
 void RGXCommentLogInit(const void *hPrivate,
-                       const IMG_CHAR *pszString,
-                       ...) __printf(2, 3);
+                       IMG_CHAR *pszString,
+                       ...) IMG_FORMAT_PRINTF(2, 3);
 
 /*!
 *******************************************************************************
@@ -159,56 +156,8 @@ void RGXCommentLogInit(const void *hPrivate,
 ******************************************************************************/
 IMG_INTERNAL
 void RGXErrorLogInit(const void *hPrivate,
-                     const IMG_CHAR *pszString,
-                     ...) __printf(2, 3);
-
-#if defined(SUPPORT_KERNEL_SRVINIT)
-/*!
-*******************************************************************************
-
- @Function       RGXDeviceHasFeatureInit
-
- @Description    Checks if a device has a particular feature
-
- @Input          hPrivate     : Implementation specific data
- @Input          ui64Feature  : Feature to check
-
- @Return         IMG_TRUE if the given feature is available, IMG_FALSE otherwise
-
-******************************************************************************/
-IMG_INTERNAL
-IMG_BOOL RGXDeviceHasFeatureInit(const void *hPrivate, IMG_UINT64 ui64Feature);
-
-/*!
-*******************************************************************************
-
- @Function       RGXDeviceHasErnBrnInit
-
- @Description    Checks if a device has a particular errata
-
- @Input          hPrivate     : Implementation specific data
- @Input          ui64ErnsBrns : Flags to check
-
- @Return         IMG_TRUE if the given errata is available, IMG_FALSE otherwise
-
-******************************************************************************/
-IMG_BOOL RGXDeviceHasErnBrnInit(const void *hPrivate, IMG_UINT64 ui64ErnsBrns);
-#endif
-
-/*!
-*******************************************************************************
-
- @Function       RGXGetFWCorememSize
-
- @Description    Get the FW coremem size
-
- @Input          hPrivate   : Implementation specific data
-
- @Return         FW coremem size
-
-******************************************************************************/
-IMG_INTERNAL
-IMG_UINT32 RGXGetFWCorememSize(const void *hPrivate);
+                     IMG_CHAR *pszString,
+                     ...) IMG_FORMAT_PRINTF(2, 3);
 
 
 #if defined (__cplusplus)

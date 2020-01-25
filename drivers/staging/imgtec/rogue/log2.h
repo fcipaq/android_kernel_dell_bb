@@ -192,10 +192,10 @@ static INLINE uint32_t ExactLog2(uint32_t n)
 		{ 0xAAAAAAAA, 0xCCCCCCCC, 0xF0F0F0F0, 0xFF00FF00, 0xFFFF0000};
 	uint32_t r = (n & b[0]) != 0;
 
-	r |= (uint32_t) ((n & b[4]) != 0) << 4;
-	r |= (uint32_t) ((n & b[3]) != 0) << 3;
-	r |= (uint32_t) ((n & b[2]) != 0) << 2;
-	r |= (uint32_t) ((n & b[1]) != 0) << 1;
+	r |= ((n & b[4]) != 0) << 4;
+	r |= ((n & b[3]) != 0) << 3;
+	r |= ((n & b[2]) != 0) << 2;
+	r |= ((n & b[1]) != 0) << 1;
 
 	return r;
 }
@@ -213,11 +213,11 @@ static INLINE uint32_t ExactLog2_64(uint64_t n)
 		  0xFFFF0000FFFF0000ULL, 0xFFFFFFFF00000000ULL };
 	uint32_t r = (n & b[0]) != 0;
 
-	r |= (uint32_t) ((n & b[5]) != 0) << 5;
-	r |= (uint32_t) ((n & b[4]) != 0) << 4;
-	r |= (uint32_t) ((n & b[3]) != 0) << 3;
-	r |= (uint32_t) ((n & b[2]) != 0) << 2;
-	r |= (uint32_t) ((n & b[1]) != 0) << 1;
+	r |= ((n & b[5]) != 0) << 5;
+	r |= ((n & b[4]) != 0) << 4;
+	r |= ((n & b[3]) != 0) << 3;
+	r |= ((n & b[2]) != 0) << 2;
+	r |= ((n & b[1]) != 0) << 1;
 
 	return r;
 }

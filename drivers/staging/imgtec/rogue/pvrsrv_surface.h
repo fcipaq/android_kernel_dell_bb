@@ -1,10 +1,10 @@
 /*************************************************************************/ /*!
 @File
 @Title          Device class external
+@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @Description    Defines DC specific structures which are externally visible
                 (i.e. visible to clients of services), but are also required
                 within services.
-@Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -47,153 +47,93 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define _PVRSRV_SURFACE_H_
 
 #include "img_types.h"
-#include <powervr/buffer_attribs.h>
+#include "fbc_types.h"
 
-#define PVRSRV_SURFACE_TRANSFORM_NONE      (0 << 0)		/*!< No transformation */
-#define PVRSRV_SURFACE_TRANSFORM_FLIP_H    (1 << 0)		/*!< Flip horizontally */
-#define PVRSRV_SURFACE_TRANSFORM_FLIP_V    (1 << 1)		/*!< Flip vertically   */
-#define PVRSRV_SURFACE_TRANSFORM_ROT_90    (1 << 2)							/*!< Rotate  90 degree clockwise */
-#define PVRSRV_SURFACE_TRANSFORM_ROT_180   ((1 << 0) + (1 << 1))			/*!< Rotate 180 degree clockwise */
-#define PVRSRV_SURFACE_TRANSFORM_ROT_270   ((1 << 0) + (1 << 1) + (1 << 2))	/*!< Rotate 270 degree clockwise */
+#define PVRSRV_SURFACE_TRANSFORM_NONE	   (0 << 0)
+#define PVRSRV_SURFACE_TRANSFORM_FLIP_H    (1 << 0)
+#define PVRSRV_SURFACE_TRANSFORM_FLIP_V    (1 << 1)
+#define PVRSRV_SURFACE_TRANSFORM_ROT_90    (1 << 2)
+#define PVRSRV_SURFACE_TRANSFORM_ROT_180   ((1 << 0) + (1 << 1))
+#define PVRSRV_SURFACE_TRANSFORM_ROT_270   ((1 << 0) + (1 << 1) + (1 << 2))
 
-#define PVRSRV_SURFACE_BLENDING_NONE       0	/*!< Use no blending       */
-#define PVRSRV_SURFACE_BLENDING_PREMULT    1	/*!< Use blending with pre-multiplier*/
-#define PVRSRV_SURFACE_BLENDING_COVERAGE   2	/*!< Use coverage blending */
+#define PVRSRV_SURFACE_BLENDING_NONE	   0
+#define PVRSRV_SURFACE_BLENDING_PREMULT	   1
+#define PVRSRV_SURFACE_BLENDING_COVERAGE   2
 
-/*!
- *	Modes of memory layouts for surfaces.
- *
- *   Enum: #_PVRSRV_SURFACE_MEMLAYOUT_
- *   Typedef: ::PVRSRV_SURFACE_MEMLAYOUT
- */
 typedef enum _PVRSRV_SURFACE_MEMLAYOUT_  {
 	PVRSRV_SURFACE_MEMLAYOUT_STRIDED = 0,		/*!< Strided memory buffer */
-	PVRSRV_SURFACE_MEMLAYOUT_FBC,				/*!< Compressed frame buffer */
-	PVRSRV_SURFACE_MEMLAYOUT_BIF_PAGE_TILED,	/*!< Buffer Interface page tiled buffer */
+	PVRSRV_SURFACE_MEMLAYOUT_FBC,				/*!< Frame buffer compressed buffer */
+	PVRSRV_SURFACE_MEMLAYOUT_BIF_PAGE_TILED,	/*!< BIF page tiled buffer */
 } PVRSRV_SURFACE_MEMLAYOUT;
 
-/*!
- * Frame Buffer Compression layout.
- * Defines the FBC mode to use.
- *
- *   Structure: #_PVRSRV_SURFACE_FBC_LAYOUT_
- *   Typedef: ::PVRSRV_SURFACE_FBC_LAYOUT
- */
 typedef struct _PVRSRV_SURFACE_FBC_LAYOUT_ {
-	/*! The compression mode for this surface*/
-	IMG_FB_COMPRESSION	eFBCompressionMode;
+	FB_COMPRESSION	eFBCompressionMode;
 } PVRSRV_SURFACE_FBC_LAYOUT;
 
-/*!
- * Pixel and memory format of a surface
- *
- *   Structure: #_PVRSRV_SURFACE_FORMAT_
- *   Typedef: ::PVRSRV_SURFACE_FORMAT
- */
 typedef struct _PVRSRV_SURFACE_FORMAT_
 {
-	/*! Enum value of type IMG_PIXFMT for the pixel format */
 	IMG_UINT32					ePixFormat;
-
-	/*! Enum surface memory layout */
 	PVRSRV_SURFACE_MEMLAYOUT	eMemLayout;
-
-	/*! Special layout options for the surface.
-	 * Needs services support.
-	 * Depends on eMemLayout.*/
 	union {
 		PVRSRV_SURFACE_FBC_LAYOUT	sFBCLayout;
 	} u;
 } PVRSRV_SURFACE_FORMAT;
 
-/*!
- * Width and height of a surface
- *
- *   Structure: #_PVRSRV_SURFACE_DIMS_
- *   Typedef: ::PVRSRV_SURFACE_DIMS
- */
 typedef struct _PVRSRV_SURFACE_DIMS_
 {
-	IMG_UINT32		ui32Width;		/*!< Width in pixels*/
-	IMG_UINT32		ui32Height;		/*!< Height in pixels*/
+	IMG_UINT32		ui32Width;
+	IMG_UINT32		ui32Height;
 } PVRSRV_SURFACE_DIMS;
 
-/*!
- * Dimension and format details of a surface
- *
- *   Structure: #_PVRSRV_SURFACE_INFO_
- *   Typedef: ::PVRSRV_SURFACE_INFO
- */
 typedef struct _PVRSRV_SURFACE_INFO_
 {
-	PVRSRV_SURFACE_DIMS		sDims;		/*!< Width and height */
-	PVRSRV_SURFACE_FORMAT	sFormat;	/*!< Memory format */
+	PVRSRV_SURFACE_DIMS		sDims;
+	PVRSRV_SURFACE_FORMAT	sFormat;
 } PVRSRV_SURFACE_INFO;
 
-/*!
- * Defines a rectangle on a surface
- *
- *   Structure: #_PVRSRV_SURFACE_RECT_
- *   Typedef: ::PVRSRV_SURFACE_RECT
- */
 typedef struct _PVRSRV_SURFACE_RECT_
 {
-	IMG_INT32				i32XOffset;	/*!< X offset from origin in pixels */
-	IMG_INT32				i32YOffset;	/*!< Y offset from origin in pixels */
-	PVRSRV_SURFACE_DIMS		sDims;		/*!< Rectangle dimensions */
+	IMG_INT32				i32XOffset;
+	IMG_INT32				i32YOffset;
+	PVRSRV_SURFACE_DIMS		sDims;
 } PVRSRV_SURFACE_RECT;
 
-/*!
- * Surface configuration details
- *
- *   Structure: #_PVRSRV_SURFACE_CONFIG_INFO_
- *   Typedef: ::PVRSRV_SURFACE_CONFIG_INFO
- */
 typedef struct _PVRSRV_SURFACE_CONFIG_INFO_
 {
-	/*! Crop applied to surface (BEFORE transformation) */
+	/*!< Crop applied to surface (BEFORE transformation) */
 	PVRSRV_SURFACE_RECT		sCrop;
 
-	/*! Region of screen to display surface in (AFTER scaling) */
+	/*!< Region of screen to display surface in (AFTER scaling) */
 	PVRSRV_SURFACE_RECT		sDisplay;
 
-	/*! Surface transformation none/flip/rotate.
-	 * Use PVRSRV_SURFACE_TRANSFORM_xxx macros
-	 */
+	/*!< Surface rotation / flip / mirror */
 	IMG_UINT32				ui32Transform;
 
-	/*! Alpha blending mode e.g. none/premult/coverage.
-	 * Use PVRSRV_SURFACE_BLENDING_xxx macros
-	 */
+	/*!< Alpha blending mode e.g. none / premult / coverage */
 	IMG_UINT32				eBlendType;
 
-	/*! Custom data for the display engine */
+	/*!< Custom data for the display engine */
 	IMG_UINT32				ui32Custom;
 
-	/*! Alpha value for this plane */
+	/*!< Plane alpha */
 	IMG_UINT8				ui8PlaneAlpha;
-
-	/*! Reserved for later use */
 	IMG_UINT8				ui8Reserved1[3];
 } PVRSRV_SURFACE_CONFIG_INFO;
 
-/*!
- * Contains information about a panel
- */
 typedef struct _PVRSRV_PANEL_INFO_
 {
-	PVRSRV_SURFACE_INFO sSurfaceInfo;		/*!< Panel surface details */
-	IMG_UINT32			ui32RefreshRate;	/*!< Panel refresh rate in Hz */
-	IMG_UINT32			ui32XDpi;			/*!< Panel DPI in x direction */
-	IMG_UINT32			ui32YDpi;			/*!< Panel DPI in y direction */
+	PVRSRV_SURFACE_INFO sSurfaceInfo;
+	IMG_UINT32			ui32RefreshRate;
+	IMG_UINT32			ui32XDpi;
+	IMG_UINT32			ui32YDpi;
 } PVRSRV_PANEL_INFO;
 
-/*!
+/*
 	Helper function to create a Config Info based on a Surface Info
 	to do a flip with no scale, transformation etc.
 */
 static INLINE void SurfaceConfigFromSurfInfo(PVRSRV_SURFACE_INFO *psSurfaceInfo,
-                                             PVRSRV_SURFACE_CONFIG_INFO *psConfigInfo)
+												 PVRSRV_SURFACE_CONFIG_INFO *psConfigInfo)
 {
 	psConfigInfo->sCrop.sDims = psSurfaceInfo->sDims;
 	psConfigInfo->sCrop.i32XOffset = 0;

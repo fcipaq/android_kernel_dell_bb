@@ -47,29 +47,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvrsrv_error.h"
 #include "img_types.h"
 #include "device.h"
-#include "pvr_notifier.h"
 #include "pvrsrv.h"
 #include "rgxdevice.h"
 
-
-/**
- * Debug utility macro for printing FW IRQ count and Last sampled IRQ count in 
- * LISR for each RGX FW thread.
- * Macro takes pointer to PVRSRV_RGXDEV_INFO as input.
- */
-#define RGXDEBUG_PRINT_IRQ_COUNT(psRgxDevInfo) \
-	do \
-	{ \
-		IMG_UINT32 ui32TID; \
-		for (ui32TID = 0; ui32TID < RGXFW_THREAD_NUM; ui32TID++) \
-		{ \
-			PVR_DPF((DBGPRIV_VERBOSE, \
-					"RGX FW thread %u: FW IRQ count = %u, Last sampled IRQ count in LISR = %u)", \
-					ui32TID, \
-					(psRgxDevInfo)->psRGXFWIfTraceBuf->aui32InterruptCount[ui32TID], \
-					(psRgxDevInfo)->aui32SampleIRQCount[ui32TID])); \
-		} \
-	} while(0)
 
 /*!
 *******************************************************************************

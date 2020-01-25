@@ -45,57 +45,88 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "servicesext.h"
 
-#if defined(__KERNEL__) && defined(LINUX) && !defined(__GENKSYMS__)
+
+#if defined(__KERNEL__) && defined(ANDROID) && !defined(__GENKSYMS__)
 #define __pvrsrv_defined_struct_enum__
 #include <services_kernel_client.h>
 #endif
 
-struct _PVRSRV_DEVICE_NODE_;
-
-/*************************************************************************/ /*!
-@Function     PVRSRVDriverInit
-@Description  Performs one time initialisation of Services.
-@Return       PVRSRV_ERROR   PVRSRV_OK on success and an error otherwise
-*/ /**************************************************************************/
-PVRSRV_ERROR IMG_CALLCONV PVRSRVDriverInit(void);
-
-/*************************************************************************/ /*!
-@Function     PVRSRVDriverInit
-@Description  Performs one time de-initialisation of Services.
-@Return       void 
-*/ /**************************************************************************/
-void IMG_CALLCONV PVRSRVDriverDeInit(void);
-
-/*************************************************************************/ /*!
-@Function     PVRSRVDeviceCreate
-@Description  Creates a PVR Services device node for an OS native device.
-@Input        pvOSDevice     OS native device
-@Output       ppsDeviceNode  Points to the new device node on success
-@Return       PVRSRV_ERROR   PVRSRV_OK on success and an error otherwise
-*/ /**************************************************************************/
-PVRSRV_ERROR IMG_CALLCONV
-PVRSRVDeviceCreate(void *pvOSDevice,
-				   struct _PVRSRV_DEVICE_NODE_ **ppsDeviceNode);
-
-#if defined(SUPPORT_KERNEL_SRVINIT)
-/*************************************************************************/ /*!
-@Function     PVRSRVDeviceInitialise
-@Description  Initialises the given device, created by PVRSRVDeviceCreate, so
-              that's in a functional state ready to be used.
-@Input        psDeviceNode  Device node of the device to be initialised
-@Return       PVRSRV_ERROR  PVRSRV_OK on success and an error otherwise
-*/ /**************************************************************************/
-PVRSRV_ERROR PVRSRVDeviceInitialise(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
+/**	Use PVR_DPF() unless message is necessary in release build
+ */
+#ifdef PVR_DISABLE_LOGGING
+#define PVR_LOG(X)
+#else
+/* PRQA S 3410 1 */ /* this macro requires no brackets in order to work */
+#define PVR_LOG(X)			PVRSRVReleasePrintf X;
 #endif
 
-/*************************************************************************/ /*!
-@Function     PVRSRVDeviceDestroy
-@Description  Destroys a PVR Services device node.
-@Input        psDeviceNode  Device node to destroy
-@Return       PVRSRV_ERROR  PVRSRV_OK on success and an error otherwise
-*/ /**************************************************************************/
-PVRSRV_ERROR IMG_CALLCONV
-PVRSRVDeviceDestroy(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
+IMG_IMPORT void IMG_CALLCONV PVRSRVReleasePrintf(const IMG_CHAR *pszFormat, ...) IMG_FORMAT_PRINTF(1, 2);
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVInit
+
+ @Description	Initialise services
+
+ @Input	   psSysData	: sysdata structure
+
+ @Return   PVRSRV_ERROR	:
+
+******************************************************************************/
+PVRSRV_ERROR IMG_CALLCONV PVRSRVInit(void *);
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVDeInit
+
+ @Description	De-Initialise services
+
+ @Input	   psSysData	: sysdata structure
+
+ @Return   PVRSRV_ERROR	:
+
+******************************************************************************/
+void IMG_CALLCONV PVRSRVDeInit(void *);
+
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVScheduleDevicesKM
+
+ @Description	Schedules all Services-Managed Devices to check their pending
+ 				command queues. The intention is that ScheduleDevices be called by the
+				3rd party BC driver after it has finished writing new data to its output
+				texture.
+
+ @Input		bInLISR
+
+ @Return	void
+
+******************************************************************************/
+IMG_IMPORT void PVRSRVScheduleDevicesKM(IMG_BOOL bInLISR);
+
+void IMG_CALLCONV PVRSRVSetDCState(IMG_UINT32 ui32State);
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVSaveRestoreLiveSegments(IMG_HANDLE hArena, IMG_PBYTE pbyBuffer, size_t *puiBufSize, IMG_BOOL bSave);
+
+/*!
+******************************************************************************
+
+ @Function	PVRSRVScheduleDeviceCallbacks
+
+ @Description	Schedule all device callbacks
+
+ @Input		ui32CallerID
+
+ @Return	void
+
+******************************************************************************/
+void PVRSRVScheduleDeviceCallbacks(IMG_UINT32 ui32CallerID);
+
+
 
 /******************
 HIGHER LEVEL MACROS
@@ -137,5 +168,23 @@ LOOP_UNTIL_TIMEOUT(MAX_HW_TIME_US)
 
 #define END_LOOP_UNTIL_TIMEOUT() \
 }
+
+/*!
+ ******************************************************************************
+
+ @Function		PVRSRVGetErrorStringKM
+
+ @Description	Returns a text string relating to the PVRSRV_ERROR enum.
+
+ ******************************************************************************/
+IMG_IMPORT
+const IMG_CHAR *PVRSRVGetErrorStringKM(PVRSRV_ERROR eError);
+
+typedef struct _SERVER_SYNC_PRIM_
+{
+	/* Placeholder until structure is properly implemented */
+	IMG_UINT32 ui32Placeholder;
+} SERVER_SYNC_PRIM;
+
 
 #endif /* SRVKM_H */

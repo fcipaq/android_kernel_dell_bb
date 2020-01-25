@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for devicememhistory
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for devicememhistory
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for devicememhistory
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,8 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_DEVICEMEMHISTORY_BRIDGE_H
 #define COMMON_DEVICEMEMHISTORY_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
@@ -57,12 +55,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST			0
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYMAP			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+0
 #define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYUNMAP			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+1
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYMAPNEW			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+2
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYUNMAPNEW			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+3
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYMAPVRANGE			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+4
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYUNMAPVRANGE			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+5
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_DEVICEMEMHISTORYSPARSECHANGE			PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+6
-#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_LAST			(PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+6)
+#define PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_LAST			(PVRSRV_BRIDGE_DEVICEMEMHISTORY_CMD_FIRST+1)
 
 
 /*******************************************
@@ -101,130 +94,6 @@ typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAP_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAP;
-
-
-/*******************************************
-            DevicememHistoryMapNew          
- *******************************************/
-
-/* Bridge in structure for DevicememHistoryMapNew */
-typedef struct PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYMAPNEW_TAG
-{
-	IMG_HANDLE hPMR;
-	IMG_DEVMEM_SIZE_T uiOffset;
-	IMG_DEV_VIRTADDR sDevVAddr;
-	IMG_DEVMEM_SIZE_T uiSize;
-	const IMG_CHAR * puiText;
-	IMG_UINT32 ui32Log2PageSize;
-	IMG_UINT32 ui32AllocationIndex;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYMAPNEW;
-
-/* Bridge out structure for DevicememHistoryMapNew */
-typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYMAPNEW_TAG
-{
-	IMG_UINT32 ui32AllocationIndexOut;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYMAPNEW;
-
-
-/*******************************************
-            DevicememHistoryUnmapNew          
- *******************************************/
-
-/* Bridge in structure for DevicememHistoryUnmapNew */
-typedef struct PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYUNMAPNEW_TAG
-{
-	IMG_HANDLE hPMR;
-	IMG_DEVMEM_SIZE_T uiOffset;
-	IMG_DEV_VIRTADDR sDevVAddr;
-	IMG_DEVMEM_SIZE_T uiSize;
-	const IMG_CHAR * puiText;
-	IMG_UINT32 ui32Log2PageSize;
-	IMG_UINT32 ui32AllocationIndex;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYUNMAPNEW;
-
-/* Bridge out structure for DevicememHistoryUnmapNew */
-typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAPNEW_TAG
-{
-	IMG_UINT32 ui32AllocationIndexOut;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAPNEW;
-
-
-/*******************************************
-            DevicememHistoryMapVRange          
- *******************************************/
-
-/* Bridge in structure for DevicememHistoryMapVRange */
-typedef struct PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYMAPVRANGE_TAG
-{
-	IMG_DEV_VIRTADDR sBaseDevVAddr;
-	IMG_UINT32 ui32ui32StartPage;
-	IMG_UINT32 ui32NumPages;
-	IMG_DEVMEM_SIZE_T uiAllocSize;
-	const IMG_CHAR * puiText;
-	IMG_UINT32 ui32Log2PageSize;
-	IMG_UINT32 ui32AllocationIndex;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYMAPVRANGE;
-
-/* Bridge out structure for DevicememHistoryMapVRange */
-typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYMAPVRANGE_TAG
-{
-	IMG_UINT32 ui32AllocationIndexOut;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYMAPVRANGE;
-
-
-/*******************************************
-            DevicememHistoryUnmapVRange          
- *******************************************/
-
-/* Bridge in structure for DevicememHistoryUnmapVRange */
-typedef struct PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYUNMAPVRANGE_TAG
-{
-	IMG_DEV_VIRTADDR sBaseDevVAddr;
-	IMG_UINT32 ui32ui32StartPage;
-	IMG_UINT32 ui32NumPages;
-	IMG_DEVMEM_SIZE_T uiAllocSize;
-	const IMG_CHAR * puiText;
-	IMG_UINT32 ui32Log2PageSize;
-	IMG_UINT32 ui32AllocationIndex;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYUNMAPVRANGE;
-
-/* Bridge out structure for DevicememHistoryUnmapVRange */
-typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAPVRANGE_TAG
-{
-	IMG_UINT32 ui32AllocationIndexOut;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYUNMAPVRANGE;
-
-
-/*******************************************
-            DevicememHistorySparseChange          
- *******************************************/
-
-/* Bridge in structure for DevicememHistorySparseChange */
-typedef struct PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYSPARSECHANGE_TAG
-{
-	IMG_HANDLE hPMR;
-	IMG_DEVMEM_SIZE_T uiOffset;
-	IMG_DEV_VIRTADDR sDevVAddr;
-	IMG_DEVMEM_SIZE_T uiSize;
-	const IMG_CHAR * puiText;
-	IMG_UINT32 ui32Log2PageSize;
-	IMG_UINT32 ui32AllocPageCount;
-	IMG_UINT32 * pui32AllocPageIndices;
-	IMG_UINT32 ui32FreePageCount;
-	IMG_UINT32 * pui32FreePageIndices;
-	IMG_UINT32 ui32AllocationIndex;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVICEMEMHISTORYSPARSECHANGE;
-
-/* Bridge out structure for DevicememHistorySparseChange */
-typedef struct PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYSPARSECHANGE_TAG
-{
-	IMG_UINT32 ui32AllocationIndexOut;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVICEMEMHISTORYSPARSECHANGE;
 
 
 #endif /* COMMON_DEVICEMEMHISTORY_BRIDGE_H */

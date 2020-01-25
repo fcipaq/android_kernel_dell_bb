@@ -45,20 +45,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define __RGXTIMECORR_H__
 
 #include "img_types.h"
-#include "device.h"
-
-typedef enum {
-    RGXTIMECORR_CLOCK_MONO,
-    RGXTIMECORR_CLOCK_MONO_RAW,
-    RGXTIMECORR_CLOCK_SCHED,
-
-    RGXTIMECORR_CLOCK_LAST
-} RGXTIMECORR_CLOCK_TYPE;
 
 /*!
 ******************************************************************************
 
- @Function    RGXGPUFreqCalibratePrePowerOff
+ @Function    RGXGPUFreqCalibratePrePowerState
 
  @Description Manage GPU frequency and timer correlation data
               before a power off.
@@ -68,12 +59,12 @@ typedef enum {
  @Return      void
 
 ******************************************************************************/
-void RGXGPUFreqCalibratePrePowerOff(IMG_HANDLE hDevHandle);
+void RGXGPUFreqCalibratePrePowerState(IMG_HANDLE hDevHandle);
 
 /*!
 ******************************************************************************
 
- @Function    RGXGPUFreqCalibratePostPowerOn
+ @Function    RGXGPUFreqCalibratePostPowerState
 
  @Description Manage GPU frequency and timer correlation data
               after a power on.
@@ -83,7 +74,7 @@ void RGXGPUFreqCalibratePrePowerOff(IMG_HANDLE hDevHandle);
  @Return      void
 
 ******************************************************************************/
-void RGXGPUFreqCalibratePostPowerOn(IMG_HANDLE hDevHandle);
+void RGXGPUFreqCalibratePostPowerState(IMG_HANDLE hDevHandle);
 
 /*!
 ******************************************************************************
@@ -130,60 +121,5 @@ IMG_UINT32 RGXGPUFreqCalibratePostClockSpeedChange(IMG_HANDLE hDevHandle, IMG_UI
 
 ******************************************************************************/
 void RGXGPUFreqCalibrateCorrelatePeriodic(IMG_HANDLE hDevHandle);
-
-/*!
-******************************************************************************
-
- @Function    RGXGPUFreqCalibrateClockns64
-
- @Description Returns value of currently selected clock (in ns).
-
- @Return      clock value from currently selected clock source
-
-******************************************************************************/
-IMG_UINT64 RGXGPUFreqCalibrateClockns64(void);
-
-/*!
-******************************************************************************
-
- @Function    RGXGPUFreqCalibrateClockns64
-
- @Description Returns value of currently selected clock (in us).
-
- @Return      clock value from currently selected clock source
-
-******************************************************************************/
-IMG_UINT64 RGXGPUFreqCalibrateClockus64(void);
-
-/*!
-******************************************************************************
-
- @Function    RGXGPUFreqCalibrateClockSource
-
- @Description Returns currently selected clock source
-
- @Return      clock source type
-
-******************************************************************************/
-RGXTIMECORR_CLOCK_TYPE RGXGPUFreqCalibrateGetClockSource(void);
-
-/*!
-******************************************************************************
-
- @Function    RGXGPUFreqCalibrateSetClockSource
-
- @Description Sets clock source for correlation data.
-
- @Input       psDeviceNode : RGX Device Node
- @Input       eClockType : clock source type
-
- @Return      error code
-
-******************************************************************************/
-PVRSRV_ERROR RGXGPUFreqCalibrateSetClockSource(PVRSRV_DEVICE_NODE *psDeviceNode,
-                                             RGXTIMECORR_CLOCK_TYPE eClockType);
-
-void RGXGPUFreqCalibrationInitAppHintCallbacks(
-                                        const PVRSRV_DEVICE_NODE *psDeviceNode);
 
 #endif /* __RGXTIMECORR_H__ */

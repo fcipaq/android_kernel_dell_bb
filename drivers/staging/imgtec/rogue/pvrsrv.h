@@ -44,7 +44,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_H
 
 
-#if defined(__KERNEL__) && defined(LINUX) && !defined(__GENKSYMS__)
+#if defined(__KERNEL__) && defined(ANDROID) && !defined(__GENKSYMS__)
 #define __pvrsrv_defined_struct_enum__
 #include <services_kernel_client.h>
 #endif
@@ -53,12 +53,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "power.h"
 #include "sysinfo.h"
 #include "physheap.h"
-#include "cache_ops.h"
 #include "pvr_notifier.h"
-#include "pvr_bridge.h"
-#if defined(SUPPORT_RGX)
-#include "rgx_bridge.h"
-#endif
 
 #include "connection_server.h"
 
@@ -66,12 +61,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "virt_validation_defs.h"
 #endif
 
-/*!
- * For OSThreadDestroy(), which may require a retry
- * Try for 100 ms to destroy an OS thread before failing
- */
-#define OS_THREAD_DESTROY_TIMEOUT_US 100000ULL
-#define OS_THREAD_DESTROY_RETRY_COUNT 10
+typedef struct _SYS_DEVICE_ID_TAG
+{
+	IMG_UINT32	uiID;
+	IMG_BOOL	bInUse;
+
+} SYS_DEVICE_ID;
 
 typedef struct _BUILD_INFO_
 {
@@ -95,31 +90,33 @@ typedef struct _DRIVER_INFO_
 typedef struct PVRSRV_DATA_TAG
 {
 	DRIVER_INFO					sDriverInfo;
+    IMG_UINT32                  ui32NumDevices;      	   	/*!< number of devices in system */
+	SYS_DEVICE_ID				sDeviceID[SYS_DEVICE_COUNT];
+	PVRSRV_DEVICE_NODE			*apsRegisteredDevNodes[SYS_DEVICE_COUNT];
 	IMG_UINT32					ui32RegisteredDevices;
+	IMG_UINT32		 			ui32CurrentOSPowerState;	/*!< current OS specific power state */
 	PVRSRV_DEVICE_NODE			*psDeviceNodeList;			/*!< List head of device nodes */
+	struct _DEVICE_COMMAND_DATA_ *apsDeviceCommandData[SYS_DEVICE_COUNT];
 
-	PVRSRV_SERVICES_STATE		eServicesState;				/*!< global driver state */
+	IMG_UINT32					ui32RegisteredPhysHeaps;
+	PHYS_HEAP					*apsRegisteredPhysHeaps[SYS_PHYS_HEAP_COUNT];
 
-	HASH_TABLE					*psProcessHandleBase_Table; /*!< Hash table with process handle bases */
-	POS_LOCK					hProcessHandleBase_Lock;	/*!< Lock for the process handle base table */
+    PVRSRV_POWER_DEV			*psPowerDeviceList;			/*!< list of devices registered with the power manager */
+	POS_LOCK					hPowerLock;					/*!< lock for power state transitions */
+   	PVRSRV_SYS_POWER_STATE		eCurrentPowerState;			/*!< current Kernel services power state */
+   	PVRSRV_SYS_POWER_STATE		eFailedPowerState;			/*!< Kernel services power state (Failed to transition to) */
+
+   	PVRSRV_SERVICES_STATE		eServicesState;				/*!< global driver state */
 
 	IMG_HANDLE					hGlobalEventObject;			/*!< OS Global Event Object */
 	IMG_UINT32					ui32GEOConsecutiveTimeouts;	/*!< OS Global Event Object Timeouts */
-
+	
 	PVRSRV_CACHE_OP				uiCacheOp;					/*!< Pending cache operations in the system */
-#if (CACHEFLUSH_KM_TYPE == CACHEFLUSH_KM_RANGEBASED_DEFERRED)
-	IMG_HANDLE					hCacheOpThread;				/*!< CacheOp thread */
-	IMG_HANDLE					hCacheOpThreadEventObject;	/*!< Event object to drive CacheOp thread */
-	IMG_HANDLE					hCacheOpUpdateEventObject;	/*!< Update event object to drive CacheOp fencing */
-	POS_LOCK					hCacheOpThreadWorkListLock;	/*!< Lock protecting the cleanup thread work list */
-	DLLIST_NODE					sCacheOpThreadWorkList;		/*!< List of work for the cleanup thread */
-	IMG_PID						CacheOpThreadPid;			/*!< CacheOp thread process id */
-#endif
 
 	IMG_HANDLE					hCleanupThread;				/*!< Cleanup thread */
 	IMG_HANDLE					hCleanupEventObject;		/*!< Event object to drive cleanup thread */
 	POS_LOCK					hCleanupThreadWorkListLock;	/*!< Lock protecting the cleanup thread work list */
-	DLLIST_NODE					sCleanupThreadWorkList;		/*!< List of work for the cleanup thread */
+	DLLIST_NODE					sCleanupThreadWorkList;		/*!< List of work to do by the cleanup thread */
 	IMG_PID						cleanupThreadPid;			/*!< Cleanup thread process id */
 
 	IMG_HANDLE					hDevicesWatchdogThread;		/*!< Devices Watchdog thread */
@@ -130,15 +127,42 @@ typedef struct PVRSRV_DATA_TAG
 	volatile IMG_UINT32			ui32DevicesWdWakeupCounter;	/* Need this for the unit tests. */
 #endif
 
-#ifdef SUPPORT_PVRSRV_GPUVIRT
-	IMG_HANDLE					hVzData;					/*! Additional virtualization data */
-#endif
-	
 	IMG_BOOL					bUnload;					/*!< Driver unload is in progress */
 } PVRSRV_DATA;
 
-typedef IMG_BOOL (*PFN_LISR)(void *pvData);
 
+typedef IMG_HANDLE PVRSRV_CMDCOMP_HANDLE;
+typedef void (*PFN_CMDCOMP_NOTIFY) (PVRSRV_CMDCOMP_HANDLE hCmdCompHandle);
+
+typedef struct PVRSRV_CMDCOMP_NOTIFY_TAG
+{
+	PVRSRV_CMDCOMP_HANDLE	hCmdCompHandle;
+	PFN_CMDCOMP_NOTIFY		pfnCmdCompleteNotify;
+
+	DLLIST_NODE					sListNode;
+} PVRSRV_CMDCOMP_NOTIFY;
+
+#define DEBUG_REQUEST_VERBOSITY_LOW		0
+#define DEBUG_REQUEST_VERBOSITY_MEDIUM	1
+#define DEBUG_REQUEST_VERBOSITY_HIGH	2
+
+#define DEBUG_REQUEST_VERBOSITY_MAX	(DEBUG_REQUEST_VERBOSITY_HIGH)
+
+typedef struct PVRSRV_DBGREQ_NOTIFY_TAG
+{
+	PVRSRV_DBGREQ_HANDLE	hDbgRequestHandle;
+	PFN_DBGREQ_NOTIFY		pfnDbgRequestNotify;
+	IMG_UINT32				ui32RequesterID;
+
+	DLLIST_NODE					sListNode;
+} PVRSRV_DBGREQ_NOTIFY;
+
+#define PVR_DUMP_DRIVER_INFO(x, y)					\
+		PVR_DUMPDEBUG_LOG("%s info: BuildOptions: 0x%08x BuildVersion: %d.%d BuildRevision: %8d BuildType: %s", (x), \
+								(y).ui32BuildOptions, \
+								PVRVERSION_UNPACK_MAJ((y).ui32BuildVersion), PVRVERSION_UNPACK_MIN((y).ui32BuildVersion), \
+								(y).ui32BuildRevision, \
+								(BUILD_TYPE_DEBUG == (y).ui32BuildType)?"debug":"release")
 /*!
 ******************************************************************************
 
@@ -150,6 +174,30 @@ typedef IMG_BOOL (*PFN_LISR)(void *pvData);
 
 ******************************************************************************/
 PVRSRV_DATA *PVRSRVGetPVRSRVData(void);
+
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVEnumerateDevicesKM(IMG_UINT32 *pui32NumDevices,
+                                                   PVRSRV_DEVICE_TYPE *peDeviceType,
+                                                   PVRSRV_DEVICE_CLASS *peDeviceClass,
+                                                   IMG_UINT32 *pui32DeviceIndex);
+
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVAcquireDeviceDataKM (IMG_UINT32			ui32DevIndex,
+													 PVRSRV_DEVICE_TYPE	eDeviceType,
+													 IMG_HANDLE			*phDevCookie);
+
+IMG_EXPORT
+PVRSRV_ERROR IMG_CALLCONV PVRSRVReleaseDeviceDataKM (IMG_HANDLE hDevCookie);
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVRegisterExtDevice(PVRSRV_DEVICE_NODE *psDeviceNode,
+													IMG_UINT32 *pui32DeviceIndex,
+													IMG_UINT32 ui32PhysHeapID);
+
+void IMG_CALLCONV PVRSRVUnregisterExtDevice(PVRSRV_DEVICE_NODE *psDeviceNode);
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVSysPrePowerState(PVRSRV_SYS_POWER_STATE eNewPowerState, IMG_BOOL bForced);
+
+PVRSRV_ERROR IMG_CALLCONV PVRSRVSysPostPowerState(PVRSRV_SYS_POWER_STATE eNewPowerState, IMG_BOOL bForced);
 
 PVRSRV_ERROR LMA_PhyContigPagesAlloc(PVRSRV_DEVICE_NODE *psDevNode, size_t uiSize,
 							PG_HANDLE *psMemHandle, IMG_DEV_PHYADDR *psDevPAddr);
@@ -163,8 +211,7 @@ PVRSRV_ERROR LMA_PhyContigPagesMap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psM
 void LMA_PhyContigPagesUnmap(PVRSRV_DEVICE_NODE *psDevNode, PG_HANDLE *psMemHandle,
 					void *pvPtr);
 
-PVRSRV_ERROR LMA_PhyContigPagesClean(PVRSRV_DEVICE_NODE *psDevNode,
-                                     PG_HANDLE *psMemHandle,
+PVRSRV_ERROR LMA_PhyContigPagesClean(PG_HANDLE *psMemHandle,
                                      IMG_UINT32 uiOffset,
                                      IMG_UINT32 uiLength);
 
@@ -223,13 +270,37 @@ PVRSRV_ERROR IMG_CALLCONV PVRSRVWaitForValueKMAndHoldBridgeLockKM(volatile IMG_U
 
 /*!
 *****************************************************************************
+ @Function	: PVRSRVSystemDebugInfo
+
+ @Description	: Dump the system debug info
+
+@Input pfnDumpDebugPrintf : Used to specify the appropriate printf function.
+			     If this argument is NULL, then PVR_LOG() will
+			     be used as the default printing function.
+
+*****************************************************************************/
+PVRSRV_ERROR PVRSRVSystemDebugInfo(DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
+					void *pvDumpDebugFile);
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVGetSystemName
+
+ @Description	: Gets the system name string
+
+ @Return : The system name
+*****************************************************************************/
+const IMG_CHAR *PVRSRVGetSystemName(void);
+
+/*!
+*****************************************************************************
  @Function	: PVRSRVSystemHasCacheSnooping
 
  @Description	: Returns whether the system has cache snooping
 
  @Return : IMG_TRUE if the system has cache snooping
 *****************************************************************************/
-IMG_BOOL PVRSRVSystemHasCacheSnooping(PVRSRV_DEVICE_CONFIG *psDevConfig);
+IMG_BOOL PVRSRVSystemHasCacheSnooping(void);
 
 /*!
 *****************************************************************************
@@ -239,7 +310,7 @@ IMG_BOOL PVRSRVSystemHasCacheSnooping(PVRSRV_DEVICE_CONFIG *psDevConfig);
 
  @Return : IMG_TRUE if the system has CPU cache snooping
 *****************************************************************************/
-IMG_BOOL PVRSRVSystemSnoopingOfCPUCache(PVRSRV_DEVICE_CONFIG *psDevConfig);
+IMG_BOOL PVRSRVSystemSnoopingOfCPUCache(void);
 
 /*!
 *****************************************************************************
@@ -249,17 +320,7 @@ IMG_BOOL PVRSRVSystemSnoopingOfCPUCache(PVRSRV_DEVICE_CONFIG *psDevConfig);
 
  @Return : IMG_TRUE if the system has device cache snooping
 *****************************************************************************/
-IMG_BOOL PVRSRVSystemSnoopingOfDeviceCache(PVRSRV_DEVICE_CONFIG *psDevConfig);
-
-/*!
-*****************************************************************************
- @Function	: PVRSRVSystemHasNonMappableLocalMemory
-
- @Description	: Returns whether the device has non-mappable part of local memory
-
- @Return : IMG_TRUE if the device has non-mappable part of local memory
-*****************************************************************************/
-IMG_BOOL PVRSRVSystemHasNonMappableLocalMemory(PVRSRV_DEVICE_CONFIG *psDevConfig);
+IMG_BOOL PVRSRVSystemSnoopingOfDeviceCache(void);
 
 /*!
 *****************************************************************************
@@ -270,80 +331,165 @@ IMG_BOOL PVRSRVSystemHasNonMappableLocalMemory(PVRSRV_DEVICE_CONFIG *psDevConfig
 *****************************************************************************/
 void PVRSRVSystemWaitCycles(PVRSRV_DEVICE_CONFIG *psDevConfig, IMG_UINT32 ui32Cycles);
 
-PVRSRV_ERROR PVRSRVSystemInstallDeviceLISR(void *pvOSDevice,
-										   IMG_UINT32 ui32IRQ,
-										   const IMG_CHAR *pszName,
-										   PFN_LISR pfnLISR,
-										   void *pvData,
-										   IMG_HANDLE *phLISRData);
 
-PVRSRV_ERROR PVRSRVSystemUninstallDeviceLISR(IMG_HANDLE hLISRData);
-
-int PVRSRVGetDriverStatus(void);
 
 /*!
 *****************************************************************************
- @Function	: PVRSRVIsBridgeEnabled
+ @Function	: PVRSRVCheckStatus
 
- @Description	: Returns whether the given bridge group is enabled
+ @Description	: Notify any registered cmd complete function (except if its
+				  hPrivData matches the hCmdCompHandle handler) and raise the global 
+				  event object. 
 
- @Return : IMG_TRUE if the given bridge group is enabled
+ @Input hCmdCompHandle	: Identify the caller by the handler used when 
+						  registering for cmd complete. NULL calls all
+						  the notify functions.
+
 *****************************************************************************/
-static inline IMG_BOOL PVRSRVIsBridgeEnabled(IMG_HANDLE hServices, IMG_UINT32 ui32BridgeGroup)
-{
-	PVR_UNREFERENCED_PARAMETER(hServices);
+void IMG_CALLCONV PVRSRVCheckStatus(PVRSRV_CMDCOMP_HANDLE hCmdCompCallerHandle);
 
-#if defined(SUPPORT_RGX)
-	if(ui32BridgeGroup >= PVRSRV_BRIDGE_RGX_FIRST)
-	{
-		return ((1U << (ui32BridgeGroup - PVRSRV_BRIDGE_RGX_FIRST)) &
-							gui32RGXBridges) != 0;
-	}
-	else
-#endif /* SUPPORT_RGX */
-	{
-		return ((1U << (ui32BridgeGroup - PVRSRV_BRIDGE_FIRST)) &
-							gui32PVRBridges) != 0;
-	}
-}
+PVRSRV_ERROR IMG_CALLCONV PVRSRVKickDevicesKM(void);
 
 /*!
 *****************************************************************************
- @Function	: PVRSRVSystemBIFTilingHeapGetXStride
+ @Function	: PVRSRVResetHWRLogsKM
+
+ @Description	: Resets the HWR Logs buffer (the hardware recovery count is not reset)
+
+ @Input psDeviceNode	: Pointer to the device
+
+ @Return   PVRSRV_ERROR : PVRSRV_OK on success. Otherwise, a PVRSRV_ error code
+*****************************************************************************
+ */
+PVRSRV_ERROR PVRSRVResetHWRLogsKM(CONNECTION_DATA * psConnection,
+                                  PVRSRV_DEVICE_NODE *psDeviceNode);
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVRegisterCmdCompleteNotify
+
+ @Description	: Register a notify function which is called when some device
+				  finishes some work (that is, when someone calls to PVRSRVCheckStatus).
+
+ @Input phNotify : Pointer to the Cmd complete notify handler
+
+ @Input pfnCmdCompleteNotify : Notify function
+
+ @Input hPrivData : Handler to data passed to the Notify function when called
+
+*****************************************************************************/
+PVRSRV_ERROR PVRSRVRegisterCmdCompleteNotify(IMG_HANDLE *phNotify, PFN_CMDCOMP_NOTIFY pfnCmdCompleteNotify, PVRSRV_CMDCOMP_HANDLE hPrivData);
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVUnregisterCmdCompleteNotify
+
+ @Description	: Unregister a previously registered notify func.
+
+ @Input hNotify : Cmd complete notify handler registered previously
+
+*****************************************************************************/
+PVRSRV_ERROR PVRSRVUnregisterCmdCompleteNotify(IMG_HANDLE hNotify);
+
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVDebugRequest
+
+ @Description	: Notify any registered debug request handler that a debug
+                  request has been made and at what level. It dumps information 
+		  for all debug handlers unlike RGXDumpDebugInfo
+
+ @Input ui32VerbLevel	: The maximum verbosity level to dump
+
+ @Input pfnDumpDebugPrintf : Used to specify the appropriate printf function.
+			     If this argument is NULL, then PVR_LOG() will
+			     be used as the default printing function.
+
+*****************************************************************************/
+void IMG_CALLCONV PVRSRVDebugRequest(IMG_UINT32 ui32VerbLevel, DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf, void *pvDumpDebugFile);
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVRegisterDebugRequestNotify
+
+ @Description	: Register a notify function which is called when a debug
+				  request is made into the driver (that is, when someone
+				  calls to PVRSRVDebugRequest). There are a number of levels
+				  of verbosity, starting at 0 and going to
+				  DEBUG_REQUEST_VERBOSITY_MAX. For each level that's required
+				  a new call to the notify function will be made.
+
+ @Input phNotify : Pointer to the debug request notify handler
+
+ @Input pfnDbgRequestNotify : Notify function
+
+ @Input ui32RequesterID : Used to determine the order debug request callbacks get
+                          called in with the table passed into 
+
+ @Input hDbgReqeustHandle : Handler to data passed to the Notify function when called
+
+*****************************************************************************/
+PVRSRV_ERROR PVRSRVRegisterDbgRequestNotify(IMG_HANDLE *phNotify, PFN_DBGREQ_NOTIFY pfnDbgRequestNotify, IMG_UINT32 ui32RequesterID, PVRSRV_DBGREQ_HANDLE hDbgReqeustHandle);
+
+/*!
+*****************************************************************************
+ @Function	: PVRSRVUnregisterDebugRequestNotify
+
+ @Description	: Unregister a previously registered notify func.
+
+ @Input hNotify : Debug request notify handler registered previously
+
+*****************************************************************************/
+PVRSRV_ERROR PVRSRVUnregisterDbgRequestNotify(IMG_HANDLE hNotify);
+
+/*!
+*****************************************************************************
+ @Function	: AcquireGlobalEventObjectServer
+
+ @Description	: Acquire the global event object.
+
+ @Output phGlobalEventObject : Handle to the global event object
+
+*****************************************************************************/
+PVRSRV_ERROR AcquireGlobalEventObjectServer(IMG_HANDLE *phGlobalEventObject);
+
+/*!
+*****************************************************************************
+ @Function	: ReleaseGlobalEventObjectServer
+
+ @Description	: Release the global event object.
+
+ @Input hGlobalEventObject : Handle to the global event object
+
+*****************************************************************************/
+PVRSRV_ERROR ReleaseGlobalEventObjectServer(IMG_HANDLE hGlobalEventObject);
+
+
+/*!
+*****************************************************************************
+ @Function	: GetBIFTilingHeapXStride
 
  @Description	: return the default x-stride configuration for the given
                   BIF tiling heap number
-
- @Input psDevConfig: Pointer to a device config
 
  @Input uiHeapNum: BIF tiling heap number, starting from 1
 
  @Output puiXStride: pointer to x-stride output of the requested heap
 
 *****************************************************************************/
-PVRSRV_ERROR
-PVRSRVSystemBIFTilingHeapGetXStride(PVRSRV_DEVICE_CONFIG *psDevConfig,
-									IMG_UINT32 uiHeapNum,
-									IMG_UINT32 *puiXStride);
+PVRSRV_ERROR GetBIFTilingHeapXStride(IMG_UINT32 uiHeapNum, IMG_UINT32 *puiXStride);
 
 /*!
 *****************************************************************************
- @Function              : PVRSRVSystemBIFTilingGetConfig
+ @Function	: GetNumBIFTilingHeaps
 
- @Description           : return the BIF tiling mode and number of BIF
-                          tiling heaps for the given device config
+ @Description	: return the number of BIF tiling heaps on this system
 
- @Input psDevConfig     : Pointer to a device config
-
- @Output peBifTilingMode: Pointer to a BIF tiling mode enum
-
- @Output puiNumHeaps    : pointer to uint to hold number of heaps
+ @Output puiNumHeaps: pointer to uint to hold number of heaps
 
 *****************************************************************************/
-PVRSRV_ERROR
-PVRSRVSystemBIFTilingGetConfig(PVRSRV_DEVICE_CONFIG  *psDevConfig,
-                               RGXFWIF_BIFTILINGMODE *peBifTilingMode,
-                               IMG_UINT32            *puiNumHeaps);
+PVRSRV_ERROR GetNumBifTilingHeapConfigs(IMG_UINT32 *puiNumHeaps);
 
 #if defined(SUPPORT_GPUVIRT_VALIDATION)
 /*!
@@ -365,12 +511,6 @@ PVRSRVSystemBIFTilingGetConfig(PVRSRV_DEVICE_CONFIG  *psDevConfig,
 ***********************************************************************************/
 
 void PopulateLMASubArenas(PVRSRV_DEVICE_NODE *psDeviceNode, IMG_UINT32 aui32OSidMin[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS], IMG_UINT32 aui32OSidMax[GPUVIRT_VALIDATION_NUM_OS][GPUVIRT_VALIDATION_NUM_REGIONS]);
-
-#if defined(EMULATOR)
-	void SetAxiProtOSid(IMG_UINT32 ui32OSid, IMG_BOOL bState);
-	void SetTrustedDeviceAceEnabled(void);
-#endif
-
 #endif
 
 #endif /* PVRSRV_H */

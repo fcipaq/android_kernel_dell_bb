@@ -276,7 +276,7 @@ struct msvdx_private {
 	uint32_t term_buf_addr;
 #endif
 
-	atomic_t slc_workaround_ctx;
+	atomic_t vc1_workaround_ctx;
 
 #ifdef CONFIG_ION
 	struct list_head ion_buffers_list;

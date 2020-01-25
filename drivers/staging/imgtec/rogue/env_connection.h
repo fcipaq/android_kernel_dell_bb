@@ -45,7 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define _ENV_CONNECTION_H_
 
 #include <linux/list.h>
-#include <linux/types.h>
 
 #include "handle.h"
 #include "pvr_debug.h"
@@ -77,8 +76,6 @@ typedef struct _ENV_ION_CONNECTION_DATA_
 
 typedef struct _ENV_CONNECTION_DATA_
 {
-	pid_t owner;
-
 	struct file *psFile;
 	PVRSRV_DEVICE_NODE *psDevNode;
 

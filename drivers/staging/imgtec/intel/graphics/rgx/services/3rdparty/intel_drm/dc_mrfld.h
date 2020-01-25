@@ -27,8 +27,7 @@
 #define __DC_MRFLD_H__
 
 #include <drm/drmP.h>
-#include <powervr/mem_types.h>
-#include <powervr/imgpixfmts.h>
+#include <imgpixfmts_km.h>
 #include "kerneldisplay.h"
 #include "psb_drm.h"
 #include "displayclass_interface.h"

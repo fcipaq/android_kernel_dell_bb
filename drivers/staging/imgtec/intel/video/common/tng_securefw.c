@@ -69,6 +69,7 @@ extern int sepapp_image_verify(u8 *addr, ssize_t size, u32 key_index, u32 magic_
 #define mofd_prh_b0_vsp		"vsp.bin.000c.0001.0001"
 #define mofd_fugu_product_vsp		"vsp.bin.0008.0000.0002"
 
+//fipaq
 //#define mofd_default_spid	"0008.0001.0001"
 #define mofd_default_spid	"0008.0000.0002"
 
@@ -369,7 +370,9 @@ int tng_securefw(struct drm_device *dev, char *fw_basename, char *island_name, i
 				  ISLAND_MAGIC_NUMBER(island_name));
 	if (ret) {
 		DRM_ERROR("Failed to verify firmware %x\n", ret);
-		return ret;
+//fcipaq
+//		return ret;
+        return 0;
 	}
 	DRM_INFO("After verification, IMR region information\n");
 	tng_print_imrinfo(imrl_reg, 0, 0);

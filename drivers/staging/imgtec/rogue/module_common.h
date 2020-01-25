@@ -1,5 +1,5 @@
 /*************************************************************************/ /*!
-@File           module_common.h
+@File
 @Title          Common linux module setup header
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
@@ -43,25 +43,50 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _MODULE_COMMON_H_
 #define _MODULE_COMMON_H_
 
-/* DRVNAME is the name we use to register our driver. */
-#define DRVNAME PVR_LDM_DRIVER_REGISTRATION_NAME
+#if defined(LDM_PLATFORM)
+#include <linux/platform_device.h>
+#define	LDM_DEV	struct platform_device
+#endif /*LDM_PLATFORM */
 
-struct _PVRSRV_DEVICE_NODE_;
-struct drm_file;
+#if defined(LDM_PCI)
+#include <linux/pci.h>
+#define	LDM_DEV	struct pci_dev
+#endif /* LDM_PCI */
 
-int PVRSRVCommonDriverInit(void);
-void PVRSRVCommonDriverDeinit(void);
+extern LDM_DEV *gpsPVRLDMDev;
 
-int PVRSRVCommonDeviceInit(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
-void PVRSRVCommonDeviceDeinit(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
+/*
+ * Linux 3.8 and newer kernels no longer support __devinitdata, __devinit, __devexit, or
+ * __devexit_p.
+ */
+#if !defined(__devinitdata)
+#define __devinitdata
+#endif
+#if !defined(__devinit)
+#define __devinit
+#endif
+#if !defined(__devexit)
+#define __devexit
+#endif
+#if !defined(__devexit_p)
+#define __devexit_p(x) (&(x))
+#endif
 
-void PVRSRVCommonDeviceShutdown(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
-int PVRSRVCommonDeviceSuspend(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
-int PVRSRVCommonDeviceResume(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode);
+#if defined(PVRSRV_GPUVIRT_GUESTDRV) && defined(PVRSRV_GPUVIRT_MULTIDRV_MODEL)
+/* Functionality is n/a for guest drivers in a multi-driver model */
+#else
+void PVRSRVDriverShutdown(LDM_DEV *device);
+int PVRSRVDriverSuspend(struct device *device);
+int PVRSRVDriverResume(struct device *device);
+#endif
 
-int PVRSRVCommonDeviceOpen(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode,
-						   struct drm_file *psDRMFile);
-void PVRSRVCommonDeviceRelease(struct _PVRSRV_DEVICE_NODE_ *psDeviceNode,
-							   struct drm_file *psDRMFile);
+int PVRSRVCommonOpen(struct file *pFile);
+void PVRSRVCommonRelease(struct file *pFile);
+
+int PVRSRVDriverInit(void);
+void PVRSRVDriverDeinit(void);
+
+int PVRSRVDeviceInit(void);
+void PVRSRVDeviceDeinit(void);
 
 #endif /* _MODULE_COMMON_H_ */

@@ -59,16 +59,16 @@ extern "C" {
 #include <stdio.h>
 #endif
 
-#if (defined(__linux__) && defined(__KERNEL__)) || (defined(INTEGRITY_OS) && defined(SUPPORT_KERNEL_SRVINIT)) || defined(__QNXNTO__)
+#if defined(__linux__) && defined(__KERNEL__)
 #include "osfunc.h"
 static inline void SRVINITDeviceMemCopy(void *pvDst, const void *pvSrc, size_t uiSize)
 {
-	OSDeviceMemCopy(pvDst, pvSrc, uiSize);
+	OSMemCopy(pvDst, pvSrc, uiSize);
 }
 
 static inline void SRVINITDeviceMemSet(void *pvDest, IMG_UINT8 ui8Value, size_t uiSize)
 {
-	OSDeviceMemSet(pvDest, ui8Value, uiSize);
+	OSMemSet(pvDest, ui8Value, uiSize);
 }
 #else
 #include "services.h"

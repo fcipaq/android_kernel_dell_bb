@@ -54,11 +54,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "srvinit_osfunc.h"
 #include "pvr_debug.h"
 
-#if defined(SUPPORT_KERNEL_SRVINIT)
-#include "device.h"
-#include "rgxdevice.h"
-#endif
-
 #if defined(PDUMP)
 #include "client_pdump_bridge.h"
 #endif
@@ -83,7 +78,7 @@ void RGXMemSet(const void *hPrivate,
 }
 
 void RGXCommentLogInit(const void *hPrivate,
-                       const IMG_CHAR *pszString,
+                       IMG_CHAR *pszString,
                        ...)
 {
 #if defined(PDUMP)
@@ -108,7 +103,7 @@ void RGXCommentLogInit(const void *hPrivate,
 }
 
 void RGXErrorLogInit(const void *hPrivate,
-                     const IMG_CHAR *pszString,
+                     IMG_CHAR *pszString,
                      ...)
 {
 	IMG_CHAR szBuffer[PVR_MAX_DEBUG_MESSAGE_LEN];
@@ -121,56 +116,5 @@ void RGXErrorLogInit(const void *hPrivate,
 	va_end(argList);
 
 	PVR_DPF((PVR_DBG_ERROR, "%s", szBuffer));
-}
-
-#if defined(SUPPORT_KERNEL_SRVINIT)
-IMG_BOOL RGXDeviceHasFeatureInit(const void *hPrivate, IMG_UINT64 ui64Feature)
-{
-	PVRSRV_DEVICE_NODE *psDeviceNode;
-	PVRSRV_RGXDEV_INFO *psDevInfo;
-
-	PVR_ASSERT(hPrivate != NULL);
-
-	psDeviceNode = (PVRSRV_DEVICE_NODE *)(((RGX_INIT_LAYER_PARAMS *)hPrivate)->hServices);
-	psDevInfo = (PVRSRV_RGXDEV_INFO *)psDeviceNode->pvDevice;
-
-	return (psDevInfo->sDevFeatureCfg.ui64Features & ui64Feature) != 0;
-}
-
-IMG_BOOL RGXDeviceHasErnBrnInit(const void *hPrivate, IMG_UINT64 ui64ErnsBrns)
-{
-	PVRSRV_DEVICE_NODE *psDeviceNode;
-	PVRSRV_RGXDEV_INFO *psDevInfo;
-
-	PVR_ASSERT(hPrivate != NULL);
-
-	psDeviceNode = (PVRSRV_DEVICE_NODE *)(((RGX_INIT_LAYER_PARAMS *)hPrivate)->hServices);
-	psDevInfo = (PVRSRV_RGXDEV_INFO *)psDeviceNode->pvDevice;
-
-	return (psDevInfo->sDevFeatureCfg.ui64ErnsBrns & ui64ErnsBrns) != 0;
-}
-#endif
-
-IMG_UINT32 RGXGetFWCorememSize(const void *hPrivate)
-{
-#if defined(SUPPORT_KERNEL_SRVINIT)
-	PVRSRV_DEVICE_NODE *psDeviceNode;
-	PVRSRV_RGXDEV_INFO *psDevInfo;
-
-	PVR_ASSERT(hPrivate != NULL);
-
-	psDeviceNode = (PVRSRV_DEVICE_NODE *)(((RGX_INIT_LAYER_PARAMS *)hPrivate)->hServices);
-	psDevInfo = (PVRSRV_RGXDEV_INFO *)psDeviceNode->pvDevice;
-
-	return psDevInfo->sDevFeatureCfg.ui32MCMS;
-#elif defined(RGX_META_COREMEM_CODE) || defined(RGX_META_COREMEM_DATA)
-	PVR_UNREFERENCED_PARAMETER(hPrivate);
-
-	return RGX_META_COREMEM_SIZE;
-#else
-	PVR_UNREFERENCED_PARAMETER(hPrivate);
-
-	return 0;
-#endif
 }
 

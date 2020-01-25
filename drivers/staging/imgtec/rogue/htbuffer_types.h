@@ -60,6 +60,35 @@ extern IMG_INTERNAL HTB_FLAG_EL_T g_auiHTBGroupEnable[HTB_FLAG_NUM_EL];
 
 #define HTB_GROUP_ENABLED(SF) (g_auiHTBGroupEnable[HTB_LOG_GROUP_FLAG_GROUP(HTB_SF_GID(SF))] & HTB_LOG_GROUP_FLAG(HTB_SF_GID(SF)))
 
+
+
+/**************************************************************************
+from log_helper.h for later
+ **************************************************************************/
+#if 0
+#include "htbuffer_sf.h"
+
+static IMG_CHAR *groups[]= {
+#define X(A,B) #B,
+	HTB_LOG_SFGROUPLIST
+#undef X
+};
+
+typedef struct {
+	IMG_UINT32 id;
+	IMG_CHAR *name;
+} tuple; /*  pair of string format id and string formats */
+
+/*  The tuple pairs that will be generated using XMacros will be stored here.
+ *   This macro definition must match the definition of SFids in htb_sf.h */
+tuple SFs[]= {
+#define X(a, b, c, d, e) { HTB_LOG_CREATESFID(a,b,e) , d },
+	HTB_LOG_SFIDLIST
+#undef X
+};
+#endif
+
+
 /*************************************************************************/ /*!
  Host Trace Buffer operation mode
  Care must be taken if changing this enum to ensure the MapFlags[] array

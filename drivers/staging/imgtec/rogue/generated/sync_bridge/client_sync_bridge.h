@@ -72,6 +72,18 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeServerSyncPrimSet(IMG_HANDLE hBridg
 							       IMG_HANDLE hSyncHandle,
 							       IMG_UINT32 ui32Value);
 
+IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeSyncRecordRemoveByHandle(IMG_HANDLE hBridge,
+								      IMG_HANDLE hhRecord);
+
+IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeSyncRecordAdd(IMG_HANDLE hBridge,
+							   IMG_HANDLE *phhRecord,
+							   IMG_HANDLE hhServerSyncPrimBlock,
+							   IMG_UINT32 ui32ui32FwBlockAddr,
+							   IMG_UINT32 ui32ui32SyncOffset,
+							   IMG_BOOL bbServerSync,
+							   IMG_UINT32 ui32ClassNameSize,
+							   const IMG_CHAR *puiClassName);
+
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeServerSyncAlloc(IMG_HANDLE hBridge,
 							     IMG_HANDLE *phSyncHandle,
 							     IMG_UINT32 *pui32SyncPrimVAddr,
@@ -152,15 +164,6 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeSyncPrimPDumpCBP(IMG_HANDLE hBridge
 							      IMG_DEVMEM_OFFSET_T uiWriteOffset,
 							      IMG_DEVMEM_SIZE_T uiPacketSize,
 							      IMG_DEVMEM_SIZE_T uiBufferSize);
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeSyncAllocEvent(IMG_HANDLE hBridge,
-							    IMG_BOOL bServerSync,
-							    IMG_UINT32 ui32FWAddr,
-							    IMG_UINT32 ui32ClassNameSize,
-							    const IMG_CHAR *puiClassName);
-
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeSyncFreeEvent(IMG_HANDLE hBridge,
-							   IMG_UINT32 ui32FWAddr);
 
 
 #endif /* CLIENT_SYNC_BRIDGE_H */

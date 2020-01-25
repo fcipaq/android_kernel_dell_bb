@@ -2586,10 +2586,12 @@ void android_hdmi_connector_destroy(struct drm_connector *connector)
 
 void android_hdmi_connector_dpms(struct drm_connector *connector, int mode)
 {
+	struct drm_device *dev = connector->dev;
+	bool hdmi_audio_busy = false;
+	u32 dspcntr_val;
+	struct drm_psb_private *dev_priv = dev->dev_private;
 #if (defined CONFIG_PM_RUNTIME) && (!defined MERRIFIELD) \
 	&& (defined CONFIG_SUPPORT_MIPI)
-	struct drm_device *dev = connector->dev;
-	struct drm_psb_private *dev_priv = dev->dev_private;
 	bool panel_on = false, panel_on2 = false;
 	struct mdfld_dsi_config **dsi_configs;
 #endif
@@ -2599,12 +2601,35 @@ void android_hdmi_connector_dpms(struct drm_connector *connector, int mode)
 				OSPM_UHB_FORCE_POWER_ON))
 		return ;
 
-	drm_helper_connector_dpms(connector, mode);
+	/* Check HDMI Audio Status */
+	hdmi_audio_busy = mid_hdmi_audio_is_busy(dev);
 
-	if (mode != DRM_MODE_DPMS_ON)
-		DISP_PLANEB_STATUS = DISPLAY_PLANE_DISABLE;
-	else
-		DISP_PLANEB_STATUS = DISPLAY_PLANE_ENABLE;
+	pr_debug("[DPMS] audio busy: 0x%x\n", hdmi_audio_busy);
+
+	/* if hdmi audio is busy, just turn off hdmi display plane */
+	if (hdmi_audio_busy) {
+		dspcntr_val = PSB_RVDC32(DSPBCNTR);
+		connector->dpms = mode;
+
+		if (mode != DRM_MODE_DPMS_ON) {
+			if (!dev_priv->hdmi_first_boot) {
+				REG_WRITE(DSPBCNTR, dspcntr_val &
+						~DISPLAY_PLANE_ENABLE);
+				DISP_PLANEB_STATUS = DISPLAY_PLANE_DISABLE;
+			}
+		} else {
+			REG_WRITE(DSPBCNTR, dspcntr_val |
+							DISPLAY_PLANE_ENABLE);
+			DISP_PLANEB_STATUS = DISPLAY_PLANE_ENABLE;
+		}
+	} else {
+		drm_helper_connector_dpms(connector, mode);
+
+		if (mode != DRM_MODE_DPMS_ON)
+			DISP_PLANEB_STATUS = DISPLAY_PLANE_DISABLE;
+		else
+			DISP_PLANEB_STATUS = DISPLAY_PLANE_ENABLE;
+	}
 
 #if (defined CONFIG_PM_RUNTIME) && (!defined MERRIFIELD) \
 	&& (defined CONFIG_SUPPORT_MIPI)

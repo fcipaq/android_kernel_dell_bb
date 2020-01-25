@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for mm
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for mm
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for mm
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,8 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_MM_BRIDGE_H
 #define COMMON_MM_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
@@ -81,13 +79,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_MM_CHANGESPARSEMEM			PVRSRV_BRIDGE_MM_CMD_FIRST+23
 #define PVRSRV_BRIDGE_MM_DEVMEMINTMAPPAGES			PVRSRV_BRIDGE_MM_CMD_FIRST+24
 #define PVRSRV_BRIDGE_MM_DEVMEMINTUNMAPPAGES			PVRSRV_BRIDGE_MM_CMD_FIRST+25
-#define PVRSRV_BRIDGE_MM_DEVMEMISVDEVADDRVALID			PVRSRV_BRIDGE_MM_CMD_FIRST+26
-#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCONFIGCOUNT			PVRSRV_BRIDGE_MM_CMD_FIRST+27
-#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCOUNT			PVRSRV_BRIDGE_MM_CMD_FIRST+28
-#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCONFIGNAME			PVRSRV_BRIDGE_MM_CMD_FIRST+29
-#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPDETAILS			PVRSRV_BRIDGE_MM_CMD_FIRST+30
-#define PVRSRV_BRIDGE_MM_DEVMEMINTREGISTERPFNOTIFYKM			PVRSRV_BRIDGE_MM_CMD_FIRST+31
-#define PVRSRV_BRIDGE_MM_CMD_LAST			(PVRSRV_BRIDGE_MM_CMD_FIRST+31)
+#define PVRSRV_BRIDGE_MM_DEVMEMSLCFLUSHINVALREQUEST			PVRSRV_BRIDGE_MM_CMD_FIRST+26
+#define PVRSRV_BRIDGE_MM_DEVMEMISVDEVADDRVALID			PVRSRV_BRIDGE_MM_CMD_FIRST+27
+#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCONFIGCOUNT			PVRSRV_BRIDGE_MM_CMD_FIRST+28
+#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCOUNT			PVRSRV_BRIDGE_MM_CMD_FIRST+29
+#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPCONFIGNAME			PVRSRV_BRIDGE_MM_CMD_FIRST+30
+#define PVRSRV_BRIDGE_MM_HEAPCFGHEAPDETAILS			PVRSRV_BRIDGE_MM_CMD_FIRST+31
+#define PVRSRV_BRIDGE_MM_DEVMEMINTCTXCREATECLS			PVRSRV_BRIDGE_MM_CMD_FIRST+32
+#define PVRSRV_BRIDGE_MM_CMD_LAST			(PVRSRV_BRIDGE_MM_CMD_FIRST+32)
 
 
 /*******************************************
@@ -270,8 +269,6 @@ typedef struct PVRSRV_BRIDGE_IN_PHYSMEMNEWRAMBACKEDPMR_TAG
 	IMG_UINT32 * pui32MappingTable;
 	IMG_UINT32 ui32Log2PageSize;
 	PVRSRV_MEMALLOCFLAGS_T uiFlags;
-	IMG_UINT32 ui32AnnotationLength;
-	const IMG_CHAR * puiAnnotation;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_PHYSMEMNEWRAMBACKEDPMR;
 
 /* Bridge out structure for PhysmemNewRamBackedPMR */
@@ -296,8 +293,6 @@ typedef struct PVRSRV_BRIDGE_IN_PHYSMEMNEWRAMBACKEDLOCKEDPMR_TAG
 	IMG_UINT32 * pui32MappingTable;
 	IMG_UINT32 ui32Log2PageSize;
 	PVRSRV_MEMALLOCFLAGS_T uiFlags;
-	IMG_UINT32 ui32AnnotationLength;
-	const IMG_CHAR * puiAnnotation;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_PHYSMEMNEWRAMBACKEDLOCKEDPMR;
 
 /* Bridge out structure for PhysmemNewRamBackedLockedPMR */
@@ -393,7 +388,6 @@ typedef struct PVRSRV_BRIDGE_OUT_DEVMEMINTCTXCREATE_TAG
 {
 	IMG_HANDLE hDevMemServerContext;
 	IMG_HANDLE hPrivData;
-	IMG_UINT32 ui32CPUCacheLineSize;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVMEMINTCTXCREATE;
 
@@ -550,6 +544,7 @@ typedef struct PVRSRV_BRIDGE_IN_CHANGESPARSEMEM_TAG
 /* Bridge out structure for ChangeSparseMem */
 typedef struct PVRSRV_BRIDGE_OUT_CHANGESPARSEMEM_TAG
 {
+	IMG_UINT32 ui32Status;
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_CHANGESPARSEMEM;
 
@@ -593,6 +588,24 @@ typedef struct PVRSRV_BRIDGE_OUT_DEVMEMINTUNMAPPAGES_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVMEMINTUNMAPPAGES;
+
+
+/*******************************************
+            DevmemSLCFlushInvalRequest          
+ *******************************************/
+
+/* Bridge in structure for DevmemSLCFlushInvalRequest */
+typedef struct PVRSRV_BRIDGE_IN_DEVMEMSLCFLUSHINVALREQUEST_TAG
+{
+	IMG_HANDLE hDeviceNode;
+	IMG_HANDLE hPmr;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVMEMSLCFLUSHINVALREQUEST;
+
+/* Bridge out structure for DevmemSLCFlushInvalRequest */
+typedef struct PVRSRV_BRIDGE_OUT_DEVMEMSLCFLUSHINVALREQUEST_TAG
+{
+	PVRSRV_ERROR eError;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVMEMSLCFLUSHINVALREQUEST;
 
 
 /*******************************************
@@ -697,22 +710,23 @@ typedef struct PVRSRV_BRIDGE_OUT_HEAPCFGHEAPDETAILS_TAG
 
 
 /*******************************************
-            DevmemIntRegisterPFNotifyKM          
+            DevmemIntCtxCreateCLS          
  *******************************************/
 
-/* Bridge in structure for DevmemIntRegisterPFNotifyKM */
-typedef struct PVRSRV_BRIDGE_IN_DEVMEMINTREGISTERPFNOTIFYKM_TAG
+/* Bridge in structure for DevmemIntCtxCreateCLS */
+typedef struct PVRSRV_BRIDGE_IN_DEVMEMINTCTXCREATECLS_TAG
 {
-	IMG_HANDLE hDevmemCtx;
-	IMG_UINT32 ui32PID;
-	IMG_BOOL bRegister;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVMEMINTREGISTERPFNOTIFYKM;
+	IMG_BOOL bbKernelMemoryCtx;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_DEVMEMINTCTXCREATECLS;
 
-/* Bridge out structure for DevmemIntRegisterPFNotifyKM */
-typedef struct PVRSRV_BRIDGE_OUT_DEVMEMINTREGISTERPFNOTIFYKM_TAG
+/* Bridge out structure for DevmemIntCtxCreateCLS */
+typedef struct PVRSRV_BRIDGE_OUT_DEVMEMINTCTXCREATECLS_TAG
 {
+	IMG_HANDLE hDevMemServerContext;
+	IMG_HANDLE hPrivData;
+	IMG_UINT32 ui32CPUCacheLineSize;
 	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVMEMINTREGISTERPFNOTIFYKM;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_DEVMEMINTCTXCREATECLS;
 
 
 #endif /* COMMON_MM_BRIDGE_H */

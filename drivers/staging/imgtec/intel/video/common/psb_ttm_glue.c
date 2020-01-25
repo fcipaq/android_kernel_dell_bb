@@ -50,15 +50,8 @@ extern struct mutex g_ied_mutex;
 extern int sepapp_drm_playback(bool ied_status);
 static int ied_enabled;
 
-enum slc_setting {
-	enable_slc,
-	disable_slc,
-};
-
-static void ann_workaround_ctx_set_slc(struct drm_psb_private *dev_priv,
-		uint64_t ctx_type, enum slc_setting slc_set);
-
-#define MB_SIZE 16
+static void ann_rm_workaround_ctx(struct drm_psb_private *dev_priv, uint64_t ctx_type);
+static void ann_add_workaround_ctx(struct drm_psb_private *dev_priv, uint64_t ctx_type);
 
 #ifdef MERRIFIELD
 struct psb_fpriv *psb_fpriv(struct drm_file *file_priv)
@@ -302,8 +295,7 @@ void psb_remove_videoctx(struct drm_psb_private *dev_priv, struct file *filp)
 				  (found_ctx->ctx_type >> 8) & 0xff,
 				  (found_ctx->ctx_type & 0xff));
 		if (IS_ANN(dev))
-			ann_workaround_ctx_set_slc(dev_priv, ctx_type,
-					enable_slc);
+			ann_rm_workaround_ctx(dev_priv, found_ctx->ctx_type);
 #ifndef CONFIG_DRM_VXD_BYT
 		/* if current ctx points to it, set to NULL */
 		if ((VAEntrypointEncSlice ==
@@ -467,8 +459,7 @@ int psb_video_getparam(struct drm_device *dev, void *data,
 		video_ctx->ctx_type = ctx_type;
 		video_ctx->cur_sequence = 0xffffffff;
 		if (IS_ANN(dev))
-			ann_workaround_ctx_set_slc(dev_priv, ctx_type,
-					disable_slc);
+			ann_add_workaround_ctx(dev_priv, ctx_type);
 #ifdef CONFIG_SLICE_HEADER_PARSING
 		video_ctx->frame_end_seq = 0xffffffff;
 		if (ctx_type & VA_RT_FORMAT_PROTECTED) {
@@ -529,17 +520,14 @@ int psb_video_getparam(struct drm_device *dev, void *data,
 		else {
 			mutex_lock(&g_ied_mutex);
 			DRM_INFO("Video: ied_ref: %d\n", g_ied_ref);
-			/* To make sure no IED session still working. */
-			if (list_empty(&dev_priv->video_ctx)) {
-				while (g_ied_ref) {
-					ret = sepapp_drm_playback(false);
-					if (ret) {
-						DRM_ERROR("IED Clean-up \
-							Failed:0x%x\n", ret);
-						break;
-					}
-					g_ied_ref--;
+			while (g_ied_ref) {
+				ret = sepapp_drm_playback(false);
+				if (ret) {
+					DRM_ERROR("IED Clean-up \
+						Failed:0x%x\n", ret);
+					break;
 				}
+				g_ied_ref--;
 			}
 			mutex_unlock(&g_ied_mutex);
 		}
@@ -762,22 +750,19 @@ int psb_video_getparam(struct drm_device *dev, void *data,
 	return 0;
 }
 
-/*
- * SLC bug: there is green corruption for VC1/VP8/H.264 decode if:
- * 1. VC1/VP8 width is not 64 aligned. Recode the number of VC1 ctx whose width
- * is not 64 aligned;
- * 2. H.264 resolution <= 720p.
+/* SLC bug: there is green corruption for vc1 decode if width is not 64 aligned
+ * Recode the number of VC1 ctx whose width is not 64 aligned
  */
-static void ann_workaround_ctx_set_slc(struct drm_psb_private *dev_priv,
-		uint64_t ctx_type, enum slc_setting slc_set)
+static void ann_add_workaround_ctx(struct drm_psb_private *dev_priv, uint64_t ctx_type)
 {
 
 	struct msvdx_private *msvdx_priv;
 	int profile = (ctx_type >> 8) & 0xff;
-	/* ctx_type >> 32 is width_in_mb */
-	uint64_t width = ((ctx_type >> 32) & 0xffff) * MB_SIZE;
-	/* ctx_type >> 48 is height_in_mb */
-	uint64_t height = ((ctx_type >> 48) & 0xffff) * MB_SIZE;
+
+	if (profile != VAProfileVC1Simple &&
+	    profile != VAProfileVC1Main &&
+	    profile != VAProfileVC1Advanced)
+		return;
 
 	if (unlikely(!dev_priv))
 		return;
@@ -786,32 +771,41 @@ static void ann_workaround_ctx_set_slc(struct drm_psb_private *dev_priv,
 	if (unlikely(!msvdx_priv))
 		return;
 
-	switch (profile) {
-	case VAProfileVC1Simple:
-	case VAProfileVC1Main:
-	case VAProfileVC1Advanced:
-	case VAProfileVP8Version0_3:
-		if (width % 64) {
-			if (slc_set == disable_slc)
-				atomic_inc(&msvdx_priv->slc_workaround_ctx);
-			else
-				atomic_dec(&msvdx_priv->slc_workaround_ctx);
-		}
-		break;
+	PSB_DEBUG_GENERAL(
+	    "add vc1 ctx, ctx_type is 0x%llx\n",
+		ctx_type);
 
-	case VAProfileH264Baseline:
-	case VAProfileH264Main:
-	case VAProfileH264High:
-		if (((height == 128) && (width > 112) && (width <= 128)) ||
-				((width <= 1280) && (height <= 736))) {
-			if (slc_set == disable_slc)
-				atomic_inc(&msvdx_priv->slc_workaround_ctx);
-			else
-				atomic_dec(&msvdx_priv->slc_workaround_ctx);
-		}
-		break;
+	/* ctx_type >> 32 is width_in_mb */
+	if ((ctx_type >> 32) % 4) {
+		atomic_inc(&msvdx_priv->vc1_workaround_ctx);
+		PSB_DEBUG_GENERAL("add workaround ctx %p in ctx\n", msvdx_priv);
+	}
+}
 
-	default:
-		break;
+static void ann_rm_workaround_ctx(struct drm_psb_private *dev_priv, uint64_t ctx_type)
+{
+
+	struct msvdx_private *msvdx_priv;
+	int profile = (ctx_type >> 8) & 0xff;
+
+	if (profile != VAProfileVC1Simple &&
+	    profile != VAProfileVC1Main &&
+	    profile != VAProfileVC1Advanced)
+		return;
+
+	if (unlikely(!dev_priv))
+		return;
+
+	msvdx_priv = dev_priv->msvdx_private;
+	if (unlikely(!msvdx_priv))
+		return;
+
+	PSB_DEBUG_GENERAL(
+	    "rm vc1 ctx, ctx_type is 0x%llx\n",
+		ctx_type);
+	/* ctx_type >> 32 is width_in_mb */
+	if ((ctx_type >> 32) % 4) {
+		atomic_dec(&msvdx_priv->vc1_workaround_ctx);
+		PSB_DEBUG_GENERAL("dec workaround ctx %p in ctx\n", msvdx_priv);
 	}
 }

@@ -46,7 +46,6 @@ void PVRCore_Cleanup(void);
 void PVRSRVRelease(struct drm_device *dev, struct drm_file *pDRMFile);
 
 int PVRSRV_BridgeDispatchKM(struct drm_device *dev, void *arg, struct drm_file *pFile);
-int PVRSRV_MMap(struct file *file, struct vm_area_struct *ps_vma);
 
 int PVRSRVDrmOpen(struct drm_device *dev, struct drm_file *file);
 int PVRSRVDrmRelease(struct inode *inode, struct file *filp);

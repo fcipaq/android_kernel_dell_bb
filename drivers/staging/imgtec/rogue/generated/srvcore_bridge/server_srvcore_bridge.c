@@ -47,6 +47,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_defs.h"
 
 #include "srvcore.h"
+#include "pvrsrv.h"
 
 
 #include "common_srvcore_bridge.h"
@@ -60,8 +61,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "handle.h"
 
 #include <linux/slab.h>
-
-
 
 
 
@@ -83,7 +82,6 @@ PVRSRVBridgeConnect(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
 	psConnectOUT->eError =
 		PVRSRVConnectKM(psConnection, OSGetDevData(psConnection),
 					psConnectIN->ui32Flags,
@@ -91,12 +89,7 @@ PVRSRVBridgeConnect(IMG_UINT32 ui32DispatchTableEntry,
 					psConnectIN->ui32ClientDDKVersion,
 					psConnectIN->ui32ClientDDKBuild,
 					&psConnectOUT->ui8KernelArch,
-					&psConnectOUT->ui32CapabilityFlags,
-					&psConnectOUT->ui32PVRBridges,
-					&psConnectOUT->ui32RGXBridges);
-
-
-
+					&psConnectOUT->ui32Log2PageSize);
 
 
 
@@ -105,7 +98,6 @@ PVRSRVBridgeConnect(IMG_UINT32 ui32DispatchTableEntry,
 	return 0;
 }
 
-
 static IMG_INT
 PVRSRVBridgeDisconnect(IMG_UINT32 ui32DispatchTableEntry,
 					  PVRSRV_BRIDGE_IN_DISCONNECT *psDisconnectIN,
@@ -113,10 +105,9 @@ PVRSRVBridgeDisconnect(IMG_UINT32 ui32DispatchTableEntry,
 					 CONNECTION_DATA *psConnection)
 {
 
-
-
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	PVR_UNREFERENCED_PARAMETER(psDisconnectIN);
+
 
 
 
@@ -130,12 +121,8 @@ PVRSRVBridgeDisconnect(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeInitSrvDisconnect(IMG_UINT32 ui32DispatchTableEntry,
@@ -148,16 +135,14 @@ PVRSRVBridgeInitSrvDisconnect(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
+	PMRLock();
 
 
 	psInitSrvDisconnectOUT->eError =
 		PVRSRVInitSrvDisconnectKM(psConnection, OSGetDevData(psConnection),
 					psInitSrvDisconnectIN->bInitSuccesful,
 					psInitSrvDisconnectIN->ui32ClientBuildOptions);
-
-
-
+	PMRUnlock();
 
 
 
@@ -165,7 +150,6 @@ PVRSRVBridgeInitSrvDisconnect(IMG_UINT32 ui32DispatchTableEntry,
 
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeAcquireGlobalEventObject(IMG_UINT32 ui32DispatchTableEntry,
@@ -175,16 +159,15 @@ PVRSRVBridgeAcquireGlobalEventObject(IMG_UINT32 ui32DispatchTableEntry,
 {
 	IMG_HANDLE hGlobalEventObjectInt = NULL;
 
-
-
 	PVR_UNREFERENCED_PARAMETER(psAcquireGlobalEventObjectIN);
 
 
 
 
 
+
 	psAcquireGlobalEventObjectOUT->eError =
-		PVRSRVAcquireGlobalEventObjectKM(
+		AcquireGlobalEventObjectServer(
 					&hGlobalEventObjectInt);
 	/* Exit early if bridged call fails */
 	if(psAcquireGlobalEventObjectOUT->eError != PVRSRV_OK)
@@ -192,47 +175,33 @@ PVRSRVBridgeAcquireGlobalEventObject(IMG_UINT32 ui32DispatchTableEntry,
 		goto AcquireGlobalEventObject_exit;
 	}
 
-	/* Lock over handle creation. */
-	LockHandle();
 
-
-
-
-
-	psAcquireGlobalEventObjectOUT->eError = PVRSRVAllocHandleUnlocked(psConnection->psHandleBase,
-
+	psAcquireGlobalEventObjectOUT->eError = PVRSRVAllocHandle(psConnection->psHandleBase,
 							&psAcquireGlobalEventObjectOUT->hGlobalEventObject,
 							(void *) hGlobalEventObjectInt,
 							PVRSRV_HANDLE_TYPE_SHARED_EVENT_OBJECT,
 							PVRSRV_HANDLE_ALLOC_FLAG_MULTI
-							,(PFN_HANDLE_RELEASE)&PVRSRVReleaseGlobalEventObjectKM);
+							,(PFN_HANDLE_RELEASE)&ReleaseGlobalEventObjectServer);
 	if (psAcquireGlobalEventObjectOUT->eError != PVRSRV_OK)
 	{
-		UnlockHandle();
 		goto AcquireGlobalEventObject_exit;
 	}
 
-	/* Release now we have created handles. */
-	UnlockHandle();
 
 
 
 AcquireGlobalEventObject_exit:
-
-
-
 	if (psAcquireGlobalEventObjectOUT->eError != PVRSRV_OK)
 	{
 		if (hGlobalEventObjectInt)
 		{
-			PVRSRVReleaseGlobalEventObjectKM(hGlobalEventObjectInt);
+			ReleaseGlobalEventObjectServer(hGlobalEventObjectInt);
 		}
 	}
 
 
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeReleaseGlobalEventObject(IMG_UINT32 ui32DispatchTableEntry,
@@ -249,41 +218,22 @@ PVRSRVBridgeReleaseGlobalEventObject(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-	/* Lock over handle destruction. */
-	LockHandle();
-
-
-
-
-
 	psReleaseGlobalEventObjectOUT->eError =
-		PVRSRVReleaseHandleUnlocked(psConnection->psHandleBase,
+		PVRSRVReleaseHandle(psConnection->psHandleBase,
 					(IMG_HANDLE) psReleaseGlobalEventObjectIN->hGlobalEventObject,
 					PVRSRV_HANDLE_TYPE_SHARED_EVENT_OBJECT);
-	if ((psReleaseGlobalEventObjectOUT->eError != PVRSRV_OK) &&
-	    (psReleaseGlobalEventObjectOUT->eError != PVRSRV_ERROR_RETRY))
+	if ((psReleaseGlobalEventObjectOUT->eError != PVRSRV_OK) && (psReleaseGlobalEventObjectOUT->eError != PVRSRV_ERROR_RETRY))
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-		        "PVRSRVBridgeReleaseGlobalEventObject: %s",
-		        PVRSRVGetErrorStringKM(psReleaseGlobalEventObjectOUT->eError)));
 		PVR_ASSERT(0);
-		UnlockHandle();
 		goto ReleaseGlobalEventObject_exit;
 	}
-
-	/* Release now we have destroyed handles. */
-	UnlockHandle();
 
 
 
 ReleaseGlobalEventObject_exit:
 
-
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeEventObjectOpen(IMG_UINT32 ui32DispatchTableEntry,
@@ -291,7 +241,6 @@ PVRSRVBridgeEventObjectOpen(IMG_UINT32 ui32DispatchTableEntry,
 					  PVRSRV_BRIDGE_OUT_EVENTOBJECTOPEN *psEventObjectOpenOUT,
 					 CONNECTION_DATA *psConnection)
 {
-	IMG_HANDLE hEventObject = psEventObjectOpenIN->hEventObject;
 	IMG_HANDLE hEventObjectInt = NULL;
 	IMG_HANDLE hOSEventInt = NULL;
 
@@ -301,29 +250,19 @@ PVRSRVBridgeEventObjectOpen(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-	/* Lock over handle lookup. */
-	LockHandle();
-
-
-
-
-
 				{
 					/* Look up the address from the handle */
 					psEventObjectOpenOUT->eError =
-						PVRSRVLookupHandleUnlocked(psConnection->psHandleBase,
+						PVRSRVLookupHandle(psConnection->psHandleBase,
 											(void **) &hEventObjectInt,
-											hEventObject,
-											PVRSRV_HANDLE_TYPE_SHARED_EVENT_OBJECT,
-											IMG_TRUE);
+											psEventObjectOpenIN->hEventObject,
+											PVRSRV_HANDLE_TYPE_SHARED_EVENT_OBJECT);
 					if(psEventObjectOpenOUT->eError != PVRSRV_OK)
 					{
-						UnlockHandle();
 						goto EventObjectOpen_exit;
 					}
 				}
-	/* Release now we have looked up handles. */
-	UnlockHandle();
+
 
 	psEventObjectOpenOUT->eError =
 		OSEventObjectOpen(
@@ -335,15 +274,8 @@ PVRSRVBridgeEventObjectOpen(IMG_UINT32 ui32DispatchTableEntry,
 		goto EventObjectOpen_exit;
 	}
 
-	/* Lock over handle creation. */
-	LockHandle();
 
-
-
-
-
-	psEventObjectOpenOUT->eError = PVRSRVAllocHandleUnlocked(psConnection->psHandleBase,
-
+	psEventObjectOpenOUT->eError = PVRSRVAllocHandle(psConnection->psHandleBase,
 							&psEventObjectOpenOUT->hOSEvent,
 							(void *) hOSEventInt,
 							PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT,
@@ -351,37 +283,13 @@ PVRSRVBridgeEventObjectOpen(IMG_UINT32 ui32DispatchTableEntry,
 							,(PFN_HANDLE_RELEASE)&OSEventObjectClose);
 	if (psEventObjectOpenOUT->eError != PVRSRV_OK)
 	{
-		UnlockHandle();
 		goto EventObjectOpen_exit;
 	}
 
-	/* Release now we have created handles. */
-	UnlockHandle();
 
 
 
 EventObjectOpen_exit:
-
-	/* Lock over handle lookup cleanup. */
-	LockHandle();
-
-
-
-
-
-
-				{
-					/* Unreference the previously looked up handle */
-						if(hEventObjectInt)
-						{
-							PVRSRVReleaseHandleUnlocked(psConnection->psHandleBase,
-											hEventObject,
-											PVRSRV_HANDLE_TYPE_SHARED_EVENT_OBJECT);
-						}
-				}
-	/* Release now we have cleaned up look up handles. */
-	UnlockHandle();
-
 	if (psEventObjectOpenOUT->eError != PVRSRV_OK)
 	{
 		if (hOSEventInt)
@@ -394,14 +302,12 @@ EventObjectOpen_exit:
 	return 0;
 }
 
-
 static IMG_INT
 PVRSRVBridgeEventObjectWait(IMG_UINT32 ui32DispatchTableEntry,
 					  PVRSRV_BRIDGE_IN_EVENTOBJECTWAIT *psEventObjectWaitIN,
 					  PVRSRV_BRIDGE_OUT_EVENTOBJECTWAIT *psEventObjectWaitOUT,
 					 CONNECTION_DATA *psConnection)
 {
-	IMG_HANDLE hOSEventKM = psEventObjectWaitIN->hOSEventKM;
 	IMG_HANDLE hOSEventKMInt = NULL;
 
 
@@ -410,29 +316,19 @@ PVRSRVBridgeEventObjectWait(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-	/* Lock over handle lookup. */
-	LockHandle();
-
-
-
-
-
 				{
 					/* Look up the address from the handle */
 					psEventObjectWaitOUT->eError =
-						PVRSRVLookupHandleUnlocked(psConnection->psHandleBase,
+						PVRSRVLookupHandle(psConnection->psHandleBase,
 											(void **) &hOSEventKMInt,
-											hOSEventKM,
-											PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT,
-											IMG_TRUE);
+											psEventObjectWaitIN->hOSEventKM,
+											PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT);
 					if(psEventObjectWaitOUT->eError != PVRSRV_OK)
 					{
-						UnlockHandle();
 						goto EventObjectWait_exit;
 					}
 				}
-	/* Release now we have looked up handles. */
-	UnlockHandle();
+
 
 	psEventObjectWaitOUT->eError =
 		OSEventObjectWait(
@@ -443,30 +339,8 @@ PVRSRVBridgeEventObjectWait(IMG_UINT32 ui32DispatchTableEntry,
 
 EventObjectWait_exit:
 
-	/* Lock over handle lookup cleanup. */
-	LockHandle();
-
-
-
-
-
-
-				{
-					/* Unreference the previously looked up handle */
-						if(hOSEventKMInt)
-						{
-							PVRSRVReleaseHandleUnlocked(psConnection->psHandleBase,
-											hOSEventKM,
-											PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT);
-						}
-				}
-	/* Release now we have cleaned up look up handles. */
-	UnlockHandle();
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeEventObjectClose(IMG_UINT32 ui32DispatchTableEntry,
@@ -483,41 +357,22 @@ PVRSRVBridgeEventObjectClose(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-	/* Lock over handle destruction. */
-	LockHandle();
-
-
-
-
-
 	psEventObjectCloseOUT->eError =
-		PVRSRVReleaseHandleUnlocked(psConnection->psHandleBase,
+		PVRSRVReleaseHandle(psConnection->psHandleBase,
 					(IMG_HANDLE) psEventObjectCloseIN->hOSEventKM,
 					PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT);
-	if ((psEventObjectCloseOUT->eError != PVRSRV_OK) &&
-	    (psEventObjectCloseOUT->eError != PVRSRV_ERROR_RETRY))
+	if ((psEventObjectCloseOUT->eError != PVRSRV_OK) && (psEventObjectCloseOUT->eError != PVRSRV_ERROR_RETRY))
 	{
-		PVR_DPF((PVR_DBG_ERROR,
-		        "PVRSRVBridgeEventObjectClose: %s",
-		        PVRSRVGetErrorStringKM(psEventObjectCloseOUT->eError)));
 		PVR_ASSERT(0);
-		UnlockHandle();
 		goto EventObjectClose_exit;
 	}
-
-	/* Release now we have destroyed handles. */
-	UnlockHandle();
 
 
 
 EventObjectClose_exit:
 
-
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeDumpDebugInfo(IMG_UINT32 ui32DispatchTableEntry,
@@ -526,7 +381,7 @@ PVRSRVBridgeDumpDebugInfo(IMG_UINT32 ui32DispatchTableEntry,
 					 CONNECTION_DATA *psConnection)
 {
 
-
+	PVR_UNREFERENCED_PARAMETER(psConnection);
 
 
 
@@ -534,11 +389,8 @@ PVRSRVBridgeDumpDebugInfo(IMG_UINT32 ui32DispatchTableEntry,
 
 
 	psDumpDebugInfoOUT->eError =
-		PVRSRVDumpDebugInfoKM(psConnection, OSGetDevData(psConnection),
+		PVRSRVDumpDebugInfoKM(
 					psDumpDebugInfoIN->ui32ui32VerbLevel);
-
-
-
 
 
 
@@ -547,7 +399,6 @@ PVRSRVBridgeDumpDebugInfo(IMG_UINT32 ui32DispatchTableEntry,
 	return 0;
 }
 
-
 static IMG_INT
 PVRSRVBridgeGetDevClockSpeed(IMG_UINT32 ui32DispatchTableEntry,
 					  PVRSRV_BRIDGE_IN_GETDEVCLOCKSPEED *psGetDevClockSpeedIN,
@@ -555,9 +406,8 @@ PVRSRVBridgeGetDevClockSpeed(IMG_UINT32 ui32DispatchTableEntry,
 					 CONNECTION_DATA *psConnection)
 {
 
-
-
 	PVR_UNREFERENCED_PARAMETER(psGetDevClockSpeedIN);
+
 
 
 
@@ -571,12 +421,8 @@ PVRSRVBridgeGetDevClockSpeed(IMG_UINT32 ui32DispatchTableEntry,
 
 
 
-
-
-
 	return 0;
 }
-
 
 static IMG_INT
 PVRSRVBridgeHWOpTimeout(IMG_UINT32 ui32DispatchTableEntry,
@@ -585,148 +431,93 @@ PVRSRVBridgeHWOpTimeout(IMG_UINT32 ui32DispatchTableEntry,
 					 CONNECTION_DATA *psConnection)
 {
 
-
-
+	PVR_UNREFERENCED_PARAMETER(psConnection);
 	PVR_UNREFERENCED_PARAMETER(psHWOpTimeoutIN);
 
 
 
 
 
+
 	psHWOpTimeoutOUT->eError =
-		PVRSRVHWOpTimeoutKM(psConnection, OSGetDevData(psConnection)
+		PVRSRVHWOpTimeoutKM(
 					);
 
 
 
 
 
-
-
-
 	return 0;
 }
 
-
-#if defined(SUPPORT_KERNEL_SRVINIT)
 static IMG_INT
-PVRSRVBridgeAlignmentCheck(IMG_UINT32 ui32DispatchTableEntry,
-					  PVRSRV_BRIDGE_IN_ALIGNMENTCHECK *psAlignmentCheckIN,
-					  PVRSRV_BRIDGE_OUT_ALIGNMENTCHECK *psAlignmentCheckOUT,
+PVRSRVBridgeKickDevices(IMG_UINT32 ui32DispatchTableEntry,
+					  PVRSRV_BRIDGE_IN_KICKDEVICES *psKickDevicesIN,
+					  PVRSRV_BRIDGE_OUT_KICKDEVICES *psKickDevicesOUT,
 					 CONNECTION_DATA *psConnection)
 {
-	IMG_UINT32 *ui32AlignChecksInt = NULL;
 
-	IMG_UINT32 ui32NextOffset = 0;
-	IMG_BYTE   *pArrayArgsBuffer = NULL;
-#if !defined(INTEGRITY_OS)
-	IMG_BOOL bHaveEnoughSpace = IMG_FALSE;
-#endif
-
-	IMG_UINT32 ui32BufferSize = 
-			(psAlignmentCheckIN->ui32AlignChecksSize * sizeof(IMG_UINT32)) +
-			0;
+	PVR_UNREFERENCED_PARAMETER(psConnection);
+	PVR_UNREFERENCED_PARAMETER(psKickDevicesIN);
 
 
 
 
 
-	if (ui32BufferSize != 0)
-	{
-#if !defined(INTEGRITY_OS)
-		/* Try to use remainder of input buffer for copies if possible, word-aligned for safety. */
-		IMG_UINT32 ui32InBufferOffset = PVR_ALIGN(sizeof(*psAlignmentCheckIN), sizeof(unsigned long));
-		IMG_UINT32 ui32InBufferExcessSize = ui32InBufferOffset >= PVRSRV_MAX_BRIDGE_IN_SIZE ? 0 :
-			PVRSRV_MAX_BRIDGE_IN_SIZE - ui32InBufferOffset;
 
-		bHaveEnoughSpace = ui32BufferSize <= ui32InBufferExcessSize;
-		if (bHaveEnoughSpace)
-		{
-			IMG_BYTE *pInputBuffer = (IMG_BYTE *)psAlignmentCheckIN;
-
-			pArrayArgsBuffer = &pInputBuffer[ui32InBufferOffset];		}
-		else
-#endif
-		{
-			pArrayArgsBuffer = OSAllocMemNoStats(ui32BufferSize);
-
-			if(!pArrayArgsBuffer)
-			{
-				psAlignmentCheckOUT->eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-				goto AlignmentCheck_exit;
-			}
-		}
-	}
-
-	if (psAlignmentCheckIN->ui32AlignChecksSize != 0)
-	{
-		ui32AlignChecksInt = (IMG_UINT32*)(((IMG_UINT8 *)pArrayArgsBuffer) + ui32NextOffset);
-		ui32NextOffset += psAlignmentCheckIN->ui32AlignChecksSize * sizeof(IMG_UINT32);
-	}
-
-			/* Copy the data over */
-			if (psAlignmentCheckIN->ui32AlignChecksSize * sizeof(IMG_UINT32) > 0)
-			{
-				if ( OSCopyFromUser(NULL, ui32AlignChecksInt, psAlignmentCheckIN->pui32AlignChecks, psAlignmentCheckIN->ui32AlignChecksSize * sizeof(IMG_UINT32)) != PVRSRV_OK )
-				{
-					psAlignmentCheckOUT->eError = PVRSRV_ERROR_INVALID_PARAMS;
-
-					goto AlignmentCheck_exit;
-				}
-			}
-
-
-	psAlignmentCheckOUT->eError =
-		PVRSRVAlignmentCheckKM(psConnection, OSGetDevData(psConnection),
-					psAlignmentCheckIN->ui32AlignChecksSize,
-					ui32AlignChecksInt);
+	psKickDevicesOUT->eError =
+		PVRSRVKickDevicesKM(
+					);
 
 
 
-
-AlignmentCheck_exit:
-
-
-
-	/* Allocated space should be equal to the last updated offset */
-	PVR_ASSERT(ui32BufferSize == ui32NextOffset);
-
-#if defined(INTEGRITY_OS)
-	if(pArrayArgsBuffer)
-#else
-	if(!bHaveEnoughSpace && pArrayArgsBuffer)
-#endif
-		OSFreeMemNoStats(pArrayArgsBuffer);
 
 
 	return 0;
 }
 
-#else
-#define PVRSRVBridgeAlignmentCheck NULL
-#endif
+static IMG_INT
+PVRSRVBridgeResetHWRLogs(IMG_UINT32 ui32DispatchTableEntry,
+					  PVRSRV_BRIDGE_IN_RESETHWRLOGS *psResetHWRLogsIN,
+					  PVRSRV_BRIDGE_OUT_RESETHWRLOGS *psResetHWRLogsOUT,
+					 CONNECTION_DATA *psConnection)
+{
+
+	PVR_UNREFERENCED_PARAMETER(psResetHWRLogsIN);
+
+
+
+
+
+
+	psResetHWRLogsOUT->eError =
+		PVRSRVResetHWRLogsKM(psConnection, OSGetDevData(psConnection)
+					);
+
+
+
+
+
+	return 0;
+}
 
 static IMG_INT
-PVRSRVBridgeGetDeviceStatus(IMG_UINT32 ui32DispatchTableEntry,
-					  PVRSRV_BRIDGE_IN_GETDEVICESTATUS *psGetDeviceStatusIN,
-					  PVRSRV_BRIDGE_OUT_GETDEVICESTATUS *psGetDeviceStatusOUT,
+PVRSRVBridgeSoftReset(IMG_UINT32 ui32DispatchTableEntry,
+					  PVRSRV_BRIDGE_IN_SOFTRESET *psSoftResetIN,
+					  PVRSRV_BRIDGE_OUT_SOFTRESET *psSoftResetOUT,
 					 CONNECTION_DATA *psConnection)
 {
 
 
 
-	PVR_UNREFERENCED_PARAMETER(psGetDeviceStatusIN);
 
 
 
 
-
-	psGetDeviceStatusOUT->eError =
-		PVRSRVGetDeviceStatusKM(psConnection, OSGetDevData(psConnection),
-					&psGetDeviceStatusOUT->ui32DeviceSatus);
-
-
-
+	psSoftResetOUT->eError =
+		PVRSRVSoftResetKM(psConnection, OSGetDevData(psConnection),
+					psSoftResetIN->ui64ResetValue1,
+					psSoftResetIN->ui64ResetValue2);
 
 
 
@@ -734,81 +525,6 @@ PVRSRVBridgeGetDeviceStatus(IMG_UINT32 ui32DispatchTableEntry,
 
 	return 0;
 }
-
-
-static IMG_INT
-PVRSRVBridgeEventObjectWaitTimeout(IMG_UINT32 ui32DispatchTableEntry,
-					  PVRSRV_BRIDGE_IN_EVENTOBJECTWAITTIMEOUT *psEventObjectWaitTimeoutIN,
-					  PVRSRV_BRIDGE_OUT_EVENTOBJECTWAITTIMEOUT *psEventObjectWaitTimeoutOUT,
-					 CONNECTION_DATA *psConnection)
-{
-	IMG_HANDLE hOSEventKM = psEventObjectWaitTimeoutIN->hOSEventKM;
-	IMG_HANDLE hOSEventKMInt = NULL;
-
-
-
-
-
-
-
-	/* Lock over handle lookup. */
-	LockHandle();
-
-
-
-
-
-				{
-					/* Look up the address from the handle */
-					psEventObjectWaitTimeoutOUT->eError =
-						PVRSRVLookupHandleUnlocked(psConnection->psHandleBase,
-											(void **) &hOSEventKMInt,
-											hOSEventKM,
-											PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT,
-											IMG_TRUE);
-					if(psEventObjectWaitTimeoutOUT->eError != PVRSRV_OK)
-					{
-						UnlockHandle();
-						goto EventObjectWaitTimeout_exit;
-					}
-				}
-	/* Release now we have looked up handles. */
-	UnlockHandle();
-
-	psEventObjectWaitTimeoutOUT->eError =
-		OSEventObjectWaitTimeout(
-					hOSEventKMInt,
-					psEventObjectWaitTimeoutIN->ui64uiTimeoutus);
-
-
-
-
-EventObjectWaitTimeout_exit:
-
-	/* Lock over handle lookup cleanup. */
-	LockHandle();
-
-
-
-
-
-
-				{
-					/* Unreference the previously looked up handle */
-						if(hOSEventKMInt)
-						{
-							PVRSRVReleaseHandleUnlocked(psConnection->psHandleBase,
-											hOSEventKM,
-											PVRSRV_HANDLE_TYPE_EVENT_OBJECT_CONNECT);
-						}
-				}
-	/* Release now we have cleaned up look up handles. */
-	UnlockHandle();
-
-
-	return 0;
-}
-
 
 
 
@@ -860,13 +576,13 @@ PVRSRV_ERROR InitSRVCOREBridge(void)
 	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_HWOPTIMEOUT, PVRSRVBridgeHWOpTimeout,
 					NULL, bUseLock);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_ALIGNMENTCHECK, PVRSRVBridgeAlignmentCheck,
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_KICKDEVICES, PVRSRVBridgeKickDevices,
 					NULL, bUseLock);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_GETDEVICESTATUS, PVRSRVBridgeGetDeviceStatus,
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_RESETHWRLOGS, PVRSRVBridgeResetHWRLogs,
 					NULL, bUseLock);
 
-	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_EVENTOBJECTWAITTIMEOUT, PVRSRVBridgeEventObjectWaitTimeout,
+	SetDispatchTableEntry(PVRSRV_BRIDGE_SRVCORE, PVRSRV_BRIDGE_SRVCORE_SOFTRESET, PVRSRVBridgeSoftReset,
 					NULL, bUseLock);
 
 
@@ -880,3 +596,4 @@ PVRSRV_ERROR DeinitSRVCOREBridge(void)
 {
 	return PVRSRV_OK;
 }
+

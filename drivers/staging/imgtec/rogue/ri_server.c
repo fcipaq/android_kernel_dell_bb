@@ -1197,9 +1197,7 @@ IMG_BOOL RIGetListEntryKM(IMG_PID pid,
 
 		if (psRISubEntry->bIsImport)
 		{
-			/* If it is a local import we set backed size to 0
-			 * so we don't account twice for the same allocation */
-			ui64TotalImport += psRISubEntry->ui64BackedSize;
+			ui64TotalImport += psRISubEntry->ui64Size;
 		}
 		else
 		{
@@ -1283,7 +1281,7 @@ static void _GenerateMEMDESCEntryString(RI_SUBLIST_ENTRY *psRISubEntry,
 
 	OSSNPrintf(pszEntryString,
 	           ui16MaxStrLen,
-	           "%s 0x%010llx\t%-80s %s\t0x%010llx [0x%010llx] %s%s%c",
+	           "%s 0x%010llx\t%-80s %s\t0x%10llx [0x%10llx] %s%s%c",
 	           (bDebugFs ? "" : "  "),
 	           (unsigned long long) (psRISubEntry->sVAddr.uiAddr + psRISubEntry->ui64Offset),
 	           pszAnnotationText,
@@ -1294,6 +1292,7 @@ static void _GenerateMEMDESCEntryString(RI_SUBLIST_ENTRY *psRISubEntry,
 	           (psRISubEntry->bIsPinned ? "" : "{Unpinned}"),
 	           (bDebugFs ? '\n' : ' '));
 }
+
 
 /*!
 ******************************************************************************
@@ -1520,124 +1519,6 @@ PVRSRV_ERROR RIDumpProcessKM(IMG_PID pid)
 	}
 	return eError;
 }
-
-#if defined(DEBUG)
-/*!
-******************************************************************************
-
- @Function	_DumpList
- @Description
-            Dumps out RI List entries according to parameters passed.
-
- @input     hPMR - If not NULL, function will output the RI entries for
-                   the specified PMR only
- @input     pid - If non-zero, the function will only output MEMDESC RI
-  	  	  	  	  entries made by the process with ID pid.
-                  If zero, all MEMDESC RI entries will be output.
-
- @Return	PVRSRV_ERROR
-
-******************************************************************************/
-static PVRSRV_ERROR _DumpProcessList(PMR *hPMR,
-									 IMG_PID pid,
-									 IMG_UINT64 ui64Offset,
-									 IMG_DEV_VIRTADDR *psDevVAddr)
-{
-	RI_LIST_ENTRY *psRIEntry = NULL;
-	RI_SUBLIST_ENTRY *psRISubEntry = NULL;
-	IMG_UINT16 ui16SubEntriesParsed = 0;
-	uintptr_t hashData = 0;
-	PMR *pPMRHashKey = hPMR;
-	PVRSRV_ERROR eError = PVRSRV_ERROR_INVALID_PARAMS;
-
-	psDevVAddr->uiAddr = 0;
-
-	if (!hPMR)
-	{
-		/* NULL handle provided */
-		return eError;
-	}
-
-	if (g_pRIHashTable && g_pProcHashTable)
-	{
-		PVR_ASSERT(hPMR && pid);
-
-		/* look-up hPMR in Hash Table */
-		hashData = HASH_Retrieve_Extended (g_pRIHashTable, (void *)&pPMRHashKey);
-		psRIEntry = (RI_LIST_ENTRY *)hashData;
-
-		if (!psRIEntry)
-		{
-			/* No entry found in hash table */
-			return PVRSRV_ERROR_NOT_FOUND;
-		}
-
-		if (psRIEntry->ui16SubListCount)
-		{
-			psRISubEntry = IMG_CONTAINER_OF(dllist_get_next_node(&(psRIEntry->sSubListFirst)),
-											RI_SUBLIST_ENTRY, sListNode);
-
-			/* Traverse RI sublist and output details for each entry */
-			while (psRISubEntry && (ui16SubEntriesParsed < psRIEntry->ui16SubListCount))
-			{
-				if (pid == psRISubEntry->pid)
-				{
-					IMG_UINT64 ui64StartOffset = psRISubEntry->ui64Offset;
-					IMG_UINT64 ui64EndOffset = psRISubEntry->ui64Offset + psRISubEntry->ui64Size;
-
-					if (ui64Offset >= ui64StartOffset && ui64Offset < ui64EndOffset)
-					{
-						psDevVAddr->uiAddr = psRISubEntry->sVAddr.uiAddr;
-						return PVRSRV_OK;
-					}
-				}
-
-				ui16SubEntriesParsed++;
-				psRISubEntry = IMG_CONTAINER_OF(dllist_get_next_node(&(psRISubEntry->sListNode)),
-												RI_SUBLIST_ENTRY, sListNode);
-			}
-		}
-	}
-
-	return eError;
-}
-
-/*!
-******************************************************************************
-
- @Function	RIDumpProcessListKM
-
- @Description
-            Dumps out selected contents of all MEMDESC RI List entries (for a
-            PMR) which have been allocate by the specified process only.
-
- @Return	PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RIDumpProcessListKM(PMR *hPMR,
-								 IMG_PID pid,
-								 IMG_UINT64 ui64Offset,
-								 IMG_DEV_VIRTADDR *psDevVAddr)
-{
-	PVRSRV_ERROR eError = PVRSRV_OK;
-
-	if (g_pProcHashTable)
-	{
-		/* Acquire RI lock*/
-		_RILock();
-
-		eError = _DumpProcessList(hPMR,
-								  pid,
-								  ui64Offset,
-								  psDevVAddr);
-
-		/* Release RI lock*/
-		_RIUnlock();
-	}
-
-	return eError;
-}
-#endif
 
 static PVRSRV_ERROR _DumpAllEntries (uintptr_t k, uintptr_t v)
 {

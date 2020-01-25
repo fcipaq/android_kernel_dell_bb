@@ -63,11 +63,10 @@ extern "C" {
 #include "img_types.h"
 #include "img_defs.h"
 #include "pvrsrv_error.h" /* includes pvrsrv_errors.h */
-#include "rgx_bvnc_defs_km.h"
 
 #include "rgx_firmware_processor.h"
 /* includes:
- * rgx_meta.h and rgx_mips.h,
+ * rgx_meta.h or rgx_mips.h,
  * rgxdefs_km.h,
  * rgx_cr_defs_km.h,
  * RGX_BVNC_CORE_KM_HEADER (rgxcore_km_B.V.N.C.h),
@@ -180,9 +179,8 @@ void RGXWaitCycles(const void *hPrivate,
 
 ******************************************************************************/
 void RGXCommentLogPower(const void *hPrivate,
-                        const IMG_CHAR *pszString,
-                        ...) __printf(2, 3);
-
+                        IMG_CHAR *pszString,
+                        ...) IMG_FORMAT_PRINTF(2, 3);
 
 /*!
 *******************************************************************************
@@ -220,372 +218,30 @@ void RGXAcquireKernelMMUPC(const void *hPrivate, IMG_DEV_PHYADDR *psPCAddr);
 
 ******************************************************************************/
 #if defined(PDUMP)
-
+#if !defined(RGX_FEATURE_SLC_VIVT)
 void RGXWriteKernelMMUPC64(const void *hPrivate,
                            IMG_UINT32 ui32PCReg,
                            IMG_UINT32 ui32PCRegAlignShift,
                            IMG_UINT32 ui32PCRegShift,
                            IMG_UINT64 ui64PCVal);
-
+#else
 void RGXWriteKernelMMUPC32(const void *hPrivate,
                            IMG_UINT32 ui32PCReg,
                            IMG_UINT32 ui32PCRegAlignShift,
                            IMG_UINT32 ui32PCRegShift,
                            IMG_UINT32 ui32PCVal);
-
+#endif
 
 #else  /* defined(PDUMP) */
-
+#if !defined(RGX_FEATURE_SLC_VIVT)
 #define RGXWriteKernelMMUPC64(priv, pcreg, alignshift, shift, pcval) \
 	RGXWriteReg64(priv, pcreg, pcval)
-
+#else
 #define RGXWriteKernelMMUPC32(priv, pcreg, alignshift, shift, pcval) \
 	RGXWriteReg32(priv, pcreg, pcval)
-
+#endif
 #endif /* defined(PDUMP) */
 
-
-
-/*!
-*******************************************************************************
-
- @Function        RGXAcquireGPURegsAddr
-
- @Description     Acquire the GPU registers base device physical address
-
- @Input           hPrivate       : Implementation specific data
- @Input           psGPURegsAddr  : Returned GPU registers base address
-
- @Return          void
-
-******************************************************************************/
-void RGXAcquireGPURegsAddr(const void *hPrivate, IMG_DEV_PHYADDR *psGPURegsAddr);
-
-/*!
-*******************************************************************************
-
- @Function        RGXMIPSWrapperConfig
-
- @Description     Write GPU register bank transaction ID and MIPS boot mode
-                  to the MIPS wrapper config register (passed as argument).
-                  In a driver-live scenario without PDump this is the same as
-                  RGXWriteReg64 and it doesn't need to be reimplemented.
-
- @Input           hPrivate          : Implementation specific data
- @Input           ui32RegAddr       : Register offset inside the register bank
- @Input           ui64GPURegsAddr   : GPU registers base address
- @Input           ui32GPURegsAlign  : Register bank transactions alignment
- @Input           ui32BootMode      : Mips BOOT ISA mode
-
- @Return          void
-
-******************************************************************************/
-#if defined(PDUMP)
-void RGXMIPSWrapperConfig(const void *hPrivate,
-                          IMG_UINT32 ui32RegAddr,
-                          IMG_UINT64 ui64GPURegsAddr,
-                          IMG_UINT32 ui32GPURegsAlign,
-                          IMG_UINT32 ui32BootMode);
-#else
-#define RGXMIPSWrapperConfig(priv, regaddr, gpuregsaddr, gpuregsalign, bootmode) \
-	RGXWriteReg64(priv, regaddr, ((gpuregsaddr) >> (gpuregsalign)) | (bootmode))
-#endif
-
-/*!
-*******************************************************************************
-
- @Function        RGXAcquireBootRemapAddr
-
- @Description     Acquire the device physical address of the MIPS bootloader
-                  accessed through remap region
-
- @Input           hPrivate         : Implementation specific data
- @Output          psBootRemapAddr  : Base address of the remapped bootloader
-
- @Return          void
-
-******************************************************************************/
-void RGXAcquireBootRemapAddr(const void *hPrivate, IMG_DEV_PHYADDR *psBootRemapAddr);
-
-/*!
-*******************************************************************************
-
- @Function        RGXBootRemapConfig
-
- @Description     Configure the bootloader remap registers passed as arguments.
-                  In a driver-live scenario without PDump this is the same as
-                  two RGXWriteReg64 and it doesn't need to be reimplemented.
-
- @Input           hPrivate             : Implementation specific data
- @Input           ui32Config1RegAddr   : Remap config1 register offset
- @Input           ui64Config1RegValue  : Remap config1 register value
- @Input           ui32Config2RegAddr   : Remap config2 register offset
- @Input           ui64Config2PhyAddr   : Output remapped aligned physical address
- @Input           ui64Config2PhyMask   : Mask for the output physical address
- @Input           ui64Config2Settings  : Extra settings for this remap region
-
- @Return          void
-
-******************************************************************************/
-#if defined(PDUMP)
-void RGXBootRemapConfig(const void *hPrivate,
-                        IMG_UINT32 ui32Config1RegAddr,
-                        IMG_UINT64 ui64Config1RegValue,
-                        IMG_UINT32 ui32Config2RegAddr,
-                        IMG_UINT64 ui64Config2PhyAddr,
-                        IMG_UINT64 ui64Config2PhyMask,
-                        IMG_UINT64 ui64Config2Settings);
-#else
-#define RGXBootRemapConfig(priv, c1reg, c1val, c2reg, c2phyaddr, c2phymask, c2settings) do { \
-		RGXWriteReg64(priv, c1reg, (c1val)); \
-		RGXWriteReg64(priv, c2reg, ((c2phyaddr) & (c2phymask)) | (c2settings)); \
-	} while (0)
-#endif
-
-/*!
-*******************************************************************************
-
- @Function        RGXAcquireCodeRemapAddr
-
- @Description     Acquire the device physical address of the MIPS code
-                  accessed through remap region
-
- @Input           hPrivate         : Implementation specific data
- @Output          psCodeRemapAddr  : Base address of the remapped code
-
- @Return          void
-
-******************************************************************************/
-void RGXAcquireCodeRemapAddr(const void *hPrivate, IMG_DEV_PHYADDR *psCodeRemapAddr);
-
-/*!
-*******************************************************************************
-
- @Function        RGXCodeRemapConfig
-
- @Description     Configure the code remap registers passed as arguments.
-                  In a driver-live scenario without PDump this is the same as
-                  two RGXWriteReg64 and it doesn't need to be reimplemented.
-
- @Input           hPrivate             : Implementation specific data
- @Input           ui32Config1RegAddr   : Remap config1 register offset
- @Input           ui64Config1RegValue  : Remap config1 register value
- @Input           ui32Config2RegAddr   : Remap config2 register offset
- @Input           ui64Config2PhyAddr   : Output remapped aligned physical address
- @Input           ui64Config2PhyMask   : Mask for the output physical address
- @Input           ui64Config2Settings  : Extra settings for this remap region
-
- @Return          void
-
-******************************************************************************/
-#if defined(PDUMP)
-void RGXCodeRemapConfig(const void *hPrivate,
-                        IMG_UINT32 ui32Config1RegAddr,
-                        IMG_UINT64 ui64Config1RegValue,
-                        IMG_UINT32 ui32Config2RegAddr,
-                        IMG_UINT64 ui64Config2PhyAddr,
-                        IMG_UINT64 ui64Config2PhyMask,
-                        IMG_UINT64 ui64Config2Settings);
-#else
-#define RGXCodeRemapConfig(priv, c1reg, c1val, c2reg, c2phyaddr, c2phymask, c2settings) do { \
-		RGXWriteReg64(priv, c1reg, (c1val)); \
-		RGXWriteReg64(priv, c2reg, ((c2phyaddr) & (c2phymask)) | (c2settings)); \
-	} while (0)
-#endif
-
-/*!
-*******************************************************************************
-
- @Function        RGXAcquireDataRemapAddr
-
- @Description     Acquire the device physical address of the MIPS data
-                  accessed through remap region
-
- @Input           hPrivate         : Implementation specific data
- @Output          psDataRemapAddr  : Base address of the remapped data
-
- @Return          void
-
-******************************************************************************/
-void RGXAcquireDataRemapAddr(const void *hPrivate, IMG_DEV_PHYADDR *psDataRemapAddr);
-
-/*!
-*******************************************************************************
-
- @Function        RGXDataRemapConfig
-
- @Description     Configure the data remap registers passed as arguments.
-                  In a driver-live scenario without PDump this is the same as
-                  two RGXWriteReg64 and it doesn't need to be reimplemented.
-
- @Input           hPrivate             : Implementation specific data
- @Input           ui32Config1RegAddr   : Remap config1 register offset
- @Input           ui64Config1RegValue  : Remap config1 register value
- @Input           ui32Config2RegAddr   : Remap config2 register offset
- @Input           ui64Config2PhyAddr   : Output remapped aligned physical address
- @Input           ui64Config2PhyMask   : Mask for the output physical address
- @Input           ui64Config2Settings  : Extra settings for this remap region
-
- @Return          void
-
-******************************************************************************/
-#if defined(PDUMP)
-void RGXDataRemapConfig(const void *hPrivate,
-                        IMG_UINT32 ui32Config1RegAddr,
-                        IMG_UINT64 ui64Config1RegValue,
-                        IMG_UINT32 ui32Config2RegAddr,
-                        IMG_UINT64 ui64Config2PhyAddr,
-                        IMG_UINT64 ui64Config2PhyMask,
-                        IMG_UINT64 ui64Config2Settings);
-#else
-#define RGXDataRemapConfig(priv, c1reg, c1val, c2reg, c2phyaddr, c2phymask, c2settings) do { \
-		RGXWriteReg64(priv, c1reg, (c1val)); \
-		RGXWriteReg64(priv, c2reg, ((c2phyaddr) & (c2phymask)) | (c2settings)); \
-	} while (0)
-#endif
-
-/*!
-*******************************************************************************
-
- @Function        RGXAcquireTrampolineRemapAddr
-
- @Description     Acquire the device physical address of the MIPS data
-                  accessed through remap region
-
- @Input           hPrivate             : Implementation specific data
- @Output          psTrampolineRemapAddr: Base address of the remapped data
-
- @Return          void
-
-******************************************************************************/
-void RGXAcquireTrampolineRemapAddr(const void *hPrivate, IMG_DEV_PHYADDR *psTrampolineRemapAddr);
-
-/*!
-*******************************************************************************
-
- @Function        RGXTrampolineRemapConfig
-
- @Description     Configure the trampoline remap registers passed as arguments.
-                  In a driver-live scenario without PDump this is the same as
-                  two RGXWriteReg64 and it doesn't need to be reimplemented.
-
- @Input           hPrivate             : Implementation specific data
- @Input           ui32Config1RegAddr   : Remap config1 register offset
- @Input           ui64Config1RegValue  : Remap config1 register value
- @Input           ui32Config2RegAddr   : Remap config2 register offset
- @Input           ui64Config2PhyAddr   : Output remapped aligned physical address
- @Input           ui64Config2PhyMask   : Mask for the output physical address
- @Input           ui64Config2Settings  : Extra settings for this remap region
-
- @Return          void
-
-******************************************************************************/
-#define RGXTrampolineRemapConfig(priv, c1reg, c1val, c2reg, c2phyaddr, c2phymask, c2settings) do { \
-		RGXWriteReg64(priv, c1reg, (c1val)); \
-		RGXWriteReg64(priv, c2reg, ((c2phyaddr) & (c2phymask)) | (c2settings)); \
-	} while (0)
-
-/*!
-*******************************************************************************
-
- @Function        RGXDoFWSlaveBoot
-
- @Description     Returns whether or not a FW Slave Boot is required
-                  while powering on
-
- @Input           hPrivate       : Implementation specific data
-
- @Return          IMG_BOOL
-
-******************************************************************************/
-IMG_BOOL RGXDoFWSlaveBoot(const void *hPrivate);
-
-/*!
-*******************************************************************************
-
- @Function       RGXIOCoherencyTest
-
- @Description    Performs a coherency test
-
- @Input          hPrivate         : Implementation specific data
-
- @Return         PVRSRV_OK if the test succeeds,
-                 PVRSRV_ERROR_INIT_FAILURE if the test fails at some point
-
-******************************************************************************/
-PVRSRV_ERROR RGXIOCoherencyTest(const void *hPrivate);
-
-/*!
-*******************************************************************************
-
- @Function       RGXDeviceHasFeaturePower
-
- @Description    Checks if a device has a particular feature
-
- @Input          hPrivate     : Implementation specific data
- @Input          ui64Feature  : Feature to check
-
- @Return         IMG_TRUE if the given feature is available, IMG_FALSE otherwise
-
-******************************************************************************/
-IMG_BOOL RGXDeviceHasFeaturePower(const void *hPrivate, IMG_UINT64 ui64Feature);
-
-/*!
-*******************************************************************************
-
- @Function       RGXDeviceHasErnBrnPower
-
- @Description    Checks if a device has a particular errata
-
- @Input          hPrivate     : Implementation specific data
- @Input          ui64ErnsBrns : Flags to check
-
- @Return         IMG_TRUE if the given errata is available, IMG_FALSE otherwise
-
-******************************************************************************/
-IMG_BOOL RGXDeviceHasErnBrnPower(const void *hPrivate, IMG_UINT64 ui64ErnsBrns);
-
-/*!
-*******************************************************************************
-
- @Function       RGXGetDeviceSLCBanks
-
- @Description    Returns the number of SLC banks used by the device
-
- @Input          hPrivate    : Implementation specific data
-
- @Return         Number of SLC banks
-
-******************************************************************************/
-IMG_UINT32 RGXGetDeviceSLCBanks(const void *hPrivate);
-
-/*!
-*******************************************************************************
-
- @Function       RGXGetDeviceSLCSize
-
- @Description    Returns the device SLC size
-
- @Input          hPrivate    : Implementation specific data
-
- @Return         SLC size
-
-******************************************************************************/
-IMG_UINT32 RGXGetDeviceSLCSize(const void *hPrivate);
-
-/*!
-*******************************************************************************
-
- @Function       RGXGetDeviceCacheLineSize
-
- @Description    Returns the device cache line size
-
- @Input          hPrivate    : Implementation specific data
-
- @Return         Cache line size
-
-******************************************************************************/
-IMG_UINT32 RGXGetDeviceCacheLineSize(const void *hPrivate);
 
 #if defined (__cplusplus)
 }

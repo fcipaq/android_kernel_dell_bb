@@ -48,50 +48,19 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "img_types.h"
 
-/* 64bit endian converting macros */
-#if defined(__BIG_ENDIAN__)
-#define RGX_INT64_TO_BE(N) (N)
-#define RGX_INT64_FROM_BE(N) (N)
-#define RGX_INT32_TO_BE(N) (N)
-#define RGX_INT32_FROM_BE(N) (N)
-#else
-#define RGX_INT64_TO_BE(N)        \
-	((((N) >> 56)   & 0xff)       \
-	 | (((N) >> 40) & 0xff00)     \
-	 | (((N) >> 24) & 0xff0000)   \
-	 | (((N) >> 8)  & 0xff000000) \
-	 | ((N)                << 56) \
-	 | (((N) & 0xff00)     << 40) \
-	 | (((N) & 0xff0000)   << 24) \
-	 | (((N) & 0xff000000) << 8))
-#define RGX_INT64_FROM_BE(N) RGX_INT64_TO_BE(N)
-
-#define RGX_INT32_TO_BE(N)   \
-	((((N) >> 24)  & 0xff)   \
-	 | (((N) >> 8) & 0xff00) \
-	 | ((N)           << 24) \
-	 | (((N & 0xff00) << 8)))
-#define RGX_INT32_FROM_BE(N) RGX_INT32_TO_BE(N)
-#endif
-
 /******************************************************************************
  * RGX Version packed into 24-bit (BNC) and string (V) to be used by Compatibility Check
  *****************************************************************************/
 
-#define RGX_BVNC_PACK_SHIFT_B 32
-#define RGX_BVNC_PACK_SHIFT_N 16
-#define RGX_BVNC_PACK_SHIFT_C 0
+#define RGX_BVNC_PACK_MASK_B 0x00FF0000
+#define RGX_BVNC_PACK_MASK_N 0x0000FF00
+#define RGX_BVNC_PACK_MASK_C 0x000000FF
 
-#define RGX_BVNC_PACK_MASK_B (IMG_UINT64_C(0x0000FFFF00000000))
-#define RGX_BVNC_PACK_MASK_N (IMG_UINT64_C(0x00000000FFFF0000))
-#define RGX_BVNC_PACK_MASK_C (IMG_UINT64_C(0x000000000000FFFF))
-
-#define RGX_BVNC_PACKED_EXTR_B(BVNC) ((IMG_UINT32)(((BVNC).ui64BNC & RGX_BVNC_PACK_MASK_B) >> RGX_BVNC_PACK_SHIFT_B))
+#define RGX_BVNC_PACKED_EXTR_B(BVNC) (((BVNC).ui32BNC >> 16) & 0xFF)
 #define RGX_BVNC_PACKED_EXTR_V(BVNC) ((BVNC).aszV)
-#define RGX_BVNC_PACKED_EXTR_N(BVNC) ((IMG_UINT32)(((BVNC).ui64BNC & RGX_BVNC_PACK_MASK_N) >> RGX_BVNC_PACK_SHIFT_N))
-#define RGX_BVNC_PACKED_EXTR_C(BVNC) ((IMG_UINT32)(((BVNC).ui64BNC & RGX_BVNC_PACK_MASK_C) >> RGX_BVNC_PACK_SHIFT_C))
+#define RGX_BVNC_PACKED_EXTR_N(BVNC) (((BVNC).ui32BNC >> 8) & 0xFF)
+#define RGX_BVNC_PACKED_EXTR_C(BVNC) (((BVNC).ui32BNC >> 0) & 0xFF)
 
-#if !defined(RGX_SKIP_BVNC_CHECK)
 #define RGX_BVNC_EQUAL(L,R,all,version,lenmax,bnc,v) do {													\
 										(lenmax) = IMG_FALSE;												\
 										(bnc) = IMG_FALSE;													\
@@ -103,7 +72,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 										}																	\
 										if (lenmax)															\
 										{																	\
-											(bnc) = ((L).ui64BNC == (R).ui64BNC);							\
+											(bnc) = ((L).ui32BNC == (R).ui32BNC);							\
 										}																	\
 										if (bnc)															\
 										{																	\
@@ -113,20 +82,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 										}																	\
 										(all) = (version) && (lenmax) && (bnc) && (v);						\
 									} while (0)
-#else
-#define RGX_BVNC_EQUAL(L,R,all,version,lenmax,bnc,v)														\
-						(all) 		= IMG_TRUE;																\
-						(version) 	= IMG_TRUE;																\
-						(lenmax) 	= IMG_TRUE;																\
-						(bnc) 		= IMG_TRUE;																\
-						(v) 		= IMG_TRUE;																\
 
-#endif
-
-void rgx_bvnc_packed(IMG_UINT64 *pui64OutBNC, IMG_CHAR *pszOutV, IMG_UINT32 ui32OutVMaxLen,
+void rgx_bvnc_packed(IMG_UINT32 *pui32OutBNC, IMG_CHAR *pszOutV, IMG_UINT32 ui32OutVMaxLen,
 					 IMG_UINT32 ui32B, IMG_CHAR *pszV, IMG_UINT32 ui32N, IMG_UINT32 ui32C);
-void rgx_bvnc_pack_hw(IMG_UINT64 *pui64OutBNC, IMG_CHAR *pszOutV, IMG_UINT32 ui32OutVMaxLen,
-					  IMG_UINT32 ui32B, IMG_UINT32 ui32V, IMG_UINT32 ui32N, IMG_UINT32 ui32C);
+void rgx_bvnc_pack_hw(IMG_UINT32 *pui32OutBNC, IMG_CHAR *pszOutV, IMG_UINT32 ui32OutVMaxLen,
+					  IMG_UINT32 ui32B, IMG_CHAR *pszFwV, IMG_UINT32 ui32V, IMG_UINT32 ui32N, IMG_UINT32 ui32C);
 
 #endif /*  __RGX_COMPAT_BVNC_H__ */
 

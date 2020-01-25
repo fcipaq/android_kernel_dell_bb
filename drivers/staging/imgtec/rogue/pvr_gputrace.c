@@ -47,13 +47,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pvr_uaccess.h"
 
 #include "pvr_gputrace.h"
-#include "rgxhwperf.h"
 
 #include "trace_events.h"
 #define CREATE_TRACE_POINTS
 #include <trace/events/gpu.h>
 #include "rogue_trace_events.h"
 
+#define KM_FTRACE_NO_PRIORITY (0)
 
 
 /******************************************************************************
@@ -63,15 +63,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 /* DebugFS entry for the feature's on/off file */
 static PVR_DEBUGFS_ENTRY_DATA *gpsPVRDebugFSGpuTracingOnEntry = NULL;
 
-/* This variable is set when the gpu tracing is enabled but the HWPerf
- * resources have not been initialised yet. This may most likely happen
- * if the driver was built with SUPPORT_KERNEL_SRVINIT=1.
- * If this variable is IMG_TRUE it means that the gpu tracing was enabled
- * but the full initialisation is yet to be done. */
-static IMG_BOOL gbFTraceGPUEventsPreEnabled = IMG_FALSE;
-/* When this variable is IMG_TRUE it means that the gpu tracing has been fully
- * initialised and enabled. */
-static IMG_BOOL gbFTraceGPUEventsEnabled = IMG_FALSE;
 
 /*
   If SUPPORT_GPUTRACE_EVENTS is defined the drive is built with support
@@ -115,18 +106,11 @@ static void *GpuTracingSeqNext(struct seq_file *psSeqFile, void *pvData, loff_t 
 
 static int GpuTracingSeqShow(struct seq_file *psSeqFile, void *pvData)
 {
-	const IMG_CHAR *pszInit = "N\n";
-
-	if (gbFTraceGPUEventsEnabled)
-		// fully operational
-		pszInit = "Y\n";
-	else if (gbFTraceGPUEventsPreEnabled)
-		// partially initialised (probably HWPerf not initialised yet)
-		pszInit = "P\n";
+	IMG_BOOL bValue = PVRGpuTraceEnabled();
 
 	PVR_UNREFERENCED_PARAMETER(pvData);
 
-	seq_puts(psSeqFile, pszInit);
+	seq_puts(psSeqFile, (bValue ? "Y\n" : "N\n"));
 	return 0;
 }
 
@@ -212,18 +196,15 @@ void PVRGpuTraceClientWork(
 void PVRGpuTraceWorkSwitch(
 		IMG_UINT64 ui64HWTimestampInOSTime,
 		const IMG_UINT32 ui32CtxId,
-		const IMG_UINT32 ui32CtxPriority,
 		const IMG_UINT32 ui32JobId,
 		const IMG_CHAR* pszWorkType,
 		PVR_GPUTRACE_SWITCH_TYPE eSwType)
 {
 	PVR_ASSERT(pszWorkType);
 
-	/* Invert the priority cause this is what systrace expects. Lower values
-	 * convey a higher priority to systrace. */
 	trace_gpu_sched_switch(pszWorkType, ui64HWTimestampInOSTime,
 			eSwType == PVR_GPUTRACE_SWITCH_TYPE_END ? 0 : ui32CtxId,
-			2-ui32CtxPriority, ui32JobId);
+			KM_FTRACE_NO_PRIORITY, ui32JobId);
 }
 
 void PVRGpuTraceUfo(
@@ -261,14 +242,6 @@ void PVRGpuTraceUfo(
 	}
 }
 
-void PVRGpuTraceFirmware(
-		IMG_UINT64 ui64HWTimestampInOSTime,
-		const IMG_CHAR* pszWorkType,
-		PVR_GPUTRACE_SWITCH_TYPE eSwType)
-{
-	trace_rogue_firmware_activity(ui64HWTimestampInOSTime, pszWorkType, eSwType);
-}
-
 void PVRGpuTraceEventsLost(
 		const RGX_HWPERF_STREAM_ID eStreamId,
 		const IMG_UINT32 ui32LastOrdinal,
@@ -277,35 +250,19 @@ void PVRGpuTraceEventsLost(
 	trace_rogue_events_lost(eStreamId, ui32LastOrdinal, ui32CurrOrdinal);
 }
 
-PVRSRV_ERROR PVRGpuTraceInit(PVRSRV_DEVICE_NODE *psDeviceNode)
+PVRSRV_ERROR PVRGpuTraceInit(void)
 {
-	PVRSRV_ERROR eError;
-
-	eError = RGXHWPerfFTraceGPUInit(psDeviceNode);
-	if (eError != PVRSRV_OK)
-		return eError;
-
-	eError = PVRDebugFSCreateEntry("gpu_tracing_on", NULL, &gsGpuTracingReadOps,
-	                               (PVRSRV_ENTRY_WRITE_FUNC *)GpuTracingSet,
-	                               NULL, NULL, NULL,
-	                               &gpsPVRDebugFSGpuTracingOnEntry);
-	if (eError != PVRSRV_OK)
-	{
-		RGXHWPerfFTraceGPUDeInit(psDeviceNode);
-		return eError;
-	}
-
-	return PVRSRV_OK;
+	return PVRDebugFSCreateEntry("gpu_tracing_on",
+				NULL,
+				&gsGpuTracingReadOps,
+				(PVRSRV_ENTRY_WRITE_FUNC *)GpuTracingSet,
+				NULL,
+				&gpsPVRDebugFSGpuTracingOnEntry);
 }
 
-void PVRGpuTraceDeInit(PVRSRV_DEVICE_NODE *psDeviceNode)
+
+void PVRGpuTraceDeInit(void)
 {
-	/* gbFTraceGPUEventsEnabled and gbFTraceGPUEventsPreEnabled are cleared
-	 * in this function. */
-	PVRGpuTraceEnabledSet(IMG_FALSE);
-
-	RGXHWPerfFTraceGPUDeInit(psDeviceNode);
-
 	/* Can be NULL if driver startup failed */
 	if (gpsPVRDebugFSGpuTracingOnEntry)
 	{
@@ -313,25 +270,6 @@ void PVRGpuTraceDeInit(PVRSRV_DEVICE_NODE *psDeviceNode)
 	}
 }
 
-IMG_BOOL PVRGpuTraceEnabled(void)
-{
-	return gbFTraceGPUEventsEnabled;
-}
-
-void PVRGpuTraceSetEnabled(IMG_BOOL bEnabled)
-{
-	gbFTraceGPUEventsEnabled = bEnabled;
-}
-
-IMG_BOOL PVRGpuTracePreEnabled(void)
-{
-	return gbFTraceGPUEventsPreEnabled;
-}
-
-void PVRGpuTraceSetPreEnabled(IMG_BOOL bEnabled)
-{
-	gbFTraceGPUEventsPreEnabled = bEnabled;
-}
 
 /******************************************************************************
  End of file (pvr_gputrace.c)

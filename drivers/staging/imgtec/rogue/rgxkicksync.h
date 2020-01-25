@@ -80,29 +80,28 @@ PVRSRV_ERROR PVRSRVRGXDestroyKickSyncContextKM(RGX_SERVER_KICKSYNC_CONTEXT * psK
  */ /**************************************************************************/
 IMG_EXPORT
 PVRSRV_ERROR PVRSRVRGXKickSyncKM(RGX_SERVER_KICKSYNC_CONTEXT * psKicksyncContext,
-
-                                 IMG_UINT32                    ui32ClientCacheOpSeqNum,
-
+                                 
                                  IMG_UINT32                    ui32ClientFenceCount,
                                  SYNC_PRIMITIVE_BLOCK           ** pauiClientFenceUFOSyncPrimBlock,
                                  IMG_UINT32                  * paui32ClientFenceSyncOffset,
                                  IMG_UINT32                  * paui32ClientFenceValue,
-
+                                 
                                  IMG_UINT32                    ui32ClientUpdateCount,
                                  SYNC_PRIMITIVE_BLOCK           ** pauiClientUpdateUFOSyncPrimBlock,
                                  IMG_UINT32                  * paui32ClientUpdateSyncOffset,
                                  IMG_UINT32                  * paui32ClientUpdateValue,
-
+                                 
                                  IMG_UINT32                    ui32ServerSyncPrims,
                                  IMG_UINT32                  * paui32ServerSyncFlags,
                                  SERVER_SYNC_PRIMITIVE      ** pasServerSyncs,
-
+                                 
                                  IMG_INT32                     i32CheckFenceFD,
                                  IMG_INT32                     i32UpdateTimelineFD,
                                  IMG_INT32                   * pi32UpdateFenceFD,
                                  IMG_CHAR                      szFenceName[32],
 
-                                 IMG_UINT32                    ui32ExtJobRef);
+                                 IMG_UINT32                    ui32ExtJobRef,
+                                 IMG_UINT32                    ui32IntJobRef);
 
 #endif /* __RGXKICKSYNC_H__ */
 

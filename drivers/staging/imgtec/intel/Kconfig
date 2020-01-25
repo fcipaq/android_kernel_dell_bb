@@ -52,15 +52,6 @@ config MID_DSI_DSR
 	bool "Support DSR (display self refresh)"
 	depends on SUPPORT_MIPI
 
-config AMOLED_SUPPORT
-	bool "Enable AMOLED burn-in protection"
-	depends on MOOREFIELD
-	help
-	  Shift the image on the screen by a small amount of pixels
-	  to prevent image burn in on AMOLED displays.
-	  Only for SDC 16x25 and SDC 25x16 on Dell Venue 7840/7040
-	  (aka. Intel Blackburn/Eaglespeak)
-
 source "drivers/staging/imgtec/intel/dfrgx/Kconfig"
 
 source "drivers/staging/imgtec/intel/hdmi_audio/Kconfig"

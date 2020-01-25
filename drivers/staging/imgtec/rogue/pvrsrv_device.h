@@ -42,21 +42,23 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __PVRSRV_DEVICE_H__
 #define __PVRSRV_DEVICE_H__
 
-#include "img_types.h"
-#include "physheap.h"
-#include "pvrsrv_error.h"
-#include "rgx_fwif_km.h"
 #include "servicesext.h"
-
-#if defined(PVR_DVFS) || defined(SUPPORT_PDVFS)
+#include "pvrsrv_device_types.h"
+#include "img_types.h"
+#include "ra.h"
+#include "physheap.h"
+#include "rgx_fwif_km.h"
+#include "pmr.h"
+#include "lock.h"
+#if defined(PVR_DVFS)
 #include "pvr_dvfs.h"
 #endif
 
 typedef struct _PVRSRV_DEVICE_CONFIG_ PVRSRV_DEVICE_CONFIG;
 
 /*
- * All the heaps from which regular device memory allocations can be made in
- * terms of their locality to the respective device.
+ *  The maximum number of physical heaps associated
+ *  with a device
  */
 typedef enum
 {
@@ -64,52 +66,36 @@ typedef enum
 	PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL = 1,
 	PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL = 2,
 	PVRSRV_DEVICE_PHYS_HEAP_LAST
-} PVRSRV_DEVICE_PHYS_HEAP;
+}PVRSRV_DEVICE_PHYS_HEAP;
 
 typedef enum
 {
-	PVRSRV_DEVICE_LOCAL_MEMORY_ARENA_MAPPABLE = 0,
-	PVRSRV_DEVICE_LOCAL_MEMORY_ARENA_NON_MAPPABLE = 1,
-	PVRSRV_DEVICE_LOCAL_MEMORY_ARENA_LAST
-} PVRSRV_DEVICE_LOCAL_MEMORY_ARENA;
+	PVRSRV_DEVICE_IRQ_ACTIVE_SYSDEFAULT = 0,
+	PVRSRV_DEVICE_IRQ_ACTIVE_LOW,
+	PVRSRV_DEVICE_IRQ_ACTIVE_HIGH
+}PVRSRV_DEVICE_IRQ_ACTIVE_LEVEL;
 
-typedef enum _PVRSRV_DEVICE_SNOOP_MODE_
-{
-	PVRSRV_DEVICE_SNOOP_NONE = 0,
-	PVRSRV_DEVICE_SNOOP_CPU_ONLY,
-	PVRSRV_DEVICE_SNOOP_DEVICE_ONLY,
-	PVRSRV_DEVICE_SNOOP_CROSS,
-} PVRSRV_DEVICE_SNOOP_MODE;
+typedef void (*PFN_MISR)(void *pvData);
 
-typedef IMG_UINT32
-(*PFN_SYS_DEV_CLK_FREQ_GET)(IMG_HANDLE hSysData);
+typedef IMG_BOOL (*PFN_LISR)(void *pvData);
 
-typedef PVRSRV_ERROR
-(*PFN_SYS_DEV_PRE_POWER)(IMG_HANDLE hSysData,
-						 PVRSRV_DEV_POWER_STATE eNewPowerState,
-						 PVRSRV_DEV_POWER_STATE eCurrentPowerState,
-						 IMG_BOOL bForced);
+typedef IMG_UINT32 (*PFN_SYS_DEV_CLK_FREQ_GET)(IMG_HANDLE hSysData);
 
-typedef PVRSRV_ERROR
-(*PFN_SYS_DEV_POST_POWER)(IMG_HANDLE hSysData,
-						  PVRSRV_DEV_POWER_STATE eNewPowerState,
-						  PVRSRV_DEV_POWER_STATE eCurrentPowerState,
-						  IMG_BOOL bForced);
+typedef PVRSRV_ERROR (*PFN_SYS_DEV_PRE_POWER)(PVRSRV_DEV_POWER_STATE eNewPowerState,
+                                              PVRSRV_DEV_POWER_STATE eCurrentPowerState,
+											  IMG_BOOL bForced);
 
-typedef void
-(*PFN_SYS_DEV_INTERRUPT_HANDLED)(PVRSRV_DEVICE_CONFIG *psDevConfig);
 
-typedef PVRSRV_ERROR
-(*PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE)(IMG_HANDLE hSysData,
-									IMG_UINT64 ui64MemSize);
+typedef PVRSRV_ERROR (*PFN_SYS_DEV_POST_POWER)(PVRSRV_DEV_POWER_STATE eNewPowerState,
+                                               PVRSRV_DEV_POWER_STATE eCurrentPowerState,
+											   IMG_BOOL bForced);
 
-typedef void (*PFN_SYS_DEV_FEAT_DEP_INIT)(PVRSRV_DEVICE_CONFIG *, IMG_UINT64);
+typedef void (*PFN_SYS_DEV_INTERRUPT_HANDLED)(PVRSRV_DEVICE_CONFIG *psDevConfig);
+
+typedef PVRSRV_ERROR (*PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE)(struct _PVRSRV_DEVICE_NODE_ *psDevNode,
+														 IMG_UINT64 ui64MemSize);
 
 #if defined(SUPPORT_TRUSTED_DEVICE)
-
-#define PVRSRV_DEVICE_FW_CODE_REGION          (0)
-#define PVRSRV_DEVICE_FW_COREMEM_CODE_REGION  (1)
-
 typedef struct _PVRSRV_TD_FW_PARAMS_
 {
 	const void *pvFirmware;
@@ -120,30 +106,20 @@ typedef struct _PVRSRV_TD_FW_PARAMS_
 	RGXFWIF_DEV_VIRTADDR sFWInitFWAddr;
 } PVRSRV_TD_FW_PARAMS;
 
-typedef PVRSRV_ERROR
-(*PFN_TD_SEND_FW_IMAGE)(IMG_HANDLE hSysData,
-						PVRSRV_TD_FW_PARAMS *psTDFWParams);
+typedef PVRSRV_ERROR (*PFN_TD_SEND_FW_IMAGE)(PVRSRV_TD_FW_PARAMS *psTDFWParams);
+
 
 typedef struct _PVRSRV_TD_POWER_PARAMS_
 {
-	IMG_DEV_PHYADDR sPCAddr; /* META only used param */
-
-	/* MIPS only used fields */
-	IMG_DEV_PHYADDR sGPURegAddr;
-	IMG_DEV_PHYADDR sBootRemapAddr;
-	IMG_DEV_PHYADDR sCodeRemapAddr;
-	IMG_DEV_PHYADDR sDataRemapAddr;
+	IMG_DEV_PHYADDR sPCAddr;
 } PVRSRV_TD_POWER_PARAMS;
 
-typedef PVRSRV_ERROR
-(*PFN_TD_SET_POWER_PARAMS)(IMG_HANDLE hSysData,
-						   PVRSRV_TD_POWER_PARAMS *psTDPowerParams);
+typedef PVRSRV_ERROR (*PFN_TD_SET_POWER_PARAMS)(PVRSRV_TD_POWER_PARAMS *psTDPowerParams);
 
-typedef PVRSRV_ERROR
-(*PFN_TD_RGXSTART)(IMG_HANDLE hSysData);
+typedef PVRSRV_ERROR (*PFN_TD_RGXSTART)(void);
 
-typedef PVRSRV_ERROR
-(*PFN_TD_RGXSTOP)(IMG_HANDLE hSysData);
+typedef PVRSRV_ERROR (*PFN_TD_RGXSTOP)(void);
+
 
 typedef struct _PVRSRV_TD_SECBUF_PARAMS_
 {
@@ -153,123 +129,125 @@ typedef struct _PVRSRV_TD_SECBUF_PARAMS_
 	IMG_UINT64 *pui64SecBufHandle;
 } PVRSRV_TD_SECBUF_PARAMS;
 
-typedef PVRSRV_ERROR
-(*PFN_TD_SECUREBUF_ALLOC)(IMG_HANDLE hSysData,
-						  PVRSRV_TD_SECBUF_PARAMS *psTDSecBufParams);
+typedef PVRSRV_ERROR (*PFN_TD_SECUREBUF_ALLOC)(PVRSRV_TD_SECBUF_PARAMS *psTDSecBufParams);
 
-typedef PVRSRV_ERROR
-(*PFN_TD_SECUREBUF_FREE)(IMG_HANDLE hSysData,
-						 IMG_UINT64 ui64SecBufHandle);
-#endif /* defined(SUPPORT_TRUSTED_DEVICE) */
+typedef PVRSRV_ERROR (*PFN_TD_SECUREBUF_FREE)(IMG_UINT64 ui64SecBufHandle);
+#endif
+
 
 struct _PVRSRV_DEVICE_CONFIG_
 {
-	/*! OS device passed to SysDevInit (linux: 'struct device') */
-	void *pvOSDevice;
+	/*! Configuration flags */
+	IMG_UINT32			uiFlags;
 
-	/*!
-	 *! Service representation of pvOSDevice. Should be set to NULL when the
-	 *! config is created in SysDevInit. Set by Services once a device node has
-	 *! been created for this config and unset before SysDevDeInit is called.
-	 */
-	struct _PVRSRV_DEVICE_NODE_ *psDevNode;
+	/*! Name of the device (used when registering the IRQ) */
+	IMG_CHAR			*pszName;
 
-	/*! Name of the device */
-	IMG_CHAR *pszName;
-
-	/*! Version of the device (optional) */
-	IMG_CHAR *pszVersion;
+	/*! Type of device this is */
+	PVRSRV_DEVICE_TYPE		eDeviceType;
 
 	/*! Register bank address */
-	IMG_CPU_PHYADDR sRegsCpuPBase;
+	IMG_CPU_PHYADDR			sRegsCpuPBase;
 	/*! Register bank size */
-	IMG_UINT32 ui32RegsSize;
+	IMG_UINT32			ui32RegsSize;
 	/*! Device interrupt number */
-	IMG_UINT32 ui32IRQ;
+	IMG_UINT32			ui32IRQ;
 
-	PVRSRV_DEVICE_SNOOP_MODE eCacheSnoopingMode;
+	/*! The device interrupt is shared */
+	IMG_BOOL			bIRQIsShared;
+
+	/*! IRQ polarity */
+	PVRSRV_DEVICE_IRQ_ACTIVE_LEVEL	eIRQActiveLevel;
 
 	/*! Device specific data handle */
-	IMG_HANDLE hDevData;
+	IMG_HANDLE			hDevData;
 
-	/*! System specific data that gets passed into system callback functions. */
-	IMG_HANDLE hSysData;
+	/*! System specific data. This gets passed into system callback functions */
+	IMG_HANDLE			hSysData;
 
-	IMG_BOOL bHasNonMappableLocalMemory;
+	/*! ID of the Physical memory heap to use
+	 *! The first entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL])  will be used for allocations
+	 *!  where the PVRSRV_MEMALLOCFLAG_CPU_LOCAL flag is not set. Normally this will be the PhysHeapID
+	 *!  of an LMA heap (but the configuration could specify a UMA heap here, if desired)
+	 *! The second entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL]) will be used for allocations
+	 *!  where the PVRSRV_MEMALLOCFLAG_CPU_LOCAL flag is set. Normally this will be the PhysHeapID
+	 *!  of a UMA heap (but the configuration could specify an LMA heap here, if desired)
+	 *! The third entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL]) will be used for allocations
+	 *!  where the PVRSRV_MEMALLOCFLAG_FW_LOCAL flag is set.
+	 *! In the event of there being only one Physical Heap, the configuration should specify the
+	 *!  same heap details in all entries */
+	IMG_UINT32			aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_LAST];
 
-	PHYS_HEAP_CONFIG *pasPhysHeaps;
-	IMG_UINT32 ui32PhysHeapCount;
+	/*! Callback to inform the device we about to change power state */
+	PFN_SYS_DEV_PRE_POWER		pfnPrePowerState;
 
-	/*!
-	 *! ID of the Physical memory heap to use.
-	 *!
-	 *! The first entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_GPU_LOCAL])
-	 *! will be used for allocations where the PVRSRV_MEMALLOCFLAG_CPU_LOCAL
-	 *! flag is not set. Normally this will be the PhysHeapID of an LMA heap
-	 *! but the configuration could specify a UMA heap here (if desired).
-	 *!
-	 *! The second entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_CPU_LOCAL])
-	 *! will be used for allocations where the PVRSRV_MEMALLOCFLAG_CPU_LOCAL
-	 *! flag is set. Normally this will be the PhysHeapID of a UMA heap but
-	 *! the configuration could specify an LMA heap here (if desired).
-	 *!
-	 *! The third entry (aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_FW_LOCAL])
-	 *! will be used for allocations where the PVRSRV_MEMALLOCFLAG_FW_LOCAL
-	 *! flag is set.
-	 *!
-	 *! In the event of there being only one Physical Heap, the configuration
-	 *! should specify the same heap details in all entries.
-	 */
-	IMG_UINT32 aui32PhysHeapID[PVRSRV_DEVICE_PHYS_HEAP_LAST];
+	/*! Callback to inform the device we have finished the power state change */
+	PFN_SYS_DEV_POST_POWER		pfnPostPowerState;
 
-	RGXFWIF_BIFTILINGMODE eBIFTilingMode;
-	IMG_UINT32 *pui32BIFTilingHeapConfigs;
-	IMG_UINT32 ui32BIFTilingHeapCount;
+	/*! Callback to obtain the clock frequency from the device */
+	PFN_SYS_DEV_CLK_FREQ_GET	pfnClockFreqGet;
 
-	/*!
-	 *! Callbacks to change system device power state at the beginning and end
-	 *! of a power state change (optional).
-	 */
-	PFN_SYS_DEV_PRE_POWER pfnPrePowerState;
-	PFN_SYS_DEV_POST_POWER pfnPostPowerState;
+	/*! Callback to inform the device that an interrupt has been handled */
+	PFN_SYS_DEV_INTERRUPT_HANDLED	pfnInterruptHandled;
 
-	/*! Callback to obtain the clock frequency from the device (optional). */
-	PFN_SYS_DEV_CLK_FREQ_GET pfnClockFreqGet;
-
-	/*!
-	 *! Callback to handle memory budgeting. Can be used to reject allocations
-	 *! over a certain size (optional).
-	 */
-	PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE pfnCheckMemAllocSize;
+	/*! Callback to handle memory budgeting */
+	PFN_SYS_DEV_CHECK_MEM_ALLOC_SIZE	pfnCheckMemAllocSize;
 
 #if defined(SUPPORT_TRUSTED_DEVICE)
-	/*!
-	 *! Callback to send FW image and FW boot time parameters to the trusted
-	 *! device.
-	 */
-	PFN_TD_SEND_FW_IMAGE pfnTDSendFWImage;
+	/*! Callback to send FW image and FW boot time parameters
+	 *! to the trusted device */
+	PFN_TD_SEND_FW_IMAGE     pfnTDSendFWImage;
 
-	/*!
-	 *! Callback to send parameters needed in a power transition to the trusted
-	 *! device.
-	 */
-	PFN_TD_SET_POWER_PARAMS pfnTDSetPowerParams;
+	/*! Callback to send parameters needed in a power transition
+	 *! to the trusted device */
+	PFN_TD_SET_POWER_PARAMS  pfnTDSetPowerParams;
 
 	/*! Callbacks to ping the trusted device to securely run RGXStart/Stop() */
-	PFN_TD_RGXSTART pfnTDRGXStart;
-	PFN_TD_RGXSTOP pfnTDRGXStop;
+	PFN_TD_RGXSTART          pfnTDRGXStart;
+	PFN_TD_RGXSTOP           pfnTDRGXStop;
 
 	/*! Callback to request allocation/freeing of secure buffers */
-	PFN_TD_SECUREBUF_ALLOC pfnTDSecureBufAlloc;
-	PFN_TD_SECUREBUF_FREE pfnTDSecureBufFree;
-#endif /* defined(SUPPORT_TRUSTED_DEVICE) */
+	PFN_TD_SECUREBUF_ALLOC   pfnTDSecureBufAlloc;
+	PFN_TD_SECUREBUF_FREE    pfnTDSecureBufFree;
+#endif
 
-	/*! Function that does device feature specific system layer initialisation */
-	PFN_SYS_DEV_FEAT_DEP_INIT	pfnSysDevFeatureDepInit;
+	/*! Current breakpoint data master */
+	RGXFWIF_DM			eBPDM;
+	/*! A Breakpoint has been set */
+	IMG_BOOL			bBPSet;	
 
-#if defined(PVR_DVFS) || defined(SUPPORT_PDVFS)
-	PVRSRV_DVFS sDVFS;
+#if defined(PVR_DVFS)
+	PVRSRV_DVFS			sDVFS;
 #endif
 };
+
+typedef PVRSRV_ERROR (*PFN_SYSTEM_PRE_POWER_STATE)(PVRSRV_SYS_POWER_STATE eNewPowerState);
+typedef PVRSRV_ERROR (*PFN_SYSTEM_POST_POWER_STATE)(PVRSRV_SYS_POWER_STATE eNewPowerState);
+
+typedef enum _PVRSRV_SYSTEM_SNOOP_MODE_ {
+	PVRSRV_SYSTEM_SNOOP_NONE = 0,
+	PVRSRV_SYSTEM_SNOOP_CPU_ONLY,
+	PVRSRV_SYSTEM_SNOOP_DEVICE_ONLY,
+	PVRSRV_SYSTEM_SNOOP_CROSS,
+} PVRSRV_SYSTEM_SNOOP_MODE;
+
+typedef struct _PVRSRV_SYSTEM_CONFIG_
+{
+	IMG_UINT32				uiSysFlags;
+	IMG_CHAR				*pszSystemName;
+	IMG_UINT32				uiDeviceCount;
+	PVRSRV_DEVICE_CONFIG	*pasDevices;
+	PFN_SYSTEM_PRE_POWER_STATE pfnSysPrePowerState;
+	PFN_SYSTEM_POST_POWER_STATE pfnSysPostPowerState;
+	PVRSRV_SYSTEM_SNOOP_MODE eCacheSnoopingMode;
+
+	PHYS_HEAP_CONFIG		*pasPhysHeaps;
+	IMG_UINT32				ui32PhysHeapCount;
+	IMG_UINT64				ui64DevMemPhysOffset;
+
+	IMG_UINT32              *pui32BIFTilingHeapConfigs;
+	IMG_UINT32              ui32BIFTilingHeapCount;
+} PVRSRV_SYSTEM_CONFIG;
+
 
 #endif /* __PVRSRV_DEVICE_H__*/

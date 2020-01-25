@@ -50,6 +50,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "osfunc.h"
 
 #include "dbgdrvif_srv5.h"
+#include "mm.h"
 #include "allocmem.h"
 #include "pdump_km.h"
 #include "pdump_osfunc.h"
@@ -166,7 +167,7 @@ PVRSRV_ERROR PDumpOSBufprintf(IMG_HANDLE hBuf, IMG_UINT32 ui32ScriptSizeMax, IMG
 /*!
  * \name	PDumpOSVSprintf
  */
-PVRSRV_ERROR PDumpOSVSprintf(IMG_CHAR *pszComment, IMG_UINT32 ui32ScriptSizeMax, const IMG_CHAR* pszFormat, PDUMP_va_list vaArgs)
+PVRSRV_ERROR PDumpOSVSprintf(IMG_CHAR *pszComment, IMG_UINT32 ui32ScriptSizeMax, IMG_CHAR* pszFormat, PDUMP_va_list vaArgs)
 {
 	IMG_INT32 n;
 
@@ -188,8 +189,6 @@ PVRSRV_ERROR PDumpOSVSprintf(IMG_CHAR *pszComment, IMG_UINT32 ui32ScriptSizeMax,
 void PDumpOSDebugPrintf(IMG_CHAR* pszFormat, ...)
 {
 	PVR_UNREFERENCED_PARAMETER(pszFormat);
-
-	/* FIXME: Implement using services PVR_DBG or otherwise with kprintf */
 }
 
 /*!
@@ -398,7 +397,7 @@ PVRSRV_ERROR PDumpOSCreateLock(void)
 
 void PDumpOSDestroyLock(void)
 {
-	/* no destruction work to be done, just assert
+	/* no destruction work to do, just assert
 	 * the lock is not held */
 	PVR_ASSERT(mutex_is_locked(&gsPDumpMutex) == 0);
 }

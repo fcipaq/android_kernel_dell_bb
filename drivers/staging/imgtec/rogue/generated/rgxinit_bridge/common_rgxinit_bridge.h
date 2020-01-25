@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for rgxinit
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for rgxinit
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for rgxinit
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,14 +45,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_RGXINIT_BRIDGE_H
 #define COMMON_RGXINIT_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "rgx_bridge.h"
 #include "rgxscript.h"
 #include "devicemem_typedefs.h"
+#include "rgx_fwif_shared.h"
 #include "rgx_fwif.h"
 
 
@@ -62,9 +61,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_RGXINIT_RGXINITFINALISEFWIMAGE			PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+2
 #define PVRSRV_BRIDGE_RGXINIT_RGXINITDEVPART2			PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+3
 #define PVRSRV_BRIDGE_RGXINIT_GPUVIRTPOPULATELMASUBARENAS			PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+4
-#define PVRSRV_BRIDGE_RGXINIT_RGXINITGUEST			PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+5
-#define PVRSRV_BRIDGE_RGXINIT_RGXINITFIRMWAREEXTENDED			PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+6
-#define PVRSRV_BRIDGE_RGXINIT_CMD_LAST			(PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+6)
+#define PVRSRV_BRIDGE_RGXINIT_CMD_LAST			(PVRSRV_BRIDGE_RGXINIT_CMD_FIRST+4)
 
 
 /*******************************************
@@ -104,7 +101,7 @@ typedef struct PVRSRV_BRIDGE_IN_RGXINITFIRMWARE_TAG
 	IMG_UINT32 ui32SignatureChecksBufSize;
 	IMG_UINT32 ui32HWPerfFWBufSizeKB;
 	IMG_UINT64 ui64HWPerfFilter;
-	IMG_UINT32 ui32RGXFWAlignChecksArrLength;
+	IMG_UINT32 ui32RGXFWAlignChecksSize;
 	IMG_UINT32 * pui32RGXFWAlignChecks;
 	IMG_UINT32 ui32ConfigFlags;
 	IMG_UINT32 ui32LogType;
@@ -133,7 +130,8 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXINITFIRMWARE_TAG
 /* Bridge in structure for RGXInitFinaliseFWImage */
 typedef struct PVRSRV_BRIDGE_IN_RGXINITFINALISEFWIMAGE_TAG
 {
-	 IMG_UINT32 ui32EmptyStructPlaceholder;
+	IMG_HANDLE hFWImagePMRImport;
+	IMG_UINT64 ui64FWImgLen;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXINITFINALISEFWIMAGE;
 
 /* Bridge out structure for RGXInitFinaliseFWImage */
@@ -151,8 +149,9 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXINITFINALISEFWIMAGE_TAG
 typedef struct PVRSRV_BRIDGE_IN_RGXINITDEVPART2_TAG
 {
 	RGX_INIT_COMMAND * psDbgScript;
+	RGX_INIT_COMMAND * psDbgBusScript;
+	RGX_INIT_COMMAND * psDeinitScript;
 	IMG_UINT32 ui32DeviceFlags;
-	IMG_UINT32 ui32HWPerfHostBufSize;
 	IMG_UINT32 ui32HWPerfHostFilter;
 	IMG_UINT32 ui32RGXActivePMConf;
 	IMG_HANDLE hFWCodePMR;
@@ -177,7 +176,6 @@ typedef struct PVRSRV_BRIDGE_IN_GPUVIRTPOPULATELMASUBARENAS_TAG
 {
 	IMG_UINT32 ui32NumElements;
 	IMG_UINT32 * pui32Elements;
-	IMG_BOOL bEnableTrustedDeviceAceConfig;
 } __attribute__((packed)) PVRSRV_BRIDGE_IN_GPUVIRTPOPULATELMASUBARENAS;
 
 /* Bridge out structure for GPUVIRTPopulateLMASubArenas */
@@ -185,49 +183,6 @@ typedef struct PVRSRV_BRIDGE_OUT_GPUVIRTPOPULATELMASUBARENAS_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_GPUVIRTPOPULATELMASUBARENAS;
-
-
-/*******************************************
-            RGXInitGuest          
- *******************************************/
-
-/* Bridge in structure for RGXInitGuest */
-typedef struct PVRSRV_BRIDGE_IN_RGXINITGUEST_TAG
-{
-	IMG_BOOL bEnableSignatureChecks;
-	IMG_UINT32 ui32SignatureChecksBufSize;
-	IMG_UINT32 ui32RGXFWAlignChecksArrLength;
-	IMG_UINT32 * pui32RGXFWAlignChecks;
-	IMG_UINT32 ui32DeviceFlags;
-	RGXFWIF_COMPCHECKS_BVNC sClientBVNC;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXINITGUEST;
-
-/* Bridge out structure for RGXInitGuest */
-typedef struct PVRSRV_BRIDGE_OUT_RGXINITGUEST_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXINITGUEST;
-
-
-/*******************************************
-            RGXInitFirmwareExtended          
- *******************************************/
-
-/* Bridge in structure for RGXInitFirmwareExtended */
-typedef struct PVRSRV_BRIDGE_IN_RGXINITFIRMWAREEXTENDED_TAG
-{
-	IMG_UINT32 ui32RGXFWAlignChecksArrLength;
-	IMG_UINT32 * pui32RGXFWAlignChecks;
-	RGX_FW_INIT_IN_PARAMS spsInParams;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXINITFIRMWAREEXTENDED;
-
-/* Bridge out structure for RGXInitFirmwareExtended */
-typedef struct PVRSRV_BRIDGE_OUT_RGXINITFIRMWAREEXTENDED_TAG
-{
-	RGXFWIF_DEV_VIRTADDR spsRGXFwInit;
-	IMG_HANDLE hHWPerfPMR2;
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXINITFIRMWAREEXTENDED;
 
 
 #endif /* COMMON_RGXINIT_BRIDGE_H */

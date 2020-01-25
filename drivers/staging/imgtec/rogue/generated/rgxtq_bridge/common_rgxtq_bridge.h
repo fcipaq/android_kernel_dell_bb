@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for rgxtq
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for rgxtq
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for rgxtq
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,13 +45,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_RGXTQ_BRIDGE_H
 #define COMMON_RGXTQ_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
 #include "rgx_bridge.h"
-#include <powervr/sync_external.h>
+#include "sync_external.h"
+#include "rgx_fwif_shared.h"
 
 
 #define PVRSRV_BRIDGE_RGXTQ_CMD_FIRST			0
@@ -59,7 +58,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_RGXTQ_RGXDESTROYTRANSFERCONTEXT			PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+1
 #define PVRSRV_BRIDGE_RGXTQ_RGXSUBMITTRANSFER			PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+2
 #define PVRSRV_BRIDGE_RGXTQ_RGXSETTRANSFERCONTEXTPRIORITY			PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+3
-#define PVRSRV_BRIDGE_RGXTQ_CMD_LAST			(PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+3)
+#define PVRSRV_BRIDGE_RGXTQ_RGXKICKSYNCTRANSFER			PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+4
+#define PVRSRV_BRIDGE_RGXTQ_CMD_LAST			(PVRSRV_BRIDGE_RGXTQ_CMD_FIRST+4)
 
 
 /*******************************************
@@ -109,7 +109,6 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXDESTROYTRANSFERCONTEXT_TAG
 typedef struct PVRSRV_BRIDGE_IN_RGXSUBMITTRANSFER_TAG
 {
 	IMG_HANDLE hTransferContext;
-	IMG_UINT32 ui32ClientCacheOpSeqNum;
 	IMG_UINT32 ui32PrepareCount;
 	IMG_UINT32 * pui32ClientFenceCount;
 	IMG_HANDLE* * phFenceUFOSyncPrimBlock;
@@ -129,6 +128,7 @@ typedef struct PVRSRV_BRIDGE_IN_RGXSUBMITTRANSFER_TAG
 	IMG_UINT8* * pui8FWCommand;
 	IMG_UINT32 * pui32TQPrepareFlags;
 	IMG_UINT32 ui32ExtJobRef;
+	IMG_UINT32 ui32IntJobRef;
 	IMG_UINT32 ui32SyncPMRCount;
 	IMG_UINT32 * pui32SyncPMRFlags;
 	IMG_HANDLE * phSyncPMRs;
@@ -158,6 +158,41 @@ typedef struct PVRSRV_BRIDGE_OUT_RGXSETTRANSFERCONTEXTPRIORITY_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXSETTRANSFERCONTEXTPRIORITY;
+
+
+/*******************************************
+            RGXKickSyncTransfer          
+ *******************************************/
+
+/* Bridge in structure for RGXKickSyncTransfer */
+typedef struct PVRSRV_BRIDGE_IN_RGXKICKSYNCTRANSFER_TAG
+{
+	IMG_HANDLE hTransferContext;
+	IMG_UINT32 ui32ClientFenceCount;
+	IMG_HANDLE * phClientFenceUFOSyncPrimBlock;
+	IMG_UINT32 * pui32ClientFenceSyncOffset;
+	IMG_UINT32 * pui32ClientFenceValue;
+	IMG_UINT32 ui32ClientUpdateCount;
+	IMG_HANDLE * phClientUpdateUFOSyncPrimBlock;
+	IMG_UINT32 * pui32ClientUpdateSyncOffset;
+	IMG_UINT32 * pui32ClientUpdateValue;
+	IMG_UINT32 ui32ServerSyncCount;
+	IMG_UINT32 * pui32ServerSyncFlags;
+	IMG_HANDLE * phServerSyncs;
+	IMG_INT32 i32CheckFenceFD;
+	IMG_INT32 i32UpdateTimelineFD;
+	IMG_CHAR * puiUpdateFenceName;
+	IMG_UINT32 ui32TQPrepareFlags;
+	IMG_UINT32 ui32ExtJobRef;
+	IMG_UINT32 ui32IntJobRef;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_RGXKICKSYNCTRANSFER;
+
+/* Bridge out structure for RGXKickSyncTransfer */
+typedef struct PVRSRV_BRIDGE_OUT_RGXKICKSYNCTRANSFER_TAG
+{
+	IMG_INT32 i32UpdateFenceFD;
+	PVRSRV_ERROR eError;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_RGXKICKSYNCTRANSFER;
 
 
 #endif /* COMMON_RGXTQ_BRIDGE_H */

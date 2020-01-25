@@ -53,13 +53,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define DBGDRIV_MONOBASE	0x000B0000
 
 
-/*****************************************************************************
- * OS-specific declarations and init/cleanup functions
-*****************************************************************************/
 extern void *	g_pvAPIMutex;
-
-extern IMG_INT dbgdrv_init(void);
-extern void dbgdrv_cleanup(void);
 
 /*****************************************************************************
  Internal debug driver core functions

@@ -179,19 +179,29 @@ int psb_intel_pipe_set_base(struct drm_crtc *crtc,
 static void psb_intel_crtc_prepare(struct drm_crtc *crtc)
 {
 	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
-	struct psb_intel_crtc *psb_intel_crtc = to_psb_intel_crtc(crtc);
-
-	psb_intel_crtc->in_mode_setting = true;
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
 }
 
 static void psb_intel_crtc_commit(struct drm_crtc *crtc)
 {
 	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
-	struct psb_intel_crtc *psb_intel_crtc = to_psb_intel_crtc(crtc);
-
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_ON);
-	psb_intel_crtc->in_mode_setting = false;
+}
+
+void psb_intel_encoder_prepare(struct drm_encoder *encoder)
+{
+	struct drm_encoder_helper_funcs *encoder_funcs =
+	    encoder->helper_private;
+	/* lvds has its own version of prepare see psb_intel_lvds_prepare */
+	encoder_funcs->dpms(encoder, DRM_MODE_DPMS_OFF);
+}
+
+void psb_intel_encoder_commit(struct drm_encoder *encoder)
+{
+	struct drm_encoder_helper_funcs *encoder_funcs =
+	    encoder->helper_private;
+	/* lvds has its own version of commit see psb_intel_lvds_commit */
+	encoder_funcs->dpms(encoder, DRM_MODE_DPMS_ON);
 }
 
 static bool psb_intel_crtc_mode_fixup(struct drm_crtc *crtc,

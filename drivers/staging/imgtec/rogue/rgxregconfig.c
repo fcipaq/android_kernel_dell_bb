@@ -118,8 +118,7 @@ PVRSRV_ERROR PVRSRVRGXAddRegConfigKM(CONNECTION_DATA * psConnection,
 				RGXFWIF_DM_GP,
 				&sRegCfgCmd,
 				sizeof(sRegCfgCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXAddRegConfigKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -161,8 +160,7 @@ PVRSRV_ERROR PVRSRVRGXClearRegConfigKM(CONNECTION_DATA * psConnection,
 				RGXFWIF_DM_GP,
 				&sRegCfgCmd,
 				sizeof(sRegCfgCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXClearRegConfigKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -200,8 +198,7 @@ PVRSRV_ERROR PVRSRVRGXEnableRegConfigKM(CONNECTION_DATA * psConnection,
 				RGXFWIF_DM_GP,
 				&sRegCfgCmd,
 				sizeof(sRegCfgCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXEnableRegConfigKM: RGXScheduleCommand failed. Error:%u", eError));
@@ -237,8 +234,7 @@ PVRSRV_ERROR PVRSRVRGXDisableRegConfigKM(CONNECTION_DATA * psConnection,
 				RGXFWIF_DM_GP,
 				&sRegCfgCmd,
 				sizeof(sRegCfgCmd),
-				0,
-				PDUMP_FLAGS_CONTINUOUS);
+				IMG_TRUE);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVRGXDisableRegConfigKM: RGXScheduleCommand failed. Error:%u", eError));

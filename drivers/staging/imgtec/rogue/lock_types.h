@@ -69,9 +69,6 @@ typedef struct _OS_LOCK_ *POS_LOCK;
 	 * still have to be shared. This is one such case.
 	 */
 	typedef struct _OS_ATOMIC {IMG_INT counter;} ATOMIC_T;
-#elif defined(INTEGRITY_OS)
-	/*Fixed size data type to hold the largest value*/
-	typedef struct _OS_ATOMIC {IMG_UINT64 counter;} ATOMIC_T;
 #else
 	#error "Please type-define an atomic lock for this environment"
 #endif

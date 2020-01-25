@@ -47,7 +47,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "handle.h"
 
 
-#if defined(__linux__) || defined(__QNXNTO__) || defined(INTEGRITY_OS)
+#if defined(__linux__) || defined(__QNXNTO__)
 PVRSRV_ERROR OSConnectionPrivateDataInit(IMG_HANDLE *phOsPrivateData, void *pvOSData);
 PVRSRV_ERROR OSConnectionPrivateDataDeInit(IMG_HANDLE hOsPrivateData);
 
@@ -55,20 +55,10 @@ PVRSRV_ERROR OSConnectionSetHandleOptions(PVRSRV_HANDLE_BASE *psHandleBase);
 
 PVRSRV_DEVICE_NODE* OSGetDevData(CONNECTION_DATA *psConnection);
 
-#else	/* defined(__linux__) || defined(__QNXNTO__) || defined(INTEGRITY_OS) */
+#else	/* defined(__linux__) */
 #ifdef INLINE_IS_PRAGMA
 #pragma inline(OSConnectionPrivateDataInit)
 #endif
-/*************************************************************************/ /*!
-@Function       OSConnectionPrivateDataInit
-@Description    Allocates and initialises any OS-specific private data
-                relating to a connection.
-                Called from PVRSRVConnectionConnect().
-@Input          pvOSData            pointer to any OS private data
-@Output         phOsPrivateData     handle to the created connection
-                                    private data
-@Return         PVRSRV_OK on success, a failure code otherwise.
-*/ /**************************************************************************/
 static INLINE PVRSRV_ERROR OSConnectionPrivateDataInit(IMG_HANDLE *phOsPrivateData, void *pvOSData)
 {
 	PVR_UNREFERENCED_PARAMETER(phOsPrivateData);
@@ -80,14 +70,6 @@ static INLINE PVRSRV_ERROR OSConnectionPrivateDataInit(IMG_HANDLE *phOsPrivateDa
 #ifdef INLINE_IS_PRAGMA
 #pragma inline(OSConnectionPrivateDataDeInit)
 #endif
-/*************************************************************************/ /*!
-@Function       OSConnectionPrivateDataDeInit
-@Description    Frees previously allocated OS-specific private data
-                relating to a connection.
-@Input          hOsPrivateData      handle to the connection private data
-                                    to be freed
-@Return         PVRSRV_OK on success, a failure code otherwise.
-*/ /**************************************************************************/
 static INLINE PVRSRV_ERROR OSConnectionPrivateDataDeInit(IMG_HANDLE hOsPrivateData)
 {
 	PVR_UNREFERENCED_PARAMETER(hOsPrivateData);
@@ -114,7 +96,7 @@ static INLINE PVRSRV_DEVICE_NODE* OSGetDevData(CONNECTION_DATA *psConnection)
 
 	return NULL;
 }
-#endif	/* defined(__linux__) || defined(__QNXNTO__) || defined(INTEGRITY_OS) */
+#endif	/* defined(__linux__) */
 
 
 #endif /* _OSCONNECTION_SERVER_H_ */

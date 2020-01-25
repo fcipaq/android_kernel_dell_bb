@@ -102,8 +102,6 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgePhysmemNewRamBackedPMR(IMG_HANDLE h
 								    IMG_UINT32 *pui32MappingTable,
 								    IMG_UINT32 ui32Log2PageSize,
 								    PVRSRV_MEMALLOCFLAGS_T uiFlags,
-								    IMG_UINT32 ui32AnnotationLength,
-								    const IMG_CHAR *puiAnnotation,
 								    IMG_HANDLE *phPMRPtr);
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgePhysmemNewRamBackedLockedPMR(IMG_HANDLE hBridge,
@@ -114,8 +112,6 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgePhysmemNewRamBackedLockedPMR(IMG_HA
 									  IMG_UINT32 *pui32MappingTable,
 									  IMG_UINT32 ui32Log2PageSize,
 									  PVRSRV_MEMALLOCFLAGS_T uiFlags,
-									  IMG_UINT32 ui32AnnotationLength,
-									  const IMG_CHAR *puiAnnotation,
 									  IMG_HANDLE *phPMRPtr);
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntPin(IMG_HANDLE hBridge,
@@ -135,8 +131,7 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntUnpinInvalidate(IMG_HANDLE
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntCtxCreate(IMG_HANDLE hBridge,
 								IMG_BOOL bbKernelMemoryCtx,
 								IMG_HANDLE *phDevMemServerContext,
-								IMG_HANDLE *phPrivData,
-								IMG_UINT32 *pui32CPUCacheLineSize);
+								IMG_HANDLE *phPrivData);
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntCtxDestroy(IMG_HANDLE hBridge,
 								 IMG_HANDLE hDevmemServerContext);
@@ -180,7 +175,8 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeChangeSparseMem(IMG_HANDLE hBridge,
 							     IMG_UINT32 ui32SparseFlags,
 							     PVRSRV_MEMALLOCFLAGS_T uiFlags,
 							     IMG_DEV_VIRTADDR sDevVAddr,
-							     IMG_UINT64 ui64CPUVAddr);
+							     IMG_UINT64 ui64CPUVAddr,
+							     IMG_UINT32 *pui32Status);
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntMapPages(IMG_HANDLE hBridge,
 							       IMG_HANDLE hReservation,
@@ -194,6 +190,10 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntUnmapPages(IMG_HANDLE hBri
 								 IMG_HANDLE hReservation,
 								 IMG_DEV_VIRTADDR sDevVAddr,
 								 IMG_UINT32 ui32PageCount);
+
+IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemSLCFlushInvalRequest(IMG_HANDLE hBridge,
+									IMG_HANDLE hDeviceNode,
+									IMG_HANDLE hPmr);
 
 IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIsVDevAddrValid(IMG_HANDLE hBridge,
 								   IMG_HANDLE hDevmemCtx,
@@ -221,10 +221,11 @@ IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeHeapCfgHeapDetails(IMG_HANDLE hBrid
 								IMG_UINT32 *pui32Log2DataPageSizeOut,
 								IMG_UINT32 *pui32Log2ImportAlignmentOut);
 
-IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntRegisterPFNotifyKM(IMG_HANDLE hBridge,
-									 IMG_HANDLE hDevmemCtx,
-									 IMG_UINT32 ui32PID,
-									 IMG_BOOL bRegister);
+IMG_INTERNAL PVRSRV_ERROR IMG_CALLCONV BridgeDevmemIntCtxCreateCLS(IMG_HANDLE hBridge,
+								   IMG_BOOL bbKernelMemoryCtx,
+								   IMG_HANDLE *phDevMemServerContext,
+								   IMG_HANDLE *phPrivData,
+								   IMG_UINT32 *pui32CPUCacheLineSize);
 
 
 #endif /* CLIENT_MM_BRIDGE_H */

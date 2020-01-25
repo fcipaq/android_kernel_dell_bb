@@ -1,5 +1,5 @@
 /*************************************************************************/ /*!
-@File           allocmem.h
+@File
 @Title          memory allocation header
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @Description    Memory-Allocation API definitions
@@ -45,32 +45,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define __ALLOCMEM_H__
 
 #include "img_types.h"
-#include "pvr_debug.h"
 
 #if defined (__cplusplus)
 extern "C" {
 #endif
 
 #if !defined(PVRSRV_DEBUG_LINUX_MEMORY_STATS) || !defined(DEBUG) || !defined(PVRSRV_ENABLE_PROCESS_STATS) || !defined(PVRSRV_ENABLE_MEMORY_STATS)
-/**************************************************************************/ /*!
-@Function       OSAllocMem
-@Description    Allocates CPU memory. Contents are uninitialized.
-                If passed a size of zero, function should not assert,
-                but just return a NULL pointer.
-@Input          ui32Size        Size of required allocation (in bytes)
-@Return         Pointer to allocated memory on success.
-                Otherwise NULL.
- */ /**************************************************************************/
 void *OSAllocMem(IMG_UINT32 ui32Size);
-/**************************************************************************/ /*!
-@Function       OSAllocZMem
-@Description    Allocates CPU memory and initializes the contents to zero.
-                If passed a size of zero, function should not assert,
-                but just return a NULL pointer.
-@Input          ui32Size        Size of required allocation (in bytes)
-@Return         Pointer to allocated memory on success.
-                Otherwise NULL.
- */ /**************************************************************************/
 void *OSAllocZMem(IMG_UINT32 ui32Size);
 #else
 void *_OSAllocMem(IMG_UINT32 ui32Size, void *pvAllocFromFile, IMG_UINT32 ui32AllocFromLine);
@@ -81,87 +62,24 @@ void *_OSAllocZMem(IMG_UINT32 ui32Size, void *pvAllocFromFile, IMG_UINT32 ui32Al
     _OSAllocZMem ((_size), (__FILE__), (__LINE__));
 #endif
 
-/**************************************************************************/ /*!
-@Function       OSAllocMemNoStats
-@Description    Allocates CPU memory. Contents are uninitialized.
-                If passed a size of zero, function should not assert,
-                but just return a NULL pointer.
-                The allocated memory is not accounted for by process stats.
-                Process stats are an optional feature (enabled only when
-                PVRSRV_ENABLE_PROCESS_STATS is defined) which track the amount
-                of memory allocated to help in debugging. Where this is not
-                required, OSAllocMem() and OSAllocMemNoStats() equate to
-                the same operation.
-@Input          ui32Size        Size of required allocation (in bytes)
-@Return         Pointer to allocated memory on success.
-                Otherwise NULL.
- */ /**************************************************************************/
 void *OSAllocMemNoStats(IMG_UINT32 ui32Size);
 
-/**************************************************************************/ /*!
-@Function       OSAllocZMemNoStats
-@Description    Allocates CPU memory and initializes the contents to zero.
-                If passed a size of zero, function should not assert,
-                but just return a NULL pointer.
-                The allocated memory is not accounted for by process stats.
-                Process stats are an optional feature (enabled only when
-                PVRSRV_ENABLE_PROCESS_STATS is defined) which track the amount
-                of memory allocated to help in debugging. Where this is not
-                required, OSAllocZMem() and OSAllocZMemNoStats() equate to
-                the same operation.
-@Input          ui32Size        Size of required allocation (in bytes)
-@Return         Pointer to allocated memory on success.
-                Otherwise NULL.
- */ /**************************************************************************/
 void *OSAllocZMemNoStats(IMG_UINT32 ui32Size);
 
-/**************************************************************************/ /*!
-@Function       OSFreeMem
-@Description    Frees previously allocated CPU memory.
-@Input          pvCpuVAddr       Pointer to the memory to be freed.
-@Return         None.
- */ /**************************************************************************/
 void OSFreeMem(void *pvCpuVAddr);
 
-/**************************************************************************/ /*!
-@Function       OSFreeMemNoStats
-@Description    Frees previously allocated CPU memory.
-                The freed memory does not update the figures in process stats.
-                Process stats are an optional feature (enabled only when
-                PVRSRV_ENABLE_PROCESS_STATS is defined) which track the amount
-                of memory allocated to help in debugging. Where this is not
-                required, OSFreeMem() and OSFreeMemNoStats() equate to the
-                same operation.
-@Input          pvCpuVAddr       Pointer to the memory to be freed.
-@Return         None.
- */ /**************************************************************************/
-void OSFreeMemNoStats(void *pvCpuVAddr);
-
-/*
- * These macros allow us to catch double-free bugs on DEBUG builds and
- * prevent crashes on RELEASE builds.
- */
-
-#if defined(DEBUG)
-#define double_free_sentinel (void*) &OSFreeMem
-#define ALLOCMEM_ASSERT(exp) PVR_ASSERT(exp)
-#else
-#define double_free_sentinel NULL
-#define ALLOCMEM_ASSERT(exp) do {} while(0)
-#endif
-
-#define OSFreeMem(_ptr) do { \
-		ALLOCMEM_ASSERT((_ptr) != double_free_sentinel); \
-		(OSFreeMem)(_ptr); \
-		(_ptr) = double_free_sentinel; \
-		MSC_SUPPRESS_4127 \
+#define OSFREEMEM(_ptr) do \
+	{ OSFreeMem((_ptr)); \
+		(_ptr) = (void*)0; \
+		MSC_SUPPRESS_4127\
 	} while (0)
 
-#define OSFreeMemNoStats(_ptr) do { \
-		ALLOCMEM_ASSERT((_ptr) != double_free_sentinel); \
-		(OSFreeMemNoStats)(_ptr); \
-		(_ptr) = double_free_sentinel; \
-		MSC_SUPPRESS_4127 \
+void OSFreeMemNoStats(void *pvCpuVAddr);
+
+#define OSFREEMEMNOSTATS(_ptr) do \
+	{ OSFreeMemNoStats((_ptr)); \
+		(_ptr) = (void*)0; \
+		MSC_SUPPRESS_4127\
 	} while (0)
 
 #if defined (__cplusplus)

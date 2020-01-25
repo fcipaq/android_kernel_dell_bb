@@ -113,5 +113,22 @@ drm_intel_mid-y += \
  video/vsp/vsp.o \
  video/vsp/vsp_init.o
 
+drm_intel_mid-$(CONFIG_SUPPORT_HDMI) += otm_hdmi/os/android/android_hdmi.o \
+ otm_hdmi/ipil/common/ipil_hdcp.o \
+ otm_hdmi/ipil/common/otm_ipil_main.o \
+ otm_hdmi/ipil/specific/mfld/ips_hdmi.o \
+ otm_hdmi/ipil/specific/mrfld/ips_hdcp.o \
+ otm_hdmi/ipil/specific/mrfld/ips_hdmi_priv.o \
+ otm_hdmi/pil/common/edid.o \
+ otm_hdmi/pil/common/edid_print.o \
+ otm_hdmi/pil/common/hdcp.o \
+ otm_hdmi/pil/common/infoframes.o \
+ otm_hdmi/pil/common/mode_info.o \
+ otm_hdmi/pil/common/otm_hdmi.o \
+ otm_hdmi/pil/specific/mofd/ps_hdmi.o \
+ display/tng/drv/mdfld_hdmi_audio.o \
+ display/tng/drv/psb_intel_hdmi.o \
+
 obj-y += dfrgx/
 obj-y += hdmi_audio/
+

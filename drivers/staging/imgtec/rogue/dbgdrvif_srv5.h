@@ -63,8 +63,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #endif
 
-#include "img_defs.h"
-
 
 /*****************************************************************************
  Stream mode stuff.
@@ -77,9 +75,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define DEBUG_FLAGS_READONLY			0x00000008UL
 #define DEBUG_FLAGS_WRITEONLY			0x00000010UL
 #define DEBUG_FLAGS_CIRCULAR			0x00000020UL
-
-/* Stream name maximum length */
-#define DEBUG_STREAM_NAME_MAX			32
 
 /*****************************************************************************
  IOCTL values.
@@ -126,6 +121,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define DBGDRV_WINCE_DEVICE_NAME			L"DBD1:"
 #endif
 
+#ifdef __GNUC__
+#define DBG_ALIGN(n) __attribute__ ((aligned (n)))
+#else
+#define DBG_ALIGN(n)
+#endif
+
 /* A pointer type which is at least 64 bits wide. The fixed width ensures
  * consistency in structures between 32 and 64-bit code.
  * The UM code (be it 32 or 64 bit) can simply write to the native pointer type (pvPtr).
@@ -146,7 +147,7 @@ typedef union
 	IMG_UINT32 ui32Ptr;
 	/* force the union width */
 	IMG_UINT64 ui64Ptr;
-} DBG_WIDEPTR __aligned(8);
+} DBG_WIDEPTR DBG_ALIGN(8);
 
 /* Helper macro for dbgdriv (KM) to get the pointer value from the WIDEPTR type,
  * depending on whether the client is 32 or 64-bit.
@@ -196,7 +197,7 @@ typedef struct _DBG_OUT_CREATESTREAM_
 
 typedef struct _DBG_IN_FINDSTREAM_
 {
-	IMG_CHAR pszName[DEBUG_STREAM_NAME_MAX];
+	DBG_WIDEPTR pszName;
 	IMG_BOOL bResetStream;
 }DBG_IN_FINDSTREAM, *PDBG_IN_FINDSTREAM;
 

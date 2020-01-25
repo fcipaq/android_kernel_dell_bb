@@ -67,13 +67,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "devicemem.h"
 
 #include "tlclient.h"
-#include "pvr_tlcommon.h"
 #include "client_pvrtl_bridge.h"
-#include "pvrsrv_tlcommon.h"
 
 /* Defines/Constants
  */
 
+#define PVR_CONNECT_NO_FLAGS   0x00U
 #define NO_ACQUIRE             0xffffffffU
 
 /* User-side stream descriptor structure.
@@ -100,7 +99,7 @@ typedef struct _TL_STREAM_DESC_
 
 IMG_INTERNAL
 PVRSRV_ERROR TLClientOpenStream(IMG_HANDLE hSrvHandle,
-		const IMG_CHAR* pszName,
+		IMG_PCHAR    pszName,
 		IMG_UINT32   ui32Mode,
 		IMG_HANDLE*  phSD)
 {
@@ -109,7 +108,6 @@ PVRSRV_ERROR TLClientOpenStream(IMG_HANDLE hSrvHandle,
 	IMG_HANDLE hTLPMR;
 	IMG_HANDLE hTLImportHandle;
 	IMG_DEVMEM_SIZE_T uiImportSize;
-	IMG_UINT32 ui32MemFlags = PVRSRV_MEMALLOCFLAG_CPU_READABLE;
 
 	PVR_ASSERT(hSrvHandle);
 	PVR_ASSERT(pszName);
@@ -146,17 +144,13 @@ PVRSRV_ERROR TLClientOpenStream(IMG_HANDLE hSrvHandle,
 										hTLPMR, &hTLImportHandle);
 	PVR_LOGG_IF_ERROR(eError, "DevmemMakeLocalImportHandle", e2);
 
-	ui32MemFlags |= ui32Mode & PVRSRV_STREAM_FLAG_OPEN_WO ?
-	        PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE : 0;
 	/* Now convert client cookie into a client handle on the buffer's
 	 * physical memory region */
 	eError = DevmemLocalImport(hSrvHandle,
 	                           hTLImportHandle,
-	                           PVRSRV_MEMALLOCFLAG_CPU_READABLE |
-	                           PVRSRV_MEMALLOCFLAG_CPU_WRITEABLE,
+	                           PVRSRV_MEMALLOCFLAG_CPU_READABLE,
 	                           &psSD->psUMmemDesc,
-	                           &uiImportSize,
-	                           "TLBuffer");
+	                           &uiImportSize);
 	PVR_LOGG_IF_ERROR(eError, "DevmemImport", e3);
 
 	/* Now map the memory into the virtual address space of this process. */
@@ -202,7 +196,7 @@ PVRSRV_ERROR TLClientCloseStream(IMG_HANDLE hSrvHandle,
 	PVR_ASSERT(hSD);
 
 	/* Check the caller provided connection is valid */
-	if (!psSD->hServerSD)
+	if(!psSD->hServerSD)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "TLClientCloseStream: descriptor already closed/not open"));
 		return PVRSRV_ERROR_HANDLE_NOT_FOUND;
@@ -228,7 +222,7 @@ PVRSRV_ERROR TLClientCloseStream(IMG_HANDLE hSrvHandle,
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "BridgeTLCloseStream: KM returned %d", eError));
-		/* Not much we can do with error, fall through to clean up
+		/*/ Not much we can do with error, fall through to clean up
 		 * return eError; */
 	}
 
@@ -238,101 +232,6 @@ PVRSRV_ERROR TLClientCloseStream(IMG_HANDLE hSrvHandle,
 	return eError;
 }
 
-IMG_INTERNAL
-PVRSRV_ERROR TLClientDiscoverStreams(IMG_HANDLE hSrvHandle,
-		const IMG_CHAR *pszNamePattern,
-		IMG_UINT32 *pui32Streams,
-		IMG_UINT32 *pui32NumFound)
-{
-	PVR_ASSERT(hSrvHandle);
-	PVR_ASSERT(pszNamePattern);
-	PVR_ASSERT(pui32NumFound);
-
-	return BridgeTLDiscoverStreams(hSrvHandle,
-	                               pszNamePattern,
-	                               *pui32NumFound,
-	                               pui32Streams,
-	                               pui32NumFound);
-}
-
-IMG_INTERNAL
-PVRSRV_ERROR TLClientReserveStream(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT8 **ppui8Data,
-		IMG_UINT32 ui32Size)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC* psSD = (TL_STREAM_DESC*) hSD;
-	IMG_UINT32 ui32BufferOffset, ui32Dummy;
-
-	PVR_ASSERT(hSrvHandle);
-	PVR_ASSERT(hSD);
-	PVR_ASSERT(ppui8Data);
-	PVR_ASSERT(ui32Size);
-
-	eError = BridgeTLReserveStream(hSrvHandle, psSD->hServerSD,
-	                               &ui32BufferOffset, ui32Size, ui32Size,
-	                               &ui32Dummy);
-	if (eError != PVRSRV_OK)
-	{
-		return eError;
-	}
-
-	*ppui8Data = psSD->pBaseAddr + ui32BufferOffset;
-
-	return PVRSRV_OK;
-}
-
-IMG_INTERNAL
-PVRSRV_ERROR TLClientReserveStream2(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT8 **ppui8Data,
-		IMG_UINT32 ui32Size,
-		IMG_UINT32 ui32SizeMin,
-		IMG_UINT32 *pui32Available)
-{
-		PVRSRV_ERROR eError;
-	TL_STREAM_DESC* psSD = (TL_STREAM_DESC*) hSD;
-	IMG_UINT32 ui32BufferOffset;
-
-	PVR_ASSERT(hSrvHandle);
-	PVR_ASSERT(hSD);
-	PVR_ASSERT(ppui8Data);
-	PVR_ASSERT(ui32Size);
-
-	eError = BridgeTLReserveStream(hSrvHandle, psSD->hServerSD,
-	                               &ui32BufferOffset, ui32Size, ui32SizeMin,
-	                               pui32Available);
-	if (eError != PVRSRV_OK)
-	{
-		return eError;
-	}
-
-	*ppui8Data = psSD->pBaseAddr + ui32BufferOffset;
-
-	return PVRSRV_OK;
-}
-
-IMG_INTERNAL
-PVRSRV_ERROR TLClientCommitStream(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT32 ui32Size)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC* psSD = (TL_STREAM_DESC*) hSD;
-
-	PVR_ASSERT(hSrvHandle);
-	PVR_ASSERT(hSD);
-	PVR_ASSERT(ui32Size);
-
-	eError = BridgeTLCommitStream(hSrvHandle, psSD->hServerSD, ui32Size);
-	if (eError != PVRSRV_OK)
-	{
-		return eError;
-	}
-
-	return PVRSRV_OK;
-}
 
 IMG_INTERNAL
 PVRSRV_ERROR TLClientAcquireData(IMG_HANDLE hSrvHandle,
@@ -379,7 +278,7 @@ PVRSRV_ERROR TLClientAcquireData(IMG_HANDLE hSrvHandle,
 	}
 	else
 	{
-		/* On non-blocking, zero length data could be returned from server
+		/* On non blocking, zero length data could be returned from server
 		 * Which is basically a no-acquire operation */
 		*ppPacketBuf = 0;
 		*pui32BufLen = 0;
@@ -428,42 +327,6 @@ PVRSRV_ERROR TLClientReleaseData(IMG_HANDLE hSrvHandle,
 	return eError;
 }
 
-IMG_INTERNAL
-PVRSRV_ERROR TLClientWriteData(IMG_HANDLE hSrvHandle,
-		IMG_HANDLE hSD,
-		IMG_UINT32 ui32Size,
-		IMG_BYTE *pui8Data)
-{
-	PVRSRV_ERROR eError;
-	TL_STREAM_DESC* psSD = (TL_STREAM_DESC*) hSD;
-
-	PVR_ASSERT(hSrvHandle);
-	PVR_ASSERT(hSD);
-	PVR_ASSERT(ui32Size);
-	PVR_ASSERT(pui8Data);
-
-	eError = BridgeTLWriteData(hSrvHandle, psSD->hServerSD, ui32Size, pui8Data);
-	if (eError != PVRSRV_OK)
-	{
-		if (eError == PVRSRV_ERROR_STREAM_RESERVE_TOO_BIG)
-		{
-			static IMG_BOOL bPrinted = IMG_FALSE;
-
-			if (!bPrinted) {
-				PVR_DPF((PVR_DBG_ERROR, "Not enough space. Failed to write"
-				        " data to the stream (%d).", eError));
-				bPrinted = IMG_TRUE;
-			}
-		}
-		else
-		{
-			PVR_DPF((PVR_DBG_ERROR, "TLClientWriteData: KM returned %d",
-			        eError));
-		}
-	}
-
-	return eError;
-}
 
 /******************************************************************************
  End of file (tlclient.c)

@@ -41,35 +41,16 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-#if !defined(__DEVICE_CONNECTION_H__)
-#define __DEVICE_CONNECTION_H__
-
-#include "img_types.h"
+#if defined(__KERNEL__)
+#include "device.h"
+#endif
 
 #if defined(__KERNEL__)
-typedef struct _PVRSRV_DEVICE_NODE_ *SHARED_DEV_CONNECTION;
+typedef struct _PVRSRV_DEVICE_NODE_* SHARED_DEV_CONNECTION;
 #else
 typedef IMG_HANDLE SHARED_DEV_CONNECTION;
 #endif
 
-/******************************************************************************
- * Device capability flags and masks
- *****************************************************************************/
-
-/* Flag to be passed over the bridge during connection stating whether CPU cache coherent is available*/
-#define PVRSRV_CACHE_COHERENT_SHIFT (0)
-#define	PVRSRV_CACHE_COHERENT_DEVICE_FLAG (1U << PVRSRV_CACHE_COHERENT_SHIFT)
-#define	PVRSRV_CACHE_COHERENT_CPU_FLAG (2U << PVRSRV_CACHE_COHERENT_SHIFT)
-#define PVRSRV_CACHE_COHERENT_MASK (3U << PVRSRV_CACHE_COHERENT_SHIFT)
-
-/* Flag to be passed over the bridge during connection stating whether CPU non-mappable memory is present */
-#define PVRSRV_NONMAPPABLE_MEMORY_PRESENT_SHIFT (3)
-#define PVRSRV_NONMAPPABLE_MEMORY_PRESENT_FLAG (1U << PVRSRV_NONMAPPABLE_MEMORY_PRESENT_SHIFT)
-
-/* Flag to be passed over the bridge during connection stating SVM allocation availability */
-#define PVRSRV_DEVMEM_SVM_ALLOC_SHIFT (4)
-#define PVRSRV_DEVMEM_SVM_ALLOC_UNSUPPORTED (1U << PVRSRV_DEVMEM_SVM_ALLOC_SHIFT)
-#define PVRSRV_DEVMEM_SVM_ALLOC_SUPPORTED (2U << PVRSRV_DEVMEM_SVM_ALLOC_SHIFT)
-#define PVRSRV_DEVMEM_SVM_ALLOC_CANFAIL (4U << PVRSRV_DEVMEM_SVM_ALLOC_SHIFT)
-
-#endif /* !defined(__DEVICE_CONNECTION_H__) */
+/**************************************************************************//**
+End of file (device_connection.h)
+******************************************************************************/

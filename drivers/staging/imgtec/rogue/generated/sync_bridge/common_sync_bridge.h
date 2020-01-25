@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for sync
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for sync
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for sync
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -45,8 +45,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef COMMON_SYNC_BRIDGE_H
 #define COMMON_SYNC_BRIDGE_H
 
-#include <powervr/mem_types.h>
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 
@@ -60,22 +58,22 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRSRV_BRIDGE_SYNC_FREESYNCPRIMITIVEBLOCK			PVRSRV_BRIDGE_SYNC_CMD_FIRST+1
 #define PVRSRV_BRIDGE_SYNC_SYNCPRIMSET			PVRSRV_BRIDGE_SYNC_CMD_FIRST+2
 #define PVRSRV_BRIDGE_SYNC_SERVERSYNCPRIMSET			PVRSRV_BRIDGE_SYNC_CMD_FIRST+3
-#define PVRSRV_BRIDGE_SYNC_SERVERSYNCALLOC			PVRSRV_BRIDGE_SYNC_CMD_FIRST+4
-#define PVRSRV_BRIDGE_SYNC_SERVERSYNCFREE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+5
-#define PVRSRV_BRIDGE_SYNC_SERVERSYNCQUEUEHWOP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+6
-#define PVRSRV_BRIDGE_SYNC_SERVERSYNCGETSTATUS			PVRSRV_BRIDGE_SYNC_CMD_FIRST+7
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPCREATE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+8
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPTAKE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+9
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPREADY			PVRSRV_BRIDGE_SYNC_CMD_FIRST+10
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPCOMPLETE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+11
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPDESTROY			PVRSRV_BRIDGE_SYNC_CMD_FIRST+12
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+13
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPVALUE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+14
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPPOL			PVRSRV_BRIDGE_SYNC_CMD_FIRST+15
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPPDUMPPOL			PVRSRV_BRIDGE_SYNC_CMD_FIRST+16
-#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPCBP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+17
-#define PVRSRV_BRIDGE_SYNC_SYNCALLOCEVENT			PVRSRV_BRIDGE_SYNC_CMD_FIRST+18
-#define PVRSRV_BRIDGE_SYNC_SYNCFREEEVENT			PVRSRV_BRIDGE_SYNC_CMD_FIRST+19
+#define PVRSRV_BRIDGE_SYNC_SYNCRECORDREMOVEBYHANDLE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+4
+#define PVRSRV_BRIDGE_SYNC_SYNCRECORDADD			PVRSRV_BRIDGE_SYNC_CMD_FIRST+5
+#define PVRSRV_BRIDGE_SYNC_SERVERSYNCALLOC			PVRSRV_BRIDGE_SYNC_CMD_FIRST+6
+#define PVRSRV_BRIDGE_SYNC_SERVERSYNCFREE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+7
+#define PVRSRV_BRIDGE_SYNC_SERVERSYNCQUEUEHWOP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+8
+#define PVRSRV_BRIDGE_SYNC_SERVERSYNCGETSTATUS			PVRSRV_BRIDGE_SYNC_CMD_FIRST+9
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPCREATE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+10
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPTAKE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+11
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPREADY			PVRSRV_BRIDGE_SYNC_CMD_FIRST+12
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPCOMPLETE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+13
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPDESTROY			PVRSRV_BRIDGE_SYNC_CMD_FIRST+14
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+15
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPVALUE			PVRSRV_BRIDGE_SYNC_CMD_FIRST+16
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPPOL			PVRSRV_BRIDGE_SYNC_CMD_FIRST+17
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMOPPDUMPPOL			PVRSRV_BRIDGE_SYNC_CMD_FIRST+18
+#define PVRSRV_BRIDGE_SYNC_SYNCPRIMPDUMPCBP			PVRSRV_BRIDGE_SYNC_CMD_FIRST+19
 #define PVRSRV_BRIDGE_SYNC_CMD_LAST			(PVRSRV_BRIDGE_SYNC_CMD_FIRST+19)
 
 
@@ -152,6 +150,46 @@ typedef struct PVRSRV_BRIDGE_OUT_SERVERSYNCPRIMSET_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_SERVERSYNCPRIMSET;
+
+
+/*******************************************
+            SyncRecordRemoveByHandle          
+ *******************************************/
+
+/* Bridge in structure for SyncRecordRemoveByHandle */
+typedef struct PVRSRV_BRIDGE_IN_SYNCRECORDREMOVEBYHANDLE_TAG
+{
+	IMG_HANDLE hhRecord;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_SYNCRECORDREMOVEBYHANDLE;
+
+/* Bridge out structure for SyncRecordRemoveByHandle */
+typedef struct PVRSRV_BRIDGE_OUT_SYNCRECORDREMOVEBYHANDLE_TAG
+{
+	PVRSRV_ERROR eError;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_SYNCRECORDREMOVEBYHANDLE;
+
+
+/*******************************************
+            SyncRecordAdd          
+ *******************************************/
+
+/* Bridge in structure for SyncRecordAdd */
+typedef struct PVRSRV_BRIDGE_IN_SYNCRECORDADD_TAG
+{
+	IMG_HANDLE hhServerSyncPrimBlock;
+	IMG_UINT32 ui32ui32FwBlockAddr;
+	IMG_UINT32 ui32ui32SyncOffset;
+	IMG_BOOL bbServerSync;
+	IMG_UINT32 ui32ClassNameSize;
+	const IMG_CHAR * puiClassName;
+} __attribute__((packed)) PVRSRV_BRIDGE_IN_SYNCRECORDADD;
+
+/* Bridge out structure for SyncRecordAdd */
+typedef struct PVRSRV_BRIDGE_OUT_SYNCRECORDADD_TAG
+{
+	IMG_HANDLE hhRecord;
+	PVRSRV_ERROR eError;
+} __attribute__((packed)) PVRSRV_BRIDGE_OUT_SYNCRECORDADD;
 
 
 /*******************************************
@@ -437,43 +475,6 @@ typedef struct PVRSRV_BRIDGE_OUT_SYNCPRIMPDUMPCBP_TAG
 {
 	PVRSRV_ERROR eError;
 } __attribute__((packed)) PVRSRV_BRIDGE_OUT_SYNCPRIMPDUMPCBP;
-
-
-/*******************************************
-            SyncAllocEvent          
- *******************************************/
-
-/* Bridge in structure for SyncAllocEvent */
-typedef struct PVRSRV_BRIDGE_IN_SYNCALLOCEVENT_TAG
-{
-	IMG_BOOL bServerSync;
-	IMG_UINT32 ui32FWAddr;
-	IMG_UINT32 ui32ClassNameSize;
-	const IMG_CHAR * puiClassName;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_SYNCALLOCEVENT;
-
-/* Bridge out structure for SyncAllocEvent */
-typedef struct PVRSRV_BRIDGE_OUT_SYNCALLOCEVENT_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_SYNCALLOCEVENT;
-
-
-/*******************************************
-            SyncFreeEvent          
- *******************************************/
-
-/* Bridge in structure for SyncFreeEvent */
-typedef struct PVRSRV_BRIDGE_IN_SYNCFREEEVENT_TAG
-{
-	IMG_UINT32 ui32FWAddr;
-} __attribute__((packed)) PVRSRV_BRIDGE_IN_SYNCFREEEVENT;
-
-/* Bridge out structure for SyncFreeEvent */
-typedef struct PVRSRV_BRIDGE_OUT_SYNCFREEEVENT_TAG
-{
-	PVRSRV_ERROR eError;
-} __attribute__((packed)) PVRSRV_BRIDGE_OUT_SYNCFREEEVENT;
 
 
 #endif /* COMMON_SYNC_BRIDGE_H */

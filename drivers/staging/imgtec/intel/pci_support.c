@@ -40,10 +40,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
 #include <linux/pci.h>
+#include <linux/version.h>
 
 #if defined(CONFIG_MTRR)
 #include <asm/mtrr.h>
-#include <linux/version.h>
 #endif
 
 #include "pci_support.h"
@@ -457,7 +457,7 @@ PVRSRV_ERROR OSPCIReleaseDev(PVRSRV_PCI_DEV_HANDLE hPVRPCI)
 
 	pci_disable_device(psPVRPCI->psPCIDev);
 
-	OSFreeMem(psPVRPCI);
+	OSFreeMem((void *)psPVRPCI);
 	/*not nulling pointer, copy on stack*/
 
 	return PVRSRV_OK;
@@ -540,8 +540,16 @@ PVRSRV_ERROR OSPCIResumeDev(PVRSRV_PCI_DEV_HANDLE hPVRPCI)
 			return PVRSRV_ERROR_UNKNOWN_POWER_STATE;
 	}
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,38))
 	pci_restore_state(psPVRPCI->psPCIDev);
-
+#else
+	err = pci_restore_state(psPVRPCI->psPCIDev);
+	if (err != 0)
+	{
+		printk(KERN_ERR "OSPCIResumeDev: pci_restore_state failed (%d)", err);
+		return PVRSRV_ERROR_PCI_CALL_FAILED;
+	}
+#endif
 	err = pci_enable_device(psPVRPCI->psPCIDev);
 	if (err != 0)
 	{

@@ -47,11 +47,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <linux/dma-buf.h>
 
-#if defined(__KERNEL__) && defined(LINUX) && !defined(__GENKSYMS__)
-#define __pvrsrv_defined_struct_enum__
-#include <services_kernel_client.h>
-#endif
-
 #include "img_types.h"
 #include "pvrsrv_error.h"
 #include "pvrsrv_memallocflags.h"
@@ -63,15 +58,10 @@ typedef PVRSRV_ERROR (*PFN_DESTROY_DMABUF_PMR)(PHYS_HEAP *psHeap,
                                                struct dma_buf_attachment *psAttachment);
 
 PVRSRV_ERROR
-PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
-                                PHYS_HEAP *psHeap,
+PhysmemCreateNewDmaBufBackedPMR(PHYS_HEAP *psHeap,
                                 struct dma_buf_attachment *psAttachment,
                                 PFN_DESTROY_DMABUF_PMR pfnDestroy,
                                 PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                                IMG_DEVMEM_SIZE_T uiChunkSize,
-                                IMG_UINT32 ui32NumPhysChunks,
-                                IMG_UINT32 ui32NumVirtChunks,
-                                IMG_UINT32 *pui32MappingTable,
                                 PMR **ppsPMRPtr);
 
 struct dma_buf *
@@ -91,18 +81,5 @@ PhysmemImportDmaBuf(CONNECTION_DATA *psConnection,
                     PMR **ppsPMRPtr,
                     IMG_DEVMEM_SIZE_T *puiSize,
                     IMG_DEVMEM_ALIGN_T *puiAlign);
-
-PVRSRV_ERROR
-PhysmemImportSparseDmaBuf(CONNECTION_DATA *psConnection,
-                          PVRSRV_DEVICE_NODE *psDevNode,
-                          IMG_INT fd,
-                          PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                          IMG_DEVMEM_SIZE_T uiChunkSize,
-                          IMG_UINT32 ui32NumPhysChunks,
-                          IMG_UINT32 ui32NumVirtChunks,
-                          IMG_UINT32 *pui32MappingTable,
-                          PMR **ppsPMRPtr,
-                          IMG_DEVMEM_SIZE_T *puiSize,
-                          IMG_DEVMEM_ALIGN_T *puiAlign);
 
 #endif /* !defined(_PHYSMEM_DMABUF_H_) */

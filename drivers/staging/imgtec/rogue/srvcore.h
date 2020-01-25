@@ -52,6 +52,17 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined(SUPPORT_RGX)
 #include "rgx_bridge.h"
 #endif
+#include "pvr_bridge_io.h"
+
+#ifndef ENOMEM
+#define ENOMEM	12
+#endif
+#ifndef EFAULT
+#define EFAULT	14
+#endif
+#ifndef ENOTTY
+#define ENOTTY	25
+#endif
 
 PVRSRV_ERROR
 CopyFromUserWrapper(CONNECTION_DATA *psConnection,
@@ -93,8 +104,6 @@ typedef struct _PVRSRV_BRIDGE_DISPATCH_TABLE_ENTRY
 											 userspace within this ioctl */
 	IMG_UINT32 ui32CopyToUserTotalBytes; /*!< The total number of bytes copied from
 										   userspace within this ioctl */
-	IMG_UINT64 ui64TotalTimeNS; /*!< The total amount of time spent in this bridge function */
-	IMG_UINT64 ui64MaxTimeNS; /*!< The maximum amount of time for a single call to this bridge function */
 #endif
 }PVRSRV_BRIDGE_DISPATCH_TABLE_ENTRY;
 
@@ -124,7 +133,7 @@ _SetDispatchTableEntry(IMG_UINT32 ui32BridgeGroup,
 /* PRQA S 0884,3410 2*/ /* macro relies on the lack of brackets */
 #define SetDispatchTableEntry(ui32BridgeGroup, ui32Index, pfFunction,\
 					hBridgeLock, bUseLock) \
-	_SetDispatchTableEntry(ui32BridgeGroup, ui32Index, #ui32Index, (BridgeWrapperFunction)pfFunction, #pfFunction,\
+	_SetDispatchTableEntry(PVRSRV_GET_BRIDGE_ID(ui32BridgeGroup), ui32Index, #ui32Index, (BridgeWrapperFunction)pfFunction, #pfFunction,\
 							(POS_LOCK)hBridgeLock, #hBridgeLock, bUseLock )
 
 #define DISPATCH_TABLE_GAP_THRESHOLD 5
@@ -144,10 +153,10 @@ typedef struct _PVRSRV_BRIDGE_GLOBAL_STATS
 extern PVRSRV_BRIDGE_GLOBAL_STATS g_BridgeGlobalStats;
 #endif
 
-PVRSRV_ERROR BridgeInit(void);
-void BridgeDeinit(void);
+PVRSRV_ERROR BridgeBufferPoolCreate(void);
+void BridgeBufferPoolDestroy(void);
 
-PVRSRV_ERROR BridgedDispatchKM(CONNECTION_DATA * psConnection,
+IMG_INT BridgedDispatchKM(CONNECTION_DATA * psConnection,
 					  PVRSRV_BRIDGE_PACKAGE   * psBridgePackageKM);
 
 
@@ -159,9 +168,7 @@ PVRSRVConnectKM(CONNECTION_DATA *psConnection,
 				IMG_UINT32 ui32ClientDDKVersion,
 				IMG_UINT32 ui32ClientDDKBuild,
 				IMG_UINT8  *pui8KernelArch,
-				IMG_UINT32 *ui32CapabilityFlags,
-				IMG_UINT32 *ui32PVRBridges,
-				IMG_UINT32 *ui32RGXBridges);
+				IMG_UINT32 *ui32Log2PageSize);
 
 PVRSRV_ERROR
 PVRSRVDisconnectKM(void);
@@ -173,15 +180,7 @@ PVRSRVInitSrvDisconnectKM(CONNECTION_DATA *psConnection,
                           IMG_UINT32 ui32ClientBuildOptions);
 
 PVRSRV_ERROR
-PVRSRVAcquireGlobalEventObjectKM(IMG_HANDLE *phGlobalEventObject);
-
-PVRSRV_ERROR
-PVRSRVReleaseGlobalEventObjectKM(IMG_HANDLE hGlobalEventObject);
-
-PVRSRV_ERROR
-PVRSRVDumpDebugInfoKM(CONNECTION_DATA *psConnection,
-					  PVRSRV_DEVICE_NODE *psDeviceNode,
-					  IMG_UINT32 ui32VerbLevel);
+PVRSRVDumpDebugInfoKM(IMG_UINT32 ui32VerbLevel);
 
 PVRSRV_ERROR
 PVRSRVGetDevClockSpeedKM(CONNECTION_DATA * psConnection,
@@ -189,20 +188,18 @@ PVRSRVGetDevClockSpeedKM(CONNECTION_DATA * psConnection,
                          IMG_PUINT32  pui32RGXClockSpeed);
 
 PVRSRV_ERROR
-PVRSRVHWOpTimeoutKM(CONNECTION_DATA *psConnection,
-					PVRSRV_DEVICE_NODE *psDeviceNode);
+PVRSRVHWOpTimeoutKM(void);
 
-PVRSRV_ERROR PVRSRVAlignmentCheckKM(CONNECTION_DATA *psConnection,
-                                    PVRSRV_DEVICE_NODE * psDeviceNode,
-                                    IMG_UINT32 ui32FWAlignChecksSize,
-                                    IMG_UINT32 aui32FWAlignChecks[]);
+/* performs a SOFT_RESET on the given device node */
+PVRSRV_ERROR
+PVRSRVSoftResetKM(CONNECTION_DATA * psConnection,
+                  PVRSRV_DEVICE_NODE *psDeviceNode,
+                  IMG_UINT64 ui64ResetValue1,
+                  IMG_UINT64 ui64ResetValue2);
 
-PVRSRV_ERROR PVRSRVGetDeviceStatusKM(CONNECTION_DATA *psConnection,
-                                     PVRSRV_DEVICE_NODE *psDeviceNode,
-                                     IMG_UINT32 *pui32DeviceStatus);
 
 #endif /* __BRIDGED_PVR_BRIDGE_H__ */
 
 /******************************************************************************
- End of file (srvcore.h)
+ End of file (bridged_pvr_bridge.h)
 ******************************************************************************/

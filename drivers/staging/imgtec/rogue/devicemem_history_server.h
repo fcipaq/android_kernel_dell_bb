@@ -61,56 +61,6 @@ DevicememHistoryMapKM(IMG_DEV_VIRTADDR sDevVAddr, size_t uiSize, const char szTe
 extern PVRSRV_ERROR
 DevicememHistoryUnmapKM(IMG_DEV_VIRTADDR sDevVAddr, size_t uiSize, const char szText[DEVICEMEM_HISTORY_TEXT_BUFSZ]);
 
-
-PVRSRV_ERROR DevicememHistoryMapNewKM(PMR *psPMR,
-							IMG_UINT32 ui32Offset,
-							IMG_DEV_VIRTADDR sDevVAddr,
-							IMG_DEVMEM_SIZE_T uiSize,
-							const char szName[DEVICEMEM_HISTORY_TEXT_BUFSZ],
-							IMG_UINT32 ui32PageSize,
-							IMG_UINT32 ui32AllocationIndex,
-							IMG_UINT32 *pui32AllocationIndexOut);
-
-PVRSRV_ERROR DevicememHistoryUnmapNewKM(PMR *psPMR,
-							IMG_UINT32 ui32Offset,
-							IMG_DEV_VIRTADDR sDevVAddr,
-							IMG_DEVMEM_SIZE_T uiSize,
-							const char szName[DEVICEMEM_HISTORY_TEXT_BUFSZ],
-							IMG_UINT32 ui32PageSize,
-							IMG_UINT32 ui32AllocationIndex,
-							IMG_UINT32 *pui32AllocationIndexOut);
-
-PVRSRV_ERROR DevicememHistoryMapVRangeKM(IMG_DEV_VIRTADDR sBaseDevVAddr,
-							IMG_UINT32 ui32StartPage,
-							IMG_UINT32 ui32NumPages,
-							IMG_DEVMEM_SIZE_T uiAllocSize,
-							const IMG_CHAR szName[DEVICEMEM_HISTORY_TEXT_BUFSZ],
-							IMG_UINT32 ui32Log2PageSize,
-							IMG_UINT32 ui32AllocationIndex,
-							IMG_UINT32 *ui32AllocationIndexOut);
-
-PVRSRV_ERROR DevicememHistoryUnmapVRangeKM(IMG_DEV_VIRTADDR sBaseDevVAddr,
-							IMG_UINT32 ui32StartPage,
-							IMG_UINT32 ui32NumPages,
-							IMG_DEVMEM_SIZE_T uiAllocSize,
-							const IMG_CHAR szName[DEVICEMEM_HISTORY_TEXT_BUFSZ],
-							IMG_UINT32 ui32Log2PageSize,
-							IMG_UINT32 ui32AllocationIndex,
-							IMG_UINT32 *ui32AllocationIndexOut);
-
-PVRSRV_ERROR DevicememHistorySparseChangeKM(PMR *psPMR,
-							IMG_UINT32 ui32Offset,
-							IMG_DEV_VIRTADDR sDevVAddr,
-							IMG_DEVMEM_SIZE_T uiSize,
-							const char szName[DEVICEMEM_HISTORY_TEXT_BUFSZ],
-							IMG_UINT32 ui32PageSize,
-							IMG_UINT32 ui32AllocPageCount,
-							IMG_UINT32 *paui32AllocPageIndices,
-							IMG_UINT32 ui32FreePageCount,
-							IMG_UINT32 *pauiFreePageIndices,
-							IMG_UINT32 AllocationIndex,
-							IMG_UINT32 *pui32AllocationIndexOut);
-
 /* used when the PID does not matter */
 #define DEVICEMEM_HISTORY_PID_ANY 0xFFFFFFFE
 
@@ -120,28 +70,20 @@ typedef struct _DEVICEMEM_HISTORY_QUERY_IN_
 	IMG_DEV_VIRTADDR sDevVAddr;
 } DEVICEMEM_HISTORY_QUERY_IN;
 
-/* Store up to 4 results for a lookup. In the case of the faulting page being
+/* store up to 2 results for a lookup. in the case of the faulting page being
  * re-mapped between the page fault occurring on HW and the page fault analysis
- * being done, the second result entry will show the allocation being unmapped.
- * A further 2 entries are added to cater for multiple buffers in the same page.
+ * being done, the second result entry will show the allocation being unmapped
  */
-#define DEVICEMEM_HISTORY_QUERY_OUT_MAX_RESULTS 4
+#define DEVICEMEM_HISTORY_QUERY_OUT_MAX_RESULTS 2
 
 typedef struct _DEVICEMEM_HISTORY_QUERY_OUT_RESULT_
 {
 	IMG_CHAR szString[DEVICEMEM_HISTORY_TEXT_BUFSZ];
 	IMG_DEV_VIRTADDR sBaseDevVAddr;
 	size_t uiSize;
-	IMG_BOOL bMap;
-	IMG_BOOL bRange;
-	IMG_BOOL bAll;
+	IMG_BOOL bAllocated;
 	IMG_UINT64 ui64When;
 	IMG_UINT64 ui64Age;
-	/* info for sparse map/unmap operations (i.e. bRange=IMG_TRUE) */
-	IMG_UINT32 ui32StartPage;
-	IMG_UINT32 ui32PageCount;
-	IMG_DEV_VIRTADDR sMapStartAddr;
-	IMG_DEV_VIRTADDR sMapEndAddr;
 	RGXMEM_PROCESS_INFO sProcessInfo;
 } DEVICEMEM_HISTORY_QUERY_OUT_RESULT;
 
@@ -153,9 +95,6 @@ typedef struct _DEVICEMEM_HISTORY_QUERY_OUT_
 } DEVICEMEM_HISTORY_QUERY_OUT;
 
 extern IMG_BOOL
-DevicememHistoryQuery(DEVICEMEM_HISTORY_QUERY_IN *psQueryIn,
-                      DEVICEMEM_HISTORY_QUERY_OUT *psQueryOut,
-                      IMG_UINT32 ui32PageSizeBytes,
-                      IMG_BOOL bMatchAnyAllocInPage);
+DevicememHistoryQuery(DEVICEMEM_HISTORY_QUERY_IN *psQueryIn, DEVICEMEM_HISTORY_QUERY_OUT *psQueryOut);
 
 #endif

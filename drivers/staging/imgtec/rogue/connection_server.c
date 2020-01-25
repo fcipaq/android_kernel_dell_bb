@@ -52,8 +52,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "process_stats.h"
 #include "pdump_km.h"
 #include "lists.h"
-#include "osfunc.h"
-#include "tlstream.h"
 
 /* PID associated with Connection currently being purged by Cleanup thread */
 static IMG_PID gCurrentPurgeConnectionPid = 0;
@@ -61,19 +59,6 @@ static IMG_PID gCurrentPurgeConnectionPid = 0;
 static PVRSRV_ERROR ConnectionDataDestroy(CONNECTION_DATA *psConnection)
 {
 	PVRSRV_ERROR eError;
-	PROCESS_HANDLE_BASE *psProcessHandleBase;
-	IMG_UINT64 ui64MaxBridgeTime;
-	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
-
-	if(psPVRSRVData->bUnload)
-	{
-		/* driver is unloading so do not allow the bridge lock to be released */
-		ui64MaxBridgeTime = 0;
-	}
-	else
-	{
-		ui64MaxBridgeTime = CONNECTION_DEFERRED_CLEANUP_TIMESLICE_NS;
-	}
 
 	if (psConnection == NULL)
 	{
@@ -91,60 +76,25 @@ static PVRSRV_ERROR ConnectionDataDestroy(CONNECTION_DATA *psConnection)
 	}
 #endif
 
-	/* Close HWPerfClient stream here even though we created it in
-	 * PVRSRVConnectKM(). */
-	if (psConnection->hClientTLStream)
-	{
-		TLStreamClose(psConnection->hClientTLStream);
-		psConnection->hClientTLStream = NULL;
-		PVR_DPF((PVR_DBG_MESSAGE, "Destroyed private stream."));
-	}
-
-	/* Get process handle base to decrement the refcount */
-	psProcessHandleBase = psConnection->psProcessHandleBase;
-
-	if (psProcessHandleBase != NULL)
-	{
-		/* In case the refcount becomes 0 we can remove the process handle base */
-		if (OSAtomicDecrement(&psProcessHandleBase->iRefCount) == 0)
-		{
-			uintptr_t uiHashValue;
-
-			OSLockAcquire(psPVRSRVData->hProcessHandleBase_Lock);
-			uiHashValue = HASH_Remove(psPVRSRVData->psProcessHandleBase_Table, psConnection->pid);
-			OSLockRelease(psPVRSRVData->hProcessHandleBase_Lock);
-
-			if (!uiHashValue)
-			{
-				PVR_DPF((PVR_DBG_ERROR,
-						"%s: Failed to remove handle base from hash table.",
-						__func__));
-				return PVRSRV_ERROR_UNABLE_TO_REMOVE_HASH_VALUE;
-			}
-
-			eError = PVRSRVFreeHandleBase(psProcessHandleBase->psHandleBase, ui64MaxBridgeTime);
-			if (eError != PVRSRV_OK)
-			{
-				if (eError != PVRSRV_ERROR_RETRY)
-				{
-					PVR_DPF((PVR_DBG_ERROR,
-						 "ConnectionDataDestroy: Couldn't free handle base for process (%d)",
-						 eError));
-				}
-
-				return eError;
-			}
-
-			OSFreeMem(psProcessHandleBase);
-		}
-
-		psConnection->psProcessHandleBase = NULL;
-	}
-
 	/* Free handle base for this connection */
 	if (psConnection->psHandleBase != NULL)
 	{
+		PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
+		IMG_UINT64 ui64MaxBridgeTime;
+
+		if(psPVRSRVData->bUnload)
+		{
+			/* driver is unloading so do not allow the bridge lock to be released */
+			ui64MaxBridgeTime = 0;
+		}
+		else
+		{
+			ui64MaxBridgeTime = CONNECTION_DEFERRED_CLEANUP_TIMESLICE_NS;
+		}
+
+		PMRLock();
 		eError = PVRSRVFreeHandleBase(psConnection->psHandleBase, ui64MaxBridgeTime);
+		PMRUnlock();
 		if (eError != PVRSRV_OK)
 		{
 			if (eError != PVRSRV_ERROR_RETRY)
@@ -197,8 +147,6 @@ PVRSRV_ERROR PVRSRVConnectionConnect(void **ppvPrivData, void *pvOSData)
 {
 	CONNECTION_DATA *psConnection;
 	PVRSRV_ERROR eError;
-	PROCESS_HANDLE_BASE *psProcessHandleBase;
-	PVRSRV_DATA *psPVRSRVData = PVRSRVGetPVRSRVData();
 
 	/* Allocate connection data area */
 	psConnection = OSAllocZMem(sizeof(*psConnection));
@@ -244,8 +192,7 @@ PVRSRV_ERROR PVRSRVConnectionConnect(void **ppvPrivData, void *pvOSData)
 	}
 
 	/* Allocate handle base for this connection */
-	eError = PVRSRVAllocHandleBase(&psConnection->psHandleBase,
-	                               PVRSRV_HANDLE_BASE_TYPE_CONNECTION);
+	eError = PVRSRVAllocHandleBase(&psConnection->psHandleBase);
 	if (eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR,
@@ -253,57 +200,6 @@ PVRSRV_ERROR PVRSRVConnectionConnect(void **ppvPrivData, void *pvOSData)
 			 eError));
 		goto failure;
 	}
-
-	/* Try to get process handle base if it already exists */
-	OSLockAcquire(psPVRSRVData->hProcessHandleBase_Lock);
-	psProcessHandleBase = (PROCESS_HANDLE_BASE*) HASH_Retrieve(PVRSRVGetPVRSRVData()->psProcessHandleBase_Table,
-	                                                           psConnection->pid);
-
-	/* In case there is none we are going to allocate one */
-	if (psProcessHandleBase == NULL)
-	{
-		psProcessHandleBase = OSAllocZMem(sizeof(PROCESS_HANDLE_BASE));
-		if (psProcessHandleBase == NULL)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-					"%s: Failed to allocate handle base, oom.",
-					__func__));
-			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-			goto failureLock;
-		}
-
-		/* Allocate handle base for this process */
-		eError = PVRSRVAllocHandleBase(&psProcessHandleBase->psHandleBase,
-		                               PVRSRV_HANDLE_BASE_TYPE_PROCESS);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR,
-			         "%s: Couldn't allocate handle base for process (%d)",
-			         __func__,
-			         eError));
-			OSFreeMem(psProcessHandleBase);
-			goto failureLock;
-		}
-
-		/* Insert the handle base into the global hash table */
-		if (!HASH_Insert(PVRSRVGetPVRSRVData()->psProcessHandleBase_Table,
-		                 psConnection->pid,
-		                 (uintptr_t) psProcessHandleBase))
-		{
-
-			eError = PVRSRV_ERROR_UNABLE_TO_INSERT_HASH_VALUE;
-
-			PVRSRVFreeHandleBase(psProcessHandleBase->psHandleBase, 0);
-
-			OSFreeMem(psProcessHandleBase);
-			goto failureLock;
-		}
-	}
-	OSLockRelease(psPVRSRVData->hProcessHandleBase_Lock);
-
-	psConnection->psProcessHandleBase = psProcessHandleBase;
-
-	OSAtomicIncrement(&psProcessHandleBase->iRefCount);
 
 	/* Allocate process statistics */
 #if defined(PVRSRV_ENABLE_PROCESS_STATS) && !defined(PVRSRV_DEBUG_LINUX_MEMORY_STATS)
@@ -321,8 +217,6 @@ PVRSRV_ERROR PVRSRVConnectionConnect(void **ppvPrivData, void *pvOSData)
 
 	return eError;
 
-failureLock:
-	OSLockRelease(psPVRSRVData->hProcessHandleBase_Lock);
 failure:
 	ConnectionDataDestroy(psConnection);
 
@@ -381,17 +275,22 @@ void PVRSRVConnectionDisconnect(void *pvDataPtr)
 	{
 		PDumpDisconnectionNotify();
 	}
-#if defined(PVRSRV_FORCE_UNLOAD_IF_BAD_STATE)
-	if (PVRSRVGetPVRSRVData()->eServicesState == PVRSRV_SERVICES_STATE_OK)
-#endif
-	{
-		/* Defer the release of the connection data */
-		psConnectionData->sCleanupThreadFn.pfnFree = _CleanupThreadPurgeConnectionData;
-		psConnectionData->sCleanupThreadFn.pvData = psConnectionData;
-		psConnectionData->sCleanupThreadFn.ui32RetryCount = CLEANUP_THREAD_RETRY_COUNT_DEFAULT;
-		psConnectionData->sCleanupThreadFn.bDependsOnHW = IMG_FALSE;
-		PVRSRVCleanupThreadAddWork(&psConnectionData->sCleanupThreadFn);
-	}
+
+	/* Defer the release of the connection data */
+	psConnectionData->sCleanupThreadFn.pfnFree = _CleanupThreadPurgeConnectionData;
+	psConnectionData->sCleanupThreadFn.pvData = psConnectionData;
+	psConnectionData->sCleanupThreadFn.ui32RetryCount = CLEANUP_THREAD_RETRY_COUNT_DEFAULT;
+	PVRSRVCleanupThreadAddWork(&psConnectionData->sCleanupThreadFn);
+}
+
+PVRSRV_ERROR PVRSRVConnectionInit(void)
+{
+	return PVRSRV_OK;
+}
+
+PVRSRV_ERROR PVRSRVConnectionDeInit(void)
+{
+	return PVRSRV_OK;
 }
 
 IMG_PID PVRSRVGetPurgeConnectionPid(void)

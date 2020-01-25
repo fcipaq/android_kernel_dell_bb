@@ -46,16 +46,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "pmr_impl.h"
 
-/*************************************************************************/ /*!
-@Function       OSMMapPMRGeneric
-@Description    Implements a generic PMR mapping function, which is used
-                to CPU map a PMR where the PMR does not have a mapping
-                function defined by the creating PMR factory.
-@Input          psPMR               the PMR to be mapped
-@Output         pOSMMapData         pointer to any private data
-                                    needed by the generic mapping function
-@Return         PVRSRV_OK on success, a failure code otherwise.
-*/ /**************************************************************************/
 PVRSRV_ERROR
 OSMMapPMRGeneric(PMR *psPMR, PMR_MMAP_DATA pOSMMapData);
 

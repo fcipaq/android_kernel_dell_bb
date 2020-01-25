@@ -48,15 +48,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgxccb.h"
 #include "devicemem.h"
 #include "device.h"
-#include "pvr_notifier.h"
 #include "pvrsrv.h"
 #include "connection_server.h"
 #include "rgxta3d.h"
-#include "devicemem_utils.h"
 
 #if defined(SUPPORT_TRUSTED_DEVICE)
-#include "physmem_tdfwcode.h"
-#include "physmem_tdsecbuf.h"
+#include "physmem_tdmetacode.h"
 #endif
 
 
@@ -77,17 +74,12 @@ static INLINE PVRSRV_ERROR DevmemFwAllocate(PVRSRV_RGXDEV_INFO *psDevInfo,
 
 	PVR_DPF_ENTERED;
 
-#if defined(PVRSRV_GPUVIRT_GUESTDRV)
-	uiFlags |= PVRSRV_MEMALLOCFLAG_UNCACHED;
-	uiFlags &= ~PVRSRV_MEMALLOCFLAG_DEVICE_FLAG(FIRMWARE_CACHED);
-#endif
-
 	/* Ensure all RI labels begin 'Fw' for the FW heap. */
 	PVR_ASSERT((pszText != NULL) && (pszText[0] == 'F') && (pszText[1] == 'w'));
 
 	eError = DevmemAllocate(psDevInfo->psFirmwareHeap,
 							uiSize,
-							GET_ROGUE_CACHE_LINE_SIZE(psDevInfo->sDevFeatureCfg.ui32CacheLineSize),
+							ROGUE_CACHE_LINE_SIZE,
 							uiFlags | PVRSRV_MEMALLOCFLAG_FW_LOCAL,
 							pszText,
 							ppsMemDescPtr);
@@ -114,7 +106,6 @@ static INLINE PVRSRV_ERROR DevmemFwAllocate(PVRSRV_RGXDEV_INFO *psDevInfo,
 
 static INLINE PVRSRV_ERROR DevmemFwAllocateExportable(PVRSRV_DEVICE_NODE *psDeviceNode,
 													  IMG_DEVMEM_SIZE_T uiSize,
-													  IMG_DEVMEM_ALIGN_T uiAlign,
 													  DEVMEM_FLAGS_T uiFlags,
 									                  IMG_PCHAR pszText,
 													  DEVMEM_MEMDESC **ppsMemDescPtr)
@@ -122,11 +113,6 @@ static INLINE PVRSRV_ERROR DevmemFwAllocateExportable(PVRSRV_DEVICE_NODE *psDevi
 	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *) psDeviceNode->pvDevice;
 	IMG_DEV_VIRTADDR sTmpDevVAddr;
 	PVRSRV_ERROR eError;
-
-#if defined(PVRSRV_GPUVIRT_GUESTDRV)
-	uiFlags |= PVRSRV_MEMALLOCFLAG_UNCACHED;
-	uiFlags &= ~PVRSRV_MEMALLOCFLAG_DEVICE_FLAG(FIRMWARE_CACHED);
-#endif
 
 	PVR_DPF_ENTERED;
 
@@ -136,8 +122,7 @@ static INLINE PVRSRV_ERROR DevmemFwAllocateExportable(PVRSRV_DEVICE_NODE *psDevi
 
 	eError = DevmemAllocateExportable(psDeviceNode,
 									  uiSize,
-									  uiAlign,
-									  DevmemGetHeapLog2PageSize(psDevInfo->psFirmwareHeap),
+									  ROGUE_CACHE_LINE_SIZE,
 									  uiFlags | PVRSRV_MEMALLOCFLAG_FW_LOCAL,
 									  pszText,
 									  ppsMemDescPtr);
@@ -162,37 +147,9 @@ static INLINE PVRSRV_ERROR DevmemFwAllocateExportable(PVRSRV_DEVICE_NODE *psDevi
 	PVR_DPF_RETURN_RC1(eError, *ppsMemDescPtr);
 }
 
-static void DevmemFWPoison(DEVMEM_MEMDESC *psMemDesc, IMG_BYTE ubPoisonValue)
-{
-	void *pvLinAddr;
-	PVRSRV_ERROR eError;
-
-	eError = DevmemAcquireCpuVirtAddr(psMemDesc, &pvLinAddr);
-
-	if(eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "%s: Failed to acquire FW allocation mapping "
-					"to poison: %s",
-							__func__,
-							PVRSRVGETERRORSTRING(eError)));
-		return;
-	}
-
-	OSDeviceMemSet(pvLinAddr, ubPoisonValue, psMemDesc->uiAllocSize);
-
-	DevmemReleaseCpuVirtAddr(psMemDesc);
-}
-
-static INLINE void DevmemFwFree(PVRSRV_RGXDEV_INFO *psDevInfo,
-								DEVMEM_MEMDESC *psMemDesc)
+static INLINE void DevmemFwFree(DEVMEM_MEMDESC *psMemDesc)
 {
 	PVR_DPF_ENTERED1(psMemDesc);
-
-	if(psDevInfo->bEnableFWPoisonOnFree)
-	{
-		DevmemFWPoison(psMemDesc, psDevInfo->ubFWPoisonOnFreeValue);
-	}
-
 	DevmemReleaseDevVirtAddr(psMemDesc);
 	DevmemFree(psMemDesc);
 
@@ -201,51 +158,37 @@ static INLINE void DevmemFwFree(PVRSRV_RGXDEV_INFO *psDevInfo,
 
 #if defined(SUPPORT_TRUSTED_DEVICE)
 static INLINE
-PVRSRV_ERROR DevmemImportTDFWCode(PVRSRV_DEVICE_NODE *psDeviceNode,
-                                  IMG_DEVMEM_SIZE_T uiSize,
-                                  PMR_LOG2ALIGN_T uiLog2Align,
-                                  IMG_UINT32 uiMemAllocFlags,
-                                  IMG_BOOL bFWCorememCode,
-                                  DEVMEM_MEMDESC **ppsMemDescPtr)
+PVRSRV_ERROR DevmemImportTDMetaCode(PVRSRV_DEVICE_NODE *psDeviceNode,
+                                    IMG_UINT32 uiMemAllocFlags,
+                                    DEVMEM_MEMDESC **ppsMemDescPtr)
 {
 	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *) psDeviceNode->pvDevice;
-	PMR *psTDFWCodePMR;
+	PMR *psTDMetaCodePMR;
 	IMG_DEV_VIRTADDR sTmpDevVAddr;
 	IMG_DEVMEM_SIZE_T uiMemDescSize;
-	IMG_DEVMEM_ALIGN_T uiAlign = 1 << uiLog2Align;
 	PVRSRV_ERROR eError;
 
-	PVR_ASSERT(ppsMemDescPtr);
-
-	DevmemExportalignAdjustSizeAndAlign(DevmemGetHeapLog2PageSize(psDevInfo->psFirmwareHeap),
-	                                    &uiSize,
-	                                    &uiAlign);
-
-	eError = PhysmemNewTDFWCodePMR(psDeviceNode,
-	                               uiSize,
-	                               uiLog2Align,
-	                               uiMemAllocFlags,
-	                               bFWCorememCode,
-	                               &psTDFWCodePMR);
+	eError = PhysmemNewTDMetaCodePMR(psDeviceNode,
+	                                 uiMemAllocFlags,
+	                                 &psTDMetaCodePMR);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "PhysmemNewTDFWCodePMR failed (%u)", eError));
+		PVR_DPF((PVR_DBG_ERROR, "PhysmemNewTDMetaCodePMR failed (%u)", eError));
 		goto PMRCreateError;
 	}
 
-	/* NB: TDFWCodePMR refcount: 1 -> 2 */
+	/* NB: TDMetaCodePMR refcount: 1 -> 2 */
 	eError = DevmemLocalImport(psDeviceNode,
-	                           psTDFWCodePMR,
+	                           psTDMetaCodePMR,
 	                           uiMemAllocFlags,
 	                           ppsMemDescPtr,
-	                           &uiMemDescSize,
-	                           "TDFWCode");
+	                           &uiMemDescSize);
 	if(eError != PVRSRV_OK)
 	{
 		goto ImportError;
 	}
 
-	eError = DevmemMapToDevice(*ppsMemDescPtr,
+	eError = DevmemMapToDevice(psDevInfo->psRGXFWCodeMemDesc,
 	                           psDevInfo->psFirmwareHeap,
 	                           &sTmpDevVAddr);
 	if(eError != PVRSRV_OK)
@@ -254,94 +197,20 @@ PVRSRV_ERROR DevmemImportTDFWCode(PVRSRV_DEVICE_NODE *psDeviceNode,
 		goto MapError;
 	}
 
-	/* NB: TDFWCodePMR refcount: 2 -> 1
+	/* NB: TDMetaCodePMR refcount: 2 -> 1
 	 * The PMR will be unreferenced again (and destroyed) when
 	 * the memdesc tracking it is cleaned up
 	 */
-	PMRUnrefPMR(psTDFWCodePMR);
+	PMRUnrefPMR(psTDMetaCodePMR);
 
 	return PVRSRV_OK;
 
 MapError:
-	DevmemFree(*ppsMemDescPtr);
-	*ppsMemDescPtr = NULL;
+	DevmemFree(psDevInfo->psRGXFWCodeMemDesc);
+	psDevInfo->psRGXFWCodeMemDesc = NULL;
 ImportError:
 	/* Unref and destroy the PMR */
-	PMRUnrefPMR(psTDFWCodePMR);
-PMRCreateError:
-
-	return eError;
-}
-
-static INLINE
-PVRSRV_ERROR DevmemImportTDSecureBuf(PVRSRV_DEVICE_NODE *psDeviceNode,
-                                     IMG_DEVMEM_SIZE_T uiSize,
-                                     PMR_LOG2ALIGN_T uiLog2Align,
-                                     IMG_UINT32 uiMemAllocFlags,
-                                     DEVMEM_MEMDESC **ppsMemDescPtr,
-                                     IMG_UINT64 *pui64SecBufHandle)
-{
-	PVRSRV_RGXDEV_INFO *psDevInfo = (PVRSRV_RGXDEV_INFO *) psDeviceNode->pvDevice;
-	PMR *psTDSecureBufPMR;
-	IMG_DEV_VIRTADDR sTmpDevVAddr;
-	IMG_DEVMEM_SIZE_T uiMemDescSize;
-	IMG_DEVMEM_ALIGN_T uiAlign = 1 << uiLog2Align;
-	PVRSRV_ERROR eError;
-
-	PVR_ASSERT(ppsMemDescPtr);
-
-	DevmemExportalignAdjustSizeAndAlign(DevmemGetHeapLog2PageSize(psDevInfo->psFirmwareHeap),
-	                                    &uiSize,
-	                                    &uiAlign);
-
-	eError = PhysmemNewTDSecureBufPMR(NULL,
-	                                  psDeviceNode,
-	                                  uiSize,
-	                                  uiLog2Align,
-	                                  uiMemAllocFlags,
-	                                  &psTDSecureBufPMR,
-	                                  pui64SecBufHandle);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "PhysmemNewTDSecureBufPMR failed (%u)", eError));
-		goto PMRCreateError;
-	}
-
-	/* NB: psTDSecureBufPMR refcount: 1 -> 2 */
-	eError = DevmemLocalImport(psDeviceNode,
-	                           psTDSecureBufPMR,
-	                           uiMemAllocFlags,
-	                           ppsMemDescPtr,
-	                           &uiMemDescSize,
-	                           "TDSecureBuffer");
-	if(eError != PVRSRV_OK)
-	{
-		goto ImportError;
-	}
-
-	eError = DevmemMapToDevice(*ppsMemDescPtr,
-	                           psDevInfo->psFirmwareHeap,
-	                           &sTmpDevVAddr);
-	if(eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR,"Failed to map TD secure buffer PMR (%u)", eError));
-		goto MapError;
-	}
-
-	/* NB: psTDSecureBufPMR refcount: 2 -> 1
-	 * The PMR will be unreferenced again (and destroyed) when
-	 * the memdesc tracking it is cleaned up
-	 */
-	PMRUnrefPMR(psTDSecureBufPMR);
-
-	return PVRSRV_OK;
-
-MapError:
-	DevmemFree(*ppsMemDescPtr);
-	*ppsMemDescPtr = NULL;
-ImportError:
-	/* Unref and destroy the PMR */
-	PMRUnrefPMR(psTDSecureBufPMR);
+	PMRUnrefPMR(psTDMetaCodePMR);
 PMRCreateError:
 
 	return eError;
@@ -404,11 +273,10 @@ PVRSRV_ERROR RGXSetupFirmware(PVRSRV_DEVICE_NODE       *psDeviceNode,
                               IMG_UINT32               ui32SignatureChecksBufSize,
                               IMG_UINT32               ui32HWPerfFWBufSizeKB,
                               IMG_UINT64               ui64HWPerfFilter,
-                              IMG_UINT32               ui32RGXFWAlignChecksArrLength,
+                              IMG_UINT32               ui32RGXFWAlignChecksSize,
                               IMG_UINT32               *pui32RGXFWAlignChecks,
                               IMG_UINT32               ui32ConfigFlags,
                               IMG_UINT32               ui32LogType,
-                              RGXFWIF_BIFTILINGMODE    eBifTilingMode,
                               IMG_UINT32               ui32NumTilingCfgs,
                               IMG_UINT32               *pui32BIFTilingXStrides,
                               IMG_UINT32               ui32FilterFlags,
@@ -440,7 +308,7 @@ void RGXSetFirmwareAddress(RGXFWIF_DEV_VIRTADDR	*ppDest,
 						   IMG_UINT32			uiOffset,
 						   IMG_UINT32			ui32Flags);
 
-
+#if defined(RGX_FEATURE_META_DMA)
 /*************************************************************************/ /*!
 @Function       RGXSetMetaDMAAddress
 
@@ -458,7 +326,7 @@ void RGXSetMetaDMAAddress(RGXFWIF_DMA_ADDR		*psDest,
 						  DEVMEM_MEMDESC		*psSrcMemDesc,
 						  RGXFWIF_DEV_VIRTADDR	*psSrcFWDevVAddr,
 						  IMG_UINT32			uiOffset);
-
+#endif
 
 /*************************************************************************/ /*!
 @Function       RGXUnsetFirmwareAddress
@@ -474,7 +342,7 @@ void RGXUnsetFirmwareAddress(DEVMEM_MEMDESC			*psSrc);
 /*************************************************************************/ /*!
 @Function       FWCommonContextAllocate
 
-@Description    Allocate a FW common context. This allocates the HW memory
+@Description    Allocate a FW common coontext. This allocates the HW memory
                 for the context, the CCB and wires it all together.
 
 @Input          psConnection            Connection this context is being created on
@@ -559,10 +427,10 @@ PVRSRV_ERROR RGXInstallProcessQueuesMISR(IMG_HANDLE *phMISR, PVRSRV_DEVICE_NODE 
 				pending cache operations but taking the power lock.
 
 @Input          psDevInfo			Device Info
-@Input          eDM				To which DM the cmd is sent.
+@Input          eDM					To which DM the cmd is sent.
 @Input          psKCCBCmd			The cmd to send.
 @Input          ui32CmdSize			The cmd size.
-@Input          ui32PDumpFlags			Pdump flags
+@Input          bPDumpContinuous
 
 @Return			PVRSRV_ERROR
 */ /**************************************************************************/
@@ -570,27 +438,28 @@ PVRSRV_ERROR RGXSendCommandWithPowLock(PVRSRV_RGXDEV_INFO 	*psDevInfo,
 										RGXFWIF_DM			eKCCBType,
 									 	RGXFWIF_KCCB_CMD	*psKCCBCmd,
 									 	IMG_UINT32			ui32CmdSize,
-									 	IMG_UINT32			ui32PDumpFlags);
+									 	IMG_BOOL			bPDumpContinuous);
 
 /*************************************************************************/ /*!
 @Function       RGXSendCommand
 
 @Description    Sends a command to a particular DM without honouring
 				pending cache operations or the power lock. 
-                The function flushes any deferred KCCB commands first.
+                                The function flushes any
+				deferred KCCB commands first.
 
 @Input          psDevInfo			Device Info
-@Input          eDM				To which DM the cmd is sent.
+@Input          eDM					To which DM the cmd is sent.
 @Input          psKCCBCmd			The cmd to send.
 @Input          ui32CmdSize			The cmd size.
-@Input          uiPdumpFlags			PDump flags.
+@Input          bPDumpContinuous
 
 @Return			PVRSRV_ERROR
 */ /**************************************************************************/
 PVRSRV_ERROR RGXSendCommand(PVRSRV_RGXDEV_INFO 	*psDevInfo,
-								 RGXFWIF_DM		eKCCBType,
+								 RGXFWIF_DM			eKCCBType,
 								 RGXFWIF_KCCB_CMD	*psKCCBCmd,
-								 IMG_UINT32		ui32CmdSize,
+								 IMG_UINT32			ui32CmdSize,
 								 PDUMP_FLAGS_T		uiPdumpFlags);
 
 
@@ -600,20 +469,18 @@ PVRSRV_ERROR RGXSendCommand(PVRSRV_RGXDEV_INFO 	*psDevInfo,
 @Description    Sends a command to a particular DM
 
 @Input          psDevInfo			Device Info
-@Input          eDM				To which DM the cmd is sent.
+@Input          eDM					To which DM the cmd is sent.
 @Input          psKCCBCmd			The cmd to send.
 @Input          ui32CmdSize			The cmd size.
-@Input          ui32CacheOpFence		Pending cache op. fence value.
-@Input          ui32PDumpFlags			PDump flags
+@Input          bPDumpContinuous
 
 @Return			PVRSRV_ERROR
 */ /**************************************************************************/
 PVRSRV_ERROR RGXScheduleCommand(PVRSRV_RGXDEV_INFO 	*psDevInfo,
-								RGXFWIF_DM		eKCCBType,
+								RGXFWIF_DM			eKCCBType,
 								RGXFWIF_KCCB_CMD	*psKCCBCmd,
-								IMG_UINT32		ui32CmdSize,
-								IMG_UINT32		ui32CacheOpFence,
-								IMG_UINT32 		ui32PDumpFlags);
+								IMG_UINT32			ui32CmdSize,
+								IMG_BOOL			bPDumpContinuous);
 
 /*************************************************************************/ /*!
 @Function       RGXScheduleCommandAndWait
@@ -626,14 +493,14 @@ PVRSRV_ERROR RGXScheduleCommand(PVRSRV_RGXDEV_INFO 	*psDevInfo,
 				UpdateValue for that cmd.
 
 @Input          psDevInfo			Device Info
-@Input          eDM				To which DM the cmd is sent.
+@Input          eDM					To which DM the cmd is sent.
 @Input          psKCCBCmd			The cmd to send.
 @Input          ui32CmdSize			The cmd size.
 @Input          puiSyncObjFWAddr	Pointer to the location with the FWAddr of 
 									the sync.
 @Input          puiUpdateValue		Pointer to the location with the update 
 									value of the sync.
-@Input          ui32PDumpFlags		PDump flags
+@Input          bPDumpContinuous
 
 @Return			PVRSRV_ERROR
 */ /**************************************************************************/
@@ -643,8 +510,8 @@ PVRSRV_ERROR RGXScheduleCommandAndWait(PVRSRV_RGXDEV_INFO 	*psDevInfo,
 									   IMG_UINT32			ui32CmdSize,
 									   IMG_UINT32			*puiSyncObjDevVAddr,
 									   IMG_UINT32			*puiUpdateValue,
-									   PVRSRV_CLIENT_SYNC_PRIM 	*psSyncPrim,
-									   IMG_UINT32			ui32PDumpFlags);
+									   PVRSRV_CLIENT_SYNC_PRIM *psSyncPrim,
+									   IMG_BOOL				bPDumpContinuous);
 
 PVRSRV_ERROR RGXFirmwareUnittests(PVRSRV_RGXDEV_INFO *psDevInfo);
 
@@ -679,35 +546,18 @@ PVRSRV_ERROR PVRSRVRGXFrameworkCreateKM(PVRSRV_DEVICE_NODE * psDeviceNode,
 /*************************************************************************/ /*!
 @Function       RGXWaitForFWOp
 
-@Description    Send a sync command and wait to be signalled.
+@Description    Send a sync command and wait to be signaled.
 
 @Input          psDevInfo			Device Info
-@Input          eDM				To which DM the cmd is sent.
-@Input          ui32PDumpFlags			PDump flags
+@Input          eDM					To which DM the cmd is sent.
+@Input          bPDumpContinuous	
 
 @Return			void
 */ /**************************************************************************/
 PVRSRV_ERROR RGXWaitForFWOp(PVRSRV_RGXDEV_INFO	*psDevInfo,
 									RGXFWIF_DM	eDM,
 									PVRSRV_CLIENT_SYNC_PRIM *psSyncPrim,
-									IMG_UINT32	ui32PDumpFlags);
-
-/*************************************************************************/ /*!
-@Function       RGXStateFlagCtrl
-
-@Description    Set and return FW internal state flags.
-
-@Input          psDevInfo       Device Info
-@Input          ui32Config      AppHint config flags
-@Output         pui32State      Current AppHint state flag configuration
-@Input          bSetNotClear    Set or clear the provided config flags
-
-@Return         PVRSRV_ERROR
-*/ /**************************************************************************/
-PVRSRV_ERROR RGXStateFlagCtrl(PVRSRV_RGXDEV_INFO *psDevInfo,
-				IMG_UINT32 ui32Config,
-				IMG_UINT32 *pui32State,
-				IMG_BOOL bSetNotClear);
+									IMG_BOOL	bPDumpContinuous);
 
 /*!
 ******************************************************************************
@@ -724,14 +574,11 @@ PVRSRV_ERROR RGXStateFlagCtrl(PVRSRV_RGXDEV_INFO *psDevInfo,
 
  @Input eDM - Data master, to which the cleanup command should be send
 
- @Input ui32PDumpFlags - PDump continuous flag
-
 ******************************************************************************/
 PVRSRV_ERROR RGXFWRequestCommonContextCleanUp(PVRSRV_DEVICE_NODE *psDeviceNode,
 											  RGX_SERVER_COMMON_CONTEXT *psServerCommonContext,
 											  PVRSRV_CLIENT_SYNC_PRIM *psSyncPrim,
-											  RGXFWIF_DM eDM,
-											  IMG_UINT32 ui32PDumpFlags);
+											  RGXFWIF_DM eDM);
 
 /*!
 ******************************************************************************
@@ -753,6 +600,8 @@ PVRSRV_ERROR RGXFWRequestHWRTDataCleanUp(PVRSRV_DEVICE_NODE *psDeviceNode,
 										 PRGXFWIF_HWRTDATA psHWRTData,
 										 PVRSRV_CLIENT_SYNC_PRIM *psSync,
 										 RGXFWIF_DM eDM);
+
+#if defined(RGX_FEATURE_RAY_TRACING)
 
 PVRSRV_ERROR RGXFWRequestRayFrameDataCleanUp(PVRSRV_DEVICE_NODE *psDeviceNode,
 											 PRGXFWIF_RAY_FRAME_DATA psHWFrameData,
@@ -778,7 +627,7 @@ PVRSRV_ERROR RGXFWRequestRayFrameDataCleanUp(PVRSRV_DEVICE_NODE *psDeviceNode,
 PVRSRV_ERROR RGXFWRequestRPMFreeListCleanUp(PVRSRV_RGXDEV_INFO *psDevInfo,
 											PRGXFWIF_RPM_FREELIST psFWRPMFreeList,
 											PVRSRV_CLIENT_SYNC_PRIM *psSync);
-
+#endif
 
 /*!
 ******************************************************************************
@@ -827,94 +676,6 @@ PVRSRV_ERROR ContextSetPriority(RGX_SERVER_COMMON_CONTEXT *psContext,
 								IMG_UINT32 ui32Priority,
 								RGXFWIF_DM eDM);
 
-/*!
-******************************************************************************
-
- @Function				RGXFWSetHCSDeadline
-
- @Description			Requests the Firmware to set a new Hard Context
-						Switch timeout deadline. Context switches that
-						surpass that deadline cause the system to kill
-						the currently running workloads.
-
- @Input psDeviceNode	pointer to device node
-
- @Input ui32HCSDeadlineMs	The deadline in milliseconds.
- ******************************************************************************/
-PVRSRV_ERROR RGXFWSetHCSDeadline(PVRSRV_RGXDEV_INFO *psDevInfo,
-								IMG_UINT32 ui32HCSDeadlineMs);
-
-/*!
-******************************************************************************
-
- @Function				RGXFWChangeOSidPriority
-
- @Description			Requests the Firmware to change the priority of an
-						operating system. Higher priority number equals
-						higher priority on the scheduling system.
-
- @Input psDeviceNode	pointer to device node
-
- @Input ui32OSid		The OSid whose priority is to be altered
-
- @Input ui32Priority	The new priority number for the specified OSid
- ******************************************************************************/
-PVRSRV_ERROR RGXFWChangeOSidPriority(PVRSRV_RGXDEV_INFO *psDevInfo,
-									 IMG_UINT32 ui32OSid,
-									 IMG_UINT32 ui32Priority);
-
-/*!
-****************************************************************************
-
- @Function				RGXFWSetOSIsolationThreshold
-
- @Description			Requests the Firmware to change the priority
-						threshold of the OS Isolation group. Any OS with a
-						priority higher or equal than the threshold is
-						considered to be belonging to the isolation group.
-
- @Input psDeviceNode	pointer to device node
-
- @Input ui32IsolationPriorityThreshold	The new priority threshold
- ***************************************************************************/
-PVRSRV_ERROR RGXFWSetOSIsolationThreshold(PVRSRV_RGXDEV_INFO *psDevInfo,
-								IMG_UINT32 ui32IsolationPriorityThreshold);
-
-/*!
-****************************************************************************
-
- @Function              RGXFWOSConfig
-
- @Description           Sends the OS Init structure to the FW to complete
-                        the initialization process. The FW will then set all
-                        the OS specific parameters for that DDK
-
- @Input psDeviceNode    pointer to device node
- ***************************************************************************/
-PVRSRV_ERROR RGXFWOSConfig(PVRSRV_RGXDEV_INFO *psDevInfo);
-
-/*!
-****************************************************************************
-
- @Function				RGXFWSetVMOnlineState
-
- @Description			Requests the Firmware to change the guest OS Online
-						states. This should be initiated by the VMM when a
-						guest VM comes online or goes offline. If offline,
-						the FW offloads any current resource from that OSID.
-						The request is repeated until the FW has had time to
-						free all the resources or has waited for workloads
-						to finish.
-
- @Input psDeviceNode	pointer to device node
-
- @Input ui32OSid		The Guest OSid whose state is being altered
-
- @Input eOSOnlineState	The new state (Online or Offline)
- ***************************************************************************/
-PVRSRV_ERROR RGXFWSetVMOnlineState(PVRSRV_RGXDEV_INFO *psDevInfo,
-								IMG_UINT32 ui32OSid,
-								RGXFWIF_OS_STATE_CHANGE eOSOnlineState);
 /*!
 ******************************************************************************
 
@@ -970,7 +731,7 @@ PVRSRV_ERROR RGXUpdateHealthStatus(PVRSRV_DEVICE_NODE* psDevNode,
                                    IMG_BOOL bCheckAfterTimePassed);
 
 
-PVRSRV_ERROR CheckStalledClientCommonContext(RGX_SERVER_COMMON_CONTEXT *psCurrentServerCommonContext, RGX_KICK_TYPE_DM eKickTypeDM);
+PVRSRV_ERROR CheckStalledClientCommonContext(RGX_SERVER_COMMON_CONTEXT *psCurrentServerCommonContext);
 
 void DumpStalledFWCommonContext(RGX_SERVER_COMMON_CONTEXT *psCurrentServerCommonContext,
 					DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,

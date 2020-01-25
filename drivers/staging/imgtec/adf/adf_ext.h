@@ -90,6 +90,18 @@ struct adf_validate_config_ext {
 	struct adf_post_ext __user *post_ext;
 } __packed;
 
+/* These shouldn't be stripped by the uapi process in the bionic headers,
+ * but currently are being. Redefine them so the custom ioctl interface is
+ * actually useful. Fixed in Lollipop.
+ */
+#ifndef ADF_IOCTL_TYPE
+#define ADF_IOCTL_TYPE 'D'
+#endif
+
+#ifndef ADF_IOCTL_NR_CUSTOM
+#define ADF_IOCTL_NR_CUSTOM 128
+#endif
+
 #define ADF_IOCTL_NR_VALIDATE_IMG (ADF_IOCTL_NR_CUSTOM + 0)
 
 #define ADF_VALIDATE_CONFIG_EXT \

@@ -44,28 +44,71 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __OS_SRVINIT_PARAM_H__
 #define __OS_SRVINIT_PARAM_H__
 
-#include "km_apphint_defs.h"
 
-#define SrvInitParamOpen() 0
-#define SrvInitParamClose(pvState) ((void)(pvState))
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/stat.h>
+
+#include "img_defs.h"
+#include "img_types.h"
+
+typedef struct
+{
+	IMG_CHAR *pszValue;
+	IMG_UINT32 ui32Value;
+} SRV_INIT_PARAM_UINT32_LOOKUP;
+
+void *SrvInitParamOpen(void);
+void SrvInitParamClose(void *pvState);
+
+#define	SrvInitParamInitBOOL(name, defval) \
+	static bool __SrvInitParam_ ## name = defval; \
+	module_param_named(name, __SrvInitParam_ ## name, bool, S_IRUGO);
+
+void _SrvInitParamGetBOOL(IMG_BOOL *pbValue, bool bDefault);
 
 #define	SrvInitParamGetBOOL(state, name, value) \
-	pvr_apphint_get_bool(APPHINT_ID_ ## name, &value)
+		_SrvInitParamGetBOOL(&(value), __SrvInitParam_ ## name)
+
+#define	SrvInitParamInitUINT32(name, defval) \
+	static unsigned int __SrvInitParam_ ## name = defval; \
+	module_param_named(name, __SrvInitParam_ ## name, uint, S_IRUGO);
+
+void _SrvInitParamGetUINT32(IMG_UINT32 *pui32Value, unsigned int uiDefault);
 
 #define	SrvInitParamGetUINT32(state, name, value) \
-	pvr_apphint_get_uint32(APPHINT_ID_ ## name, &value)
+		_SrvInitParamGetUINT32(&(value), __SrvInitParam_ ## name)
 
-#define	SrvInitParamGetUINT64(state, name, value) \
-	pvr_apphint_get_uint64(APPHINT_ID_ ## name, &value)
+#define	SrvInitParamInitUINT32BitField(name, inival, lookup) \
+	static unsigned int __SrvInitParam_ ## name = inival; \
+	static SRV_INIT_PARAM_UINT32_LOOKUP * \
+		__SrvInitParamLookup_ ## name = &lookup[0]; \
+	static const unsigned int __SrvInitParamSize_ ## name = \
+					ARRAY_SIZE(lookup); \
+	static char * __SrvInitParamArray_ ## name [ARRAY_SIZE(lookup)]; \
+	static unsigned int _SrvInitParamNum_ ## name = 0; \
+	static const char * __SrvInitParamName_ ## name = #name; \
+	module_param_array_named(name, __SrvInitParamArray_ ## name, charp, &_SrvInitParamNum_ ## name, S_IRUGO);
 
-#define SrvInitParamGetSTRING(state, name, buffer, size) \
-	pvr_apphint_get_string(APPHINT_ID_ ## name, buffer, size)
+bool _SrvInitParamGetUINT32BitField(IMG_UINT32 *puiValue, unsigned int uiDefault, const char **ppszValues, unsigned int uiNum, const SRV_INIT_PARAM_UINT32_LOOKUP *psLookup, unsigned int uiSize, const char *pszName);
 
 #define	SrvInitParamGetUINT32BitField(state, name, value) \
-	pvr_apphint_get_uint32(APPHINT_ID_ ## name, &value)
+		_SrvInitParamGetUINT32BitField(&(value), __SrvInitParam_ ## name, (const char **)__SrvInitParamArray_ ## name,  _SrvInitParamNum_ ## name, __SrvInitParamLookup_ ## name, __SrvInitParamSize_ ## name, __SrvInitParamName_ ## name)
+
+#define	SrvInitParamInitUINT32List(name, defval, lookup) \
+	static unsigned int __SrvInitParam_ ## name = defval; \
+	static SRV_INIT_PARAM_UINT32_LOOKUP * \
+		__SrvInitParamLookup_ ## name = &lookup[0]; \
+	static const unsigned int __SrvInitParamSize_ ## name = \
+					ARRAY_SIZE(lookup); \
+	static const char * __SrvInitParamName_ ## name = #name; \
+	static char * __SrvInitParamString_ ## name = NULL; \
+	module_param_named(name, __SrvInitParamString_ ## name, charp, S_IRUGO);
+
+bool _SrvInitParamGetUINT32List(IMG_UINT32 *puiValue, unsigned int uiDefault, const char *pszValue, const SRV_INIT_PARAM_UINT32_LOOKUP *psLookup, unsigned int uiSize, const char *pszName);
 
 #define	SrvInitParamGetUINT32List(state, name, value) \
-	pvr_apphint_get_uint32(APPHINT_ID_ ## name, &value)
+		_SrvInitParamGetUINT32List(&(value), __SrvInitParam_ ## name, __SrvInitParamString_ ## name, __SrvInitParamLookup_ ## name, __SrvInitParamSize_ ## name,  __SrvInitParamName_ ## name)
 
 
 #endif /* __OS_SRVINIT_PARAM_H__ */

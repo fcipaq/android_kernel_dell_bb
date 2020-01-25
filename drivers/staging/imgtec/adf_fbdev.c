@@ -1,8 +1,5 @@
-/* -*- mode: c; indent-tabs-mode: t; c-basic-offset: 8; tab-width: 8 -*- */
-/* vi: set ts=8 sw=8 sts=8: */
 /*************************************************************************/ /*!
 @File
-@Codingstyle    LinuxKernel
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
 @License        Dual MIT/GPLv2
 
@@ -41,6 +38,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
+/* vi: set ts=8: */
 
 #include <linux/version.h>
 #include <linux/console.h>
@@ -88,6 +86,7 @@ MODULE_LICENSE("Dual MIT/GPL");
 
 struct adf_fbdev_dmabuf {
 	struct sg_table	sg_table;
+	unsigned long paddr;
 	size_t offset;
 	size_t length;
 	void *vaddr;
@@ -131,10 +130,8 @@ adf_fbdev_alloc_buffer(struct adf_fbdev_interface *interface)
 	struct adf_fbdev_dmabuf *fbdev_dmabuf;
 	struct scatterlist *sg;
 	size_t unitary_size;
-	struct page *page;
-	u32 offset = 0;
 	int i, err;
-	u32 id;
+	u32 id = 0;
 
 	spin_lock(&interface->alloc_lock);
 
@@ -158,12 +155,14 @@ adf_fbdev_alloc_buffer(struct adf_fbdev_interface *interface)
 	 */
 	BUG_ON((unitary_size % PAGE_SIZE) != 0);
 
-	fbdev_dmabuf = kmalloc(sizeof(*fbdev_dmabuf), GFP_KERNEL);
+	fbdev_dmabuf = kmalloc(sizeof(struct adf_fbdev_dmabuf), GFP_KERNEL);
 	if (!fbdev_dmabuf)
 		return ERR_PTR(-ENOMEM);
 
-	err = sg_alloc_table(&fbdev_dmabuf->sg_table, unitary_size / PAGE_SIZE,
-			     GFP_KERNEL);
+	/* We only need one scatterlist entry per buffer because fbdev memory
+	 * is always physically contiguous.
+	 */
+	err = sg_alloc_table(&fbdev_dmabuf->sg_table, 1, GFP_KERNEL);
 	if (err) {
 		kfree(fbdev_dmabuf);
 		return ERR_PTR(err);
@@ -183,23 +182,20 @@ adf_fbdev_alloc_buffer(struct adf_fbdev_interface *interface)
 	fbdev_dmabuf->length = unitary_size;
 	fbdev_dmabuf->vaddr  = interface->fb_info->screen_base +
 			       fbdev_dmabuf->offset;
+	fbdev_dmabuf->paddr  = interface->fb_info->fix.smem_start +
+			       fbdev_dmabuf->offset;
 
+	sg_set_page(fbdev_dmabuf->sg_table.sgl,
+		    pfn_to_page(PFN_DOWN(fbdev_dmabuf->paddr)),
+		    fbdev_dmabuf->length, 0);
+
+	/* Shadow what ion is doing currently to ensure sg_dma_address() is
+	 * valid. This is not strictly correct as the dma address should
+	 * only be valid after mapping (ownership changed), and we haven't
+	 * mapped the scatter list yet.
+	 */
 	for_each_sg(fbdev_dmabuf->sg_table.sgl, sg,
 		    fbdev_dmabuf->sg_table.nents, i) {
-		page = vmalloc_to_page(fbdev_dmabuf->vaddr + offset);
-		if (!page) {
-			pr_err("Failed to map fbdev vaddr to pages\n");
-			kfree(fbdev_dmabuf);
-			return ERR_PTR(-EFAULT);
-		}
-		sg_set_page(sg, page, PAGE_SIZE, 0);
-		offset += PAGE_SIZE;
-
-		/* Shadow what ion is doing currently to ensure sg_dma_address()
-		 * is valid. This is not strictly correct as the dma address
-		 * should only be valid after mapping (ownership changed), and
-		 * we haven't mapped the scatter list yet.
-		 */
 		sg_dma_address(sg) = sg_phys(sg);
 	}
 
@@ -245,48 +241,17 @@ static void adf_fbdev_d_unmap_dma_buf(struct dma_buf_attachment *attachment,
 static int adf_fbdev_d_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
 {
 	struct adf_fbdev_dmabuf *fbdev_dmabuf = dmabuf->priv;
-	unsigned long offset = vma->vm_pgoff * PAGE_SIZE;
-	unsigned long addr = vma->vm_start;
-	unsigned long remainder, len;
-	struct scatterlist *sg;
-	struct page *page;
-	u32 i;
 
-	for_each_sg(fbdev_dmabuf->sg_table.sgl, sg,
-		    fbdev_dmabuf->sg_table.nents, i) {
-		page = sg_page(sg);
-		if (!page) {
-			pr_err("Failed to retrieve pages\n");
-			return -EFAULT;
-		}
-		remainder = vma->vm_end - addr;
-		len = sg_dma_len(sg);
-		if (offset >= sg_dma_len(sg)) {
-			offset -= sg_dma_len(sg);
-			continue;
-		} else if (offset) {
-			page += offset / PAGE_SIZE;
-			len = sg_dma_len(sg) - offset;
-			offset = 0;
-		}
-		len = min(len, remainder);
-		remap_pfn_range(vma, addr, page_to_pfn(page), len,
-				vma->vm_page_prot);
-		addr += len;
-		if (addr >= vma->vm_end)
-			return 0;
-	}
-
-	return 0;
+	return remap_pfn_range(vma, vma->vm_start,
+			       PFN_DOWN(fbdev_dmabuf->paddr),
+			       vma->vm_end - vma->vm_start,
+			       vma->vm_page_prot);
 }
 
 static void adf_fbdev_d_release(struct dma_buf *dmabuf)
 {
 	adf_fbdev_free_buffer(dmabuf->priv);
 }
-
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)) && \
-    !defined(CHROMIUMOS_WORKAROUNDS_KERNEL318)
 
 static int
 adf_fbdev_d_begin_cpu_access(struct dma_buf *dmabuf, size_t start, size_t len,
@@ -304,9 +269,6 @@ static void adf_fbdev_d_end_cpu_access(struct dma_buf *dmabuf, size_t start,
 {
 	/* Framebuffer memory is cache coherent. No-op. */
 }
-
-#endif /* (LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)) &&
-          !defined(CHROMIUMOS_WORKAROUNDS_KERNEL318) */
 
 static void *
 adf_fbdev_d_kmap(struct dma_buf *dmabuf, unsigned long page_offset)
@@ -344,11 +306,8 @@ static const struct dma_buf_ops adf_fbdev_dma_buf_ops = {
 	.unmap_dma_buf		= adf_fbdev_d_unmap_dma_buf,
 	.mmap			= adf_fbdev_d_mmap,
 	.release		= adf_fbdev_d_release,
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)) && \
-    !defined(CHROMIUMOS_WORKAROUNDS_KERNEL318)
 	.begin_cpu_access	= adf_fbdev_d_begin_cpu_access,
 	.end_cpu_access		= adf_fbdev_d_end_cpu_access,
-#endif
 	.kmap_atomic		= adf_fbdev_d_kmap,
 	.kunmap_atomic		= adf_fbdev_d_kunmap,
 	.kmap			= adf_fbdev_d_kmap,

@@ -389,6 +389,12 @@ static PVRSRV_ERROR DestroyHandleBase(HANDLE_IMPL_BASE *psBase)
 {
 	PVR_ASSERT(psBase);
 
+	if (psBase->ui32TotalHandCount != 0)
+	{
+		PVR_DPF((PVR_DBG_WARNING, "%s: Handles still exist (%u found)", 
+			 __FUNCTION__, psBase->ui32TotalHandCount));
+	}
+
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,9,0))
 	idr_remove_all(&psBase->sIdr);
 #endif

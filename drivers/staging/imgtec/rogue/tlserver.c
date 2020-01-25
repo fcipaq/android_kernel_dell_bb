@@ -50,23 +50,19 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "connection_server.h"
 #include "allocmem.h"
-#include "devicemem.h"
 
 #include "tlintern.h"
-#include "tlstream.h"
 #include "tlserver.h"
 
-#define NO_STREAM_WAIT_PERIOD 2000000ULL
-#define NO_DATA_WAIT_PERIOD   1000000ULL
+#define NO_STREAM_WAIT_PERIOD 2000
+#define NO_DATA_WAIT_PERIOD   1000
 #define NO_ACQUIRE            0xffffffffU
-
-#include "rgxhwperf.h"
 
 /*
  * Transport Layer Client API Kernel-Mode bridge implementation
  */
 PVRSRV_ERROR
-TLServerOpenStreamKM(const IMG_CHAR*  	 	   pszName,
+TLServerOpenStreamKM(IMG_PCHAR  	 	   pszName,
 			   	     IMG_UINT32 		   ui32Mode,
 			   	     PTL_STREAM_DESC* 	   ppsSD,
 			   	     PMR** 				   ppsTLPMR)
@@ -76,8 +72,6 @@ TLServerOpenStreamKM(const IMG_CHAR*  	 	   pszName,
 	PTL_SNODE		psNode = 0;
 	TL_STREAM_DESC* psNewSD = 0;
 	IMG_HANDLE 		hEvent;
-	IMG_BOOL		bIsWriteOnly = ui32Mode & PVRSRV_STREAM_FLAG_OPEN_WO ?
-	                               IMG_TRUE : IMG_FALSE;
 	PTL_GLOBAL_DATA psGD = TLGGD();
 
 #if defined(PVR_DPF_FUNCTION_TRACE_ON)
@@ -87,8 +81,8 @@ TLServerOpenStreamKM(const IMG_CHAR*  	 	   pszName,
 	PVR_ASSERT(pszName);
 
 	/* Acquire TL_GLOBAL_DATA lock here, as if the following TLFindStreamNodeByName
-	 * returns NON NULL PTL_SNODE, we try updating the global data client count and
-	 * PTL_SNODE's psRDesc and we want to make sure the TL_SNODE is valid (eg. has
+	 * returns NON NULL PTL_SNODE, we try updating the global data client count and 
+	 * PTL_SNODE's psRDesc and we want to make sure the TL_SNODE is valid (eg. has 
 	 * not been deleted) while we are updating it
 	 */
 	OSLockAcquire (psGD->hTLGDLock);
@@ -132,83 +126,36 @@ TLServerOpenStreamKM(const IMG_CHAR*  	 	   pszName,
 		else
 		{
 			eError = PVRSRV_ERROR_NOT_FOUND;
-			PVR_DPF((PVR_DBG_ERROR, "Stream \"%s\" does not exist", pszName));
+			PVR_DPF((PVR_DBG_ERROR, "Stream does not exist"));
 		}
 		goto e0;
 	}
 
-	/* Allocate memory for the stream. The memory will be allocated with the
-	 * first call. */
-	eError = TLAllocSharedMemIfNull(psNode->psStream);
+	// Only one client/descriptor per stream supported
+	if (psNode->psRDesc != NULL)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "Can not open \"%s\" stream, stream already"
+		        " opened", pszName));
+		eError = PVRSRV_ERROR_ALREADY_OPEN;
+		goto e0;
+	}
+
+	// Create an event handle for this client to wait on when no data in stream
+	// buffer.
+	eError = OSEventObjectOpen(psNode->hDataEventObj, &hEvent);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_ERROR, "Failed to allocate memory for stream"
-				" \"%s\"", pszName));
-		return eError;
+		PVR_DPF((PVR_DBG_ERROR, "Not possible to open node's event object"));
+		eError = PVRSRV_ERROR_UNABLE_TO_CREATE_EVENT;
+		goto e0;
 	}
 
-	if (bIsWriteOnly)
+	psNewSD = TLMakeStreamDesc(psNode, ui32Mode, hEvent);
+	if (!psNewSD)
 	{
-
-		/* If psWDesc == NULL it means that this is the first attempt
-		 * to open stream for write. If yes create the descriptor or increment
-		 * reference count otherwise. */
-		if (psNode->psWDesc == NULL)
-		{
-			psNewSD = TLMakeStreamDesc(psNode, ui32Mode, NULL);
-			psNode->psWDesc = psNewSD;
-		}
-		else
-		{
-			psNewSD = psNode->psWDesc;
-			psNode->psWDesc->uiRefCount++;
-		}
-
-		if (!psNewSD)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "Not possible to make a new stream"
-			        " writer descriptor"));
-			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-			goto e1;
-		}
-
-		psNode->uiWRefCount++;
-	}
-	else
-	{
-		// Only one reader per stream supported
-		if (psNode->psRDesc != NULL)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "Cannot open \"%s\" stream, stream already"
-			        " opened", pszName));
-			eError = PVRSRV_ERROR_ALREADY_OPEN;
-			goto e0;
-		}
-
-		// Create an event handle for this client to wait on when no data in
-		// stream buffer.
-		eError = OSEventObjectOpen(psNode->hReadEventObj, &hEvent);
-		if (eError != PVRSRV_OK)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "Not possible to open node's event object"));
-			eError = PVRSRV_ERROR_UNABLE_TO_CREATE_EVENT;
-			goto e0;
-		}
-
-		psNewSD = TLMakeStreamDesc(psNode, ui32Mode, hEvent);
-		psNode->psRDesc = psNewSD;
-
-		if (!psNewSD)
-		{
-			PVR_DPF((PVR_DBG_ERROR, "Not possible to make a new stream descriptor"));
-			eError = PVRSRV_ERROR_OUT_OF_MEMORY;
-			goto e1;
-		}
-
-		PVR_DPF((PVR_DBG_VERBOSE,
-		        "TLServerOpenStreamKM evList=%p, evObj=%p",
-		        psNode->hReadEventObj,
-		        psNode->psRDesc->hReadEvent));
+		PVR_DPF((PVR_DBG_ERROR, "Not possible to make a new stream descriptor"));
+		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+		goto e1;
 	}
 
 	// Copy the import handle back to the user mode API to enable access to
@@ -217,37 +164,28 @@ TLServerOpenStreamKM(const IMG_CHAR*  	 	   pszName,
 	PVR_LOGG_IF_ERROR(eError, "DevmemLocalGetImportHandle", e2);
 
 	psGD->uiClientCnt++;
+	psNode->psRDesc = psNewSD;
 
 	/* Global data updated. Now release global lock */
 	OSLockRelease (psGD->hTLGDLock);
 
 	*ppsSD = psNewSD;
 
-	/* This callback is executed only on reader open. There are some actions
-	 * executed on reader open that don't make much sense for writers e.g.
-	 * injection on time synchronisation packet into the stream. */
-	if (!bIsWriteOnly && psNode->psStream->pfOnReaderOpenCallback != NULL)
+	PVR_DPF((PVR_DBG_VERBOSE, 
+			 "TLServerOpenStreamKM evList=%p, evObj=%p", 
+			 psNode->hDataEventObj, 
+			 psNode->psRDesc->hDataEvent));
+
+	if (psNode->psStream->pfOnReaderOpenCallback != NULL)
 	{
 		psNode->psStream->pfOnReaderOpenCallback(
 		        psNode->psStream->pvOnReaderOpenUserData);
 	}
 
-	if (bIsWriteOnly)
-	{
-		/* Sending HWPerf event from TL is a temporary solution and this
-		 * will change once TL is expanded by event allowing to signal
-		 * stream opening. */
-		RGX_HWPERF_HOST_CTRL(CLIENT_STREAM_OPEN,
-		                     OSGetCurrentClientProcessIDKM());
-	}
-
-	PVR_DPF((PVR_DBG_MESSAGE, "%s: Stream %s opened for %s", __func__, pszName,
-	        ui32Mode & PVRSRV_STREAM_FLAG_OPEN_WO ? "write" : "read"));
-
 	PVR_DPF_RETURN_OK;
 
 e2:
-	OSFreeMem(psNewSD);
+	OSFREEMEM(psNewSD);
 e1:
 	OSEventObjectClose(hEvent);
 e0:
@@ -263,8 +201,6 @@ TLServerCloseStreamKM(PTL_STREAM_DESC psSD)
 	PTL_SNODE		psNode = 0;
 	PTL_STREAM	psStream;
 	IMG_BOOL	bDestroyStream;
-	IMG_BOOL	bIsWriteOnly = psSD->ui32Flags & PVRSRV_STREAM_FLAG_OPEN_WO ?
-	                           IMG_TRUE : IMG_FALSE;
 
 	PVR_DPF_ENTERED;
 
@@ -294,199 +230,37 @@ TLServerCloseStreamKM(PTL_STREAM_DESC psSD)
 	 * call will update the TL_SNODE's descriptor value */
 	OSLockAcquire (psGD->hTLGDLock);
 
-	/* Close event handle because event object list might be destroyed in
-	 * TLUnrefDescAndTryFreeStreamNode(). */
-	if (!bIsWriteOnly)
-	{
-		// Close and free the event handle resource used by this descriptor
-		eError = OSEventObjectClose(psSD->hReadEvent);
-		if (eError != PVRSRV_OK)
-		{
-			// Log error but continue as it seems best
-			PVR_DPF((PVR_DBG_ERROR, "OSEventObjectClose() failed error %d",
-			        eError));
-			eError = PVRSRV_ERROR_UNABLE_TO_DESTROY_EVENT;
-		}
-	}
-	else
-	{
-		/* Sending HWPerf event from TL is a temporary solution and this
-		 * will change once TL is expanded by event allowing to signal
-		 * stream closing. */
-		RGX_HWPERF_HOST_CTRL(CLIENT_STREAM_CLOSE,
-		                     OSGetCurrentClientProcessIDKM());
-	}
-
 	// Remove descriptor from stream object/list
-	bDestroyStream = TLUnrefDescAndTryFreeStreamNode (psNode, psSD);
+	bDestroyStream = TLRemoveDescAndTryFreeStreamNode (psNode);
 
 	// Assert the counter is sane after input data validated.
 	PVR_ASSERT(psGD->uiClientCnt > 0);
 	psGD->uiClientCnt--;
 
-	OSLockRelease (psGD->hTLGDLock);
-
+	OSLockRelease (psGD->hTLGDLock);	
+	
 	/* Destroy the stream if its TL_SNODE was removed from TL_GLOBAL_DATA */
 	if (bDestroyStream)
 	{
 		TLStreamDestroy (psStream);
 		psStream = NULL;
 	}
+	
+	/* Clean up the descriptor structure */
 
-	PVR_DPF((PVR_DBG_VERBOSE, "%s: Stream closed", __func__));
-
-	/* Free the descriptor if ref count reaches 0. */
-	if (psSD->uiRefCount == 0)
-	{
-		// Free the stream descriptor object
-		OSFreeMem(psSD);
-	}
-
-	PVR_DPF_RETURN_RC(eError);
-}
-
-PVRSRV_ERROR
-TLServerReserveStreamKM(PTL_STREAM_DESC psSD,
-                        IMG_UINT32* ui32BufferOffset,
-                        IMG_UINT32 ui32Size,
-                        IMG_UINT32 ui32SizeMin,
-                        IMG_UINT32* pui32Available)
-{
-	TL_GLOBAL_DATA* psGD = TLGGD();
-	PTL_SNODE psNode = 0;
-	IMG_UINT8* pui8Buffer = NULL;
-	PVRSRV_ERROR eError;
-
-	PVR_DPF_ENTERED;
-
-	PVR_ASSERT(psSD);
-
-	if (!(psSD->ui32Flags & PVRSRV_STREAM_FLAG_OPEN_WO))
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_INVALID_PARAMS);
-	}
-
-	// Sanity check, quick exit if there are no streams
-	if (psGD->psHead == NULL)
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_STREAM_ERROR);
-	}
-
-	/* Acquire the global lock. We have to be sure that no one modifies
-	 * the list while we are looking for our stream. */
-	OSLockAcquire(psGD->hTLGDLock);
-	// Check stream still valid
-	psNode = TLFindAndGetStreamNodeByDesc(psSD);
-	OSLockRelease(psGD->hTLGDLock);
-
-	if ((psNode == NULL) || (psNode != psSD->psNode))
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_HANDLE_NOT_FOUND);
-	}
-
-
-	/* Since we have a valid stream descriptor, the stream should not have been
-	 * made NULL by any producer context. */
-	PVR_ASSERT (psNode->psStream);
-
-	eError = TLStreamReserve2(psNode->psStream, &pui8Buffer, ui32Size,
-	                          ui32SizeMin, pui32Available);
+	// Close and free the event handle resource used by this descriptor
+	eError = OSEventObjectClose(psSD->hDataEvent);
 	if (eError != PVRSRV_OK)
 	{
-		PVR_DPF((PVR_DBG_WARNING, "Failed to reserve the stream (%d).", eError));
-	}
-	else if (pui8Buffer == NULL)
-	{
-		PVR_DPF((PVR_DBG_WARNING, "Not enough space in the stream."));
-		eError = PVRSRV_ERROR_STREAM_RESERVE_TOO_BIG;
-	}
-	else
-	{
-		*ui32BufferOffset = pui8Buffer - psNode->psStream->pbyBuffer;
-		PVR_ASSERT(*ui32BufferOffset < psNode->psStream->ui32Size);
+		// Log error but continue as it seems best
+		PVR_DPF((PVR_DBG_ERROR, "OSEventObjectClose() failed error %d", eError));
+		eError = PVRSRV_ERROR_UNABLE_TO_DESTROY_EVENT;
 	}
 
-	OSLockAcquire(psGD->hTLGDLock);
-	TLReturnStreamNode(psNode);
-	OSLockRelease(psGD->hTLGDLock);
+	// Free the stream descriptor object
+	OSFREEMEM(psSD);
 
 	PVR_DPF_RETURN_RC(eError);
-}
-
-PVRSRV_ERROR
-TLServerCommitStreamKM(PTL_STREAM_DESC psSD,
-                       IMG_UINT32 ui32Size)
-{
-	TL_GLOBAL_DATA*	psGD = TLGGD();
-	PTL_SNODE psNode = 0;
-	PVRSRV_ERROR eError;
-
-	PVR_DPF_ENTERED;
-
-	PVR_ASSERT(psSD);
-
-	if (!(psSD->ui32Flags & PVRSRV_STREAM_FLAG_OPEN_WO))
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_INVALID_PARAMS);
-	}
-
-	// Sanity check, quick exit if there are no streams
-	if (psGD->psHead == NULL)
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_STREAM_ERROR);
-	}
-
-	/* Acquire the global lock. We have to be sure that no one modifies
-	 * the list while we are looking for our stream. */
-	OSLockAcquire(psGD->hTLGDLock);
-	// Check stream still valid
-	psNode = TLFindAndGetStreamNodeByDesc(psSD);
-	OSLockRelease(psGD->hTLGDLock);
-
-	if ((psNode == NULL) || (psNode != psSD->psNode))
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_HANDLE_NOT_FOUND);
-	}
-
-	/* Since we have a valid stream descriptor, the stream should not have been
-	 * made NULL by any producer context. */
-	PVR_ASSERT (psNode->psStream);
-
-	eError = TLStreamCommit(psNode->psStream, ui32Size);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "Failed to commit data into stream."));
-	}
-
-	OSLockAcquire(psGD->hTLGDLock);
-	TLReturnStreamNode(psNode);
-	OSLockRelease(psGD->hTLGDLock);
-
-	PVR_DPF_RETURN_RC(eError);
-}
-
-PVRSRV_ERROR
-TLServerDiscoverStreamsKM(const IMG_CHAR *pszNamePattern,
-                          IMG_UINT32 ui32Max,
-                          IMG_UINT32 *pui32Streams,
-                          IMG_UINT32 *pui32NumFound)
-{
-	if (*pszNamePattern == '\0')
-		return PVRSRV_ERROR_INVALID_PARAMS;
-
-	// Sanity check, quick exit if there are no streams
-	if (TLGGD()->psHead == NULL)
-	{
-		*pui32NumFound = 0;
-		return PVRSRV_OK;
-	}
-
-	OSLockAcquire(TLGGD()->hTLGDLock);
-	*pui32NumFound = TLDiscoverStreamNodes(pszNamePattern, pui32Streams,
-	                                       ui32Max);
-	OSLockRelease(TLGGD()->hTLGDLock);
-
-	return PVRSRV_OK;
 }
 
 PVRSRV_ERROR
@@ -517,19 +291,17 @@ TLServerAcquireDataKM(PTL_STREAM_DESC psSD,
 		PVR_DPF_RETURN_RC(PVRSRV_ERROR_HANDLE_NOT_FOUND);
 	}
 
-	/* If we are here, the stream will never be made NULL until this context itself
+	/* If we are here, the stream will never be made NULL until this context itself 
 	 * calls TLRemoveDescAndTryFreeStreamNode(). This is because the producer will
 	 * fail to make the stream NULL (by calling TLTryRemoveStreamAndFreeStreamNode)
 	 * when a valid stream descriptor is present (i.e. a client is connected).
 	 * Hence, no checks for stream being NON NULL are required after this. */
 	PVR_ASSERT (psNode->psStream);
 	
-	//PVR_DPF((PVR_DBG_VERBOSE, "TLServerAcquireDataKM evList=%p, evObj=%p", psSD->psNode->hReadEventObj, psSD->hReadEvent));
+	//PVR_DPF((PVR_DBG_VERBOSE, "TLServerAcquireDataKM evList=%p, evObj=%p", psSD->psNode->hDataEventObj, psSD->hDataEvent));
 
 	/* Check for data in the associated stream buffer, sleep/wait if none */
-	while (((uiTmpLen = TLStreamAcquireReadPos(psNode->psStream,
-			 psSD->ui32Flags & PVRSRV_STREAM_FLAG_DISABLE_PRODUCER_CALLBACK,
-			 &uiTmpOffset)) == 0) &&
+	while (((uiTmpLen = TLStreamAcquireReadPos(psNode->psStream, &uiTmpOffset)) == 0) &&
 	       (!(psSD->ui32Flags&PVRSRV_STREAM_FLAG_ACQUIRE_NONBLOCKING)) )
 	{
 		PVR_DPF((PVR_DBG_VERBOSE, "TLAcquireDataKM sleeping..."));
@@ -538,7 +310,7 @@ TLServerAcquireDataKM(PTL_STREAM_DESC psSD,
 		// exit loop if not time out but data is ready for client
 		while (TLStreamEOS(psNode->psStream))
 		{
-			eError = OSEventObjectWaitTimeout(psSD->hReadEvent, NO_DATA_WAIT_PERIOD);
+			eError = OSEventObjectWaitTimeout(psSD->hDataEvent, NO_DATA_WAIT_PERIOD);
 			if (eError != PVRSRV_OK)
 			{
 				/* Return timeout or other error condition to the caller who
@@ -546,12 +318,7 @@ TLServerAcquireDataKM(PTL_STREAM_DESC psSD,
 				 * Indefinitely as we want the user mode application to have a
 				 * chance to break out and end if it needs to, so we return the
 				 * time out error code. */
-				PVR_DPF((PVR_DBG_VERBOSE, "TL Server timed out"));
 				PVR_DPF_RETURN_RC(eError);
-			}
-			else
-			{
-				PVR_DPF((PVR_DBG_VERBOSE, "TL Server signalled"));
 			}
 		}
 	}
@@ -604,59 +371,6 @@ TLServerReleaseDataKM(PTL_STREAM_DESC psSD,
 	TLStreamAdvanceReadPos(psNode->psStream, uiReadLen);
 
 	PVR_DPF_RETURN_OK;
-}
-
-PVRSRV_ERROR
-TLServerWriteDataKM(PTL_STREAM_DESC psSD,
-                    IMG_UINT32 ui32Size,
-                    IMG_BYTE* pui8Data)
-{
-	TL_GLOBAL_DATA* psGD = TLGGD();
-	PTL_SNODE psNode = 0;
-	PVRSRV_ERROR eError;
-
-	PVR_DPF_ENTERED;
-
-	PVR_ASSERT(psSD);
-
-	if (!(psSD->ui32Flags & PVRSRV_STREAM_FLAG_OPEN_WO))
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_INVALID_PARAMS);
-	}
-
-	// Sanity check, quick exit if there are no streams
-	if (psGD->psHead == NULL)
-	{
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_STREAM_ERROR);
-	}
-
-	OSLockAcquire(psGD->hTLGDLock);
-	// Check stream still valid
-	psNode = TLFindAndGetStreamNodeByDesc(psSD);
-	OSLockRelease(psGD->hTLGDLock);
-
-	if ((psNode == NULL) || (psNode != psSD->psNode))
-	{
-		OSLockRelease(psGD->hTLGDLock);
-		PVR_DPF_RETURN_RC(PVRSRV_ERROR_HANDLE_NOT_FOUND);
-	}
-
-	/* Since we have a valid stream descriptor, the stream should not have been
-	 * made NULL by any producer context. */
-	PVR_ASSERT (psNode->psStream);
-
-	eError = TLStreamWrite(psNode->psStream, pui8Data, ui32Size);
-	if (eError != PVRSRV_OK)
-	{
-		PVR_DPF((PVR_DBG_ERROR, "Failed to write data to the stream (%d).",
-		        eError));
-	}
-
-	OSLockAcquire(psGD->hTLGDLock);
-	TLReturnStreamNode(psNode);
-	OSLockRelease(psGD->hTLGDLock);
-
-	PVR_DPF_RETURN_RC(eError);
 }
 
 /*****************************************************************************

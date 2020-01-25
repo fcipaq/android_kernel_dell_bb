@@ -2,8 +2,8 @@
 @File
 @Title          Common bridge header for rgxpdump
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Declares common defines and structures used by both the client
-                and server side of the bridge for rgxpdump
+@Description    Declares common defines and structures that are used by both
+                the client and sever side of the bridge for rgxpdump
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -44,8 +44,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifndef COMMON_RGXPDUMP_BRIDGE_H
 #define COMMON_RGXPDUMP_BRIDGE_H
-
-#include <powervr/mem_types.h>
 
 #include "img_types.h"
 #include "pvrsrv_error.h"

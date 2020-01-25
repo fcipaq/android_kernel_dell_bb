@@ -44,7 +44,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "img_types.h"
 #include "pvrsrv_error.h"
-#include <powervr/sync_external.h>
+#include "sync_external.h"
 #include "pvrsrv_surface.h"
 #include "pmr.h"
 #include "kerneldisplay.h"
@@ -57,15 +57,11 @@ typedef DC_BUFFER* DC_PIN_HANDLE;
 
 PVRSRV_ERROR DCDevicesQueryCount(IMG_UINT32 *pui32DeviceCount);
 
-PVRSRV_ERROR DCDevicesEnumerate(CONNECTION_DATA *psConnection,
-								PVRSRV_DEVICE_NODE *psDevNode,
-								IMG_UINT32 ui32DeviceArraySize,
+PVRSRV_ERROR DCDevicesEnumerate(IMG_UINT32 ui32DeviceArraySize,
 								IMG_UINT32 *pui32DeviceCount,
 								IMG_UINT32 *paui32DeviceIndex);
 
-PVRSRV_ERROR DCDeviceAcquire(CONNECTION_DATA *psConnection,
-							 PVRSRV_DEVICE_NODE *psDevNode,
-							 IMG_UINT32 ui32DeviceIndex,
+PVRSRV_ERROR DCDeviceAcquire(IMG_UINT32 ui32DeviceIndex,
 							 DC_DEVICE **ppsDevice);
 
 PVRSRV_ERROR DCDeviceRelease(DC_DEVICE *psDevice);
@@ -157,16 +153,4 @@ PVRSRV_ERROR DCBufferUnpin(DC_PIN_HANDLE hPin);
 PVRSRV_ERROR DCInit(void);
 PVRSRV_ERROR DCDeInit(void);
 
-#if defined(INTEGRITY_OS)
-IMG_HANDLE DCDisplayContextGetHandle(DC_DISPLAY_CONTEXT *psDisplayContext);
-IMG_UINT32 DCDeviceGetIndex(IMG_HANDLE hDevice);
-IMG_HANDLE DCDeviceGetDeviceAtIndex(IMG_UINT32 ui32DeviceIndex);
-#endif
-
-#if defined(SUPPORT_DRM_EXT)
-/* FIXME: Temporary workaround. Awaiting buildpkg refresh. */
-#define OSMemCopy(a,b,c) memcpy(a,b,c)
-#endif
-
 #endif /*_DC_SERVER_H_  */
-

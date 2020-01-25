@@ -152,6 +152,32 @@ typedef PVRSRV_ERROR (*PFN_DUST_COUNT_REQUEST) (IMG_HANDLE			hDevHandle,
 
 /*!
  *****************************************************************************
+ * Enumeration of possible alpha types.
+ *****************************************************************************/
+typedef enum _PVRSRV_COLOURSPACE_FORMAT_ {
+	PVRSRV_COLOURSPACE_FORMAT_UNKNOWN		=  0x00000000,  /*!< Colourspace Format: Unknown */
+	PVRSRV_COLOURSPACE_FORMAT_LINEAR		=  0x00010000,  /*!< Colourspace Format: Linear */
+	PVRSRV_COLOURSPACE_FORMAT_NONLINEAR		=  0x00020000,  /*!< Colourspace Format: Non-Linear */
+	PVRSRV_COLOURSPACE_FORMAT_MASK			=  0x000F0000,  /*!< Colourspace Format Mask */
+} PVRSRV_COLOURSPACE_FORMAT;
+
+
+/*!
+ * Drawable orientation (in degrees clockwise).
+ */
+typedef enum _IMG_ROTATION_ PVRSRV_ROTATION;
+
+#define PVRSRV_ROTATE_0 IMG_ROTATION_0DEG
+#define PVRSRV_ROTATE_90 IMG_ROTATION_90DEG
+#define PVRSRV_ROTATE_180 IMG_ROTATION_180DEG
+#define PVRSRV_ROTATE_270 IMG_ROTATION_270DEG
+#define PVRSRV_FLIP_Y IMG_ROTATION_FLIP_Y
+
+#define PVRSRV_ROTATE_BAD IMG_ROTATION_BAD
+
+
+/*!
+ *****************************************************************************
  * This structure is used for OS independent registry (profile) access
  *****************************************************************************/
 

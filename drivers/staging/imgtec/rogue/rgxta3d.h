@@ -53,7 +53,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "sync_server.h"
 #include "connection_server.h"
 #include "rgxdebug.h"
-#include "pvr_notifier.h"
 
 typedef struct _RGX_SERVER_RENDER_CONTEXT_ RGX_SERVER_RENDER_CONTEXT;
 typedef struct _RGX_FREELIST_ RGX_FREELIST;
@@ -82,7 +81,6 @@ struct _RGX_FREELIST_ {
 	IMG_UINT32				ui32CurrentFLPages;
 	IMG_UINT32				ui32GrowFLPages;
 	IMG_UINT32				ui32FreelistID;
-	IMG_UINT32				ui32FreelistGlobalID;	/* related global freelist for this freelist */
 	IMG_UINT64				ui64FreelistChecksum;	/* checksum over freelist content */
 	IMG_BOOL				bCheckFreelist;			/* freelist check enabled */
 	IMG_UINT32				ui32RefCount;			/* freelist reference counting */
@@ -103,10 +101,6 @@ struct _RGX_FREELIST_ {
 	RGXFWIF_DEV_VIRTADDR	sFreeListFWDevVAddr;
 
 	PVRSRV_CLIENT_SYNC_PRIM	*psCleanupSync;
-
-#if defined(SUPPORT_WORKLOAD_ESTIMATION)
-	HASH_TABLE*				psWorkloadHashTable;
-#endif
 } ;
 
 struct _RGX_PMR_NODE_ {
@@ -116,9 +110,6 @@ struct _RGX_PMR_NODE_ {
 	DLLIST_NODE				sMemoryBlock;
 	IMG_UINT32				ui32NumPages;
 	IMG_BOOL				bInternal;
-#if defined(PVR_RI_DEBUG)
-	RI_HANDLE				hRIHandle;
-#endif
 } ;
 
 typedef struct {
@@ -286,7 +277,6 @@ PVRSRV_ERROR RGXCreateFreeList(CONNECTION_DATA      *psConnection,
 							   IMG_UINT32			ui32MaxFLPages,
 							   IMG_UINT32			ui32InitFLPages,
 							   IMG_UINT32			ui32GrowFLPages,
-							   RGX_FREELIST			*psGlobalFreeList,
 							   IMG_BOOL				bCheckFreelist,
 							   IMG_DEV_VIRTADDR		sFreeListDevVAddr,
 							   PMR					*psFreeListPMR,
@@ -392,7 +382,6 @@ PVRSRV_ERROR PVRSRVRGXDestroyRenderContextKM(RGX_SERVER_RENDER_CONTEXT *psRender
 ******************************************************************************/
 IMG_EXPORT
 PVRSRV_ERROR PVRSRVRGXKickTA3DKM(RGX_SERVER_RENDER_CONTEXT	*psRenderContext,
-								 IMG_UINT32					ui32ClientCacheOpSeqNum,
 								 IMG_UINT32					ui32ClientTAFenceCount,
 								 SYNC_PRIMITIVE_BLOCK				**apsClientTAFenceSyncPrimBlock,
 								 IMG_UINT32					*paui32ClientTAFenceSyncOffset,
@@ -429,27 +418,23 @@ PVRSRV_ERROR PVRSRVRGXKickTA3DKM(RGX_SERVER_RENDER_CONTEXT	*psRenderContext,
 								 IMG_UINT32					ui323DCmdSize,
 								 IMG_PBYTE					pui83DDMCmd,
 								 IMG_UINT32					ui32ExtJobRef,
+								 IMG_UINT32					ui32IntJobRef,
 								 IMG_BOOL					bLastTAInScene,
 								 IMG_BOOL					bKickTA,
 								 IMG_BOOL					bKickPR,
 								 IMG_BOOL					bKick3D,
 								 IMG_BOOL					bAbort,
-								 IMG_UINT32					ui32PDumpFlags,
-								 RGX_RTDATA_CLEANUP_DATA	*psRTDataCleanup,
-								 RGX_ZSBUFFER_DATA			*psZBuffer,
-								 RGX_ZSBUFFER_DATA			*psSBuffer,
-								 IMG_BOOL					bCommitRefCountsTA,
-								 IMG_BOOL					bCommitRefCounts3D,
-								 IMG_BOOL					*pbCommittedRefCountsTA,
-								 IMG_BOOL					*pbCommittedRefCounts3D,
+								 IMG_BOOL					bPDumpContinuous,
+								 RGX_RTDATA_CLEANUP_DATA        *psRTDataCleanup,
+								 RGX_ZSBUFFER_DATA              *psZBuffer,
+								 RGX_ZSBUFFER_DATA               *psSBuffer,
+								 IMG_BOOL						bCommitRefCountsTA,
+								 IMG_BOOL						bCommitRefCounts3D,
+								 IMG_BOOL						*pbCommittedRefCountsTA,
+								 IMG_BOOL						*pbCommittedRefCounts3D,
 								 IMG_UINT32					ui32SyncPMRCount,
 								 IMG_UINT32					*paui32SyncPMRFlags,
-								 PMR						**ppsSyncPMRs,
-								 IMG_UINT32					ui32RenderTargetSize,
-								 IMG_UINT32					ui32NumberOfDrawCalls,
-								 IMG_UINT32					ui32NumberOfIndices,
-								 IMG_UINT32					ui32NumberOfMRTs,
-								 IMG_UINT64					ui64DeadlineInus);
+								 PMR						**ppsSyncPMRs);
 
 
 PVRSRV_ERROR PVRSRVRGXSetRenderContextPriorityKM(CONNECTION_DATA *psConnection,
@@ -470,6 +455,6 @@ void CheckForStalledRenderCtxt(PVRSRV_RGXDEV_INFO *psDevInfo,
 				void *pvDumpDebugFile);
 
 /* Debug/Watchdog - check if client contexts are stalled */
-IMG_UINT32 CheckForStalledClientRenderCtxt(PVRSRV_RGXDEV_INFO *psDevInfo);
+IMG_BOOL CheckForStalledClientRenderCtxt(PVRSRV_RGXDEV_INFO *psDevInfo);
 
 #endif /* __RGXTA3D_H__ */

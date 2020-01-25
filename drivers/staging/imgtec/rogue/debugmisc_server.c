@@ -72,8 +72,7 @@ PVRSRVDebugMiscSLCSetBypassStateKM(
 	                            RGXFWIF_DM_GP,
 	                            &sSLCBPCtlCmd,
 	                            sizeof(sSLCBPCtlCmd),
-	                            0,
-	                            PDUMP_FLAGS_CONTINUOUS);
+	                            IMG_TRUE);
 	if(eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "PVRSRVDebugMiscSLCSetEnableStateKM: RGXScheduleCommandfailed. Error:%u", eError));
@@ -81,7 +80,7 @@ PVRSRVDebugMiscSLCSetBypassStateKM(
 	else
 	{
 		/* Wait for the SLC flush to complete */
-		eError = RGXWaitForFWOp(psDeviceNode->pvDevice, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+		eError = RGXWaitForFWOp(psDeviceNode->pvDevice, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, IMG_TRUE);
 		if (eError != PVRSRV_OK)
 		{
 			PVR_DPF((PVR_DBG_ERROR,"PVRSRVDebugMiscSLCSetEnableStateKM: Waiting for value aborted with error (%u)", eError));
@@ -92,43 +91,9 @@ PVRSRVDebugMiscSLCSetBypassStateKM(
 }
 
 IMG_EXPORT PVRSRV_ERROR
-PVRSRVRGXDebugMiscQueryFWLogKM(
-	const CONNECTION_DATA *psConnection,
-	const PVRSRV_DEVICE_NODE *psDeviceNode,
-	IMG_UINT32 *pui32RGXFWLogType)
-{
-	PVRSRV_RGXDEV_INFO *psDevInfo;
-
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-#if defined(PVRSRV_GPUVIRT_GUESTDRV)
-	/* Guest drivers do not support tracebuf */
-	PVR_UNREFERENCED_PARAMETER(psDevInfo);
-	PVR_UNREFERENCED_PARAMETER(pui32RGXFWLogType);
-	return PVRSRV_ERROR_NOT_IMPLEMENTED;
-#else
-	if (!psDeviceNode || !pui32RGXFWLogType)
-	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	psDevInfo = psDeviceNode->pvDevice;
-
-	if (!psDevInfo || !psDevInfo->psRGXFWIfTraceBuf)
-	{
-		return PVRSRV_ERROR_INVALID_PARAMS;
-	}
-
-	*pui32RGXFWLogType = psDevInfo->psRGXFWIfTraceBuf->ui32LogType;
-	return PVRSRV_OK;
-#endif
-}
-
-
-IMG_EXPORT PVRSRV_ERROR
 PVRSRVRGXDebugMiscSetFWLogKM(
-	const CONNECTION_DATA * psConnection,
-	const PVRSRV_DEVICE_NODE *psDeviceNode,
+	CONNECTION_DATA * psConnection,
+	PVRSRV_DEVICE_NODE *psDeviceNode,
 	IMG_UINT32  ui32RGXFWLogType)
 {
 	RGXFWIF_KCCB_CMD sLogTypeUpdateCmd;
@@ -164,8 +129,7 @@ PVRSRVRGXDebugMiscSetFWLogKM(
 	                            RGXFWIF_DM_GP,
 	                            &sLogTypeUpdateCmd,
 	                            sizeof(sLogTypeUpdateCmd),
-	                            0,
-	                            PDUMP_FLAGS_CONTINUOUS);
+	                            IMG_TRUE);
 	if(eError != PVRSRV_OK)
 	{
 		PVR_DPF((PVR_DBG_ERROR, "%s: RGXScheduleCommandfailed. Error:%u", __FUNCTION__, eError));
@@ -173,7 +137,7 @@ PVRSRVRGXDebugMiscSetFWLogKM(
 	else
 	{
 		/* Wait for the LogType value to be updated */
-		eError = RGXWaitForFWOp(psDevInfo, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, PDUMP_FLAGS_CONTINUOUS);
+		eError = RGXWaitForFWOp(psDevInfo, RGXFWIF_DM_GP, psDeviceNode->psSyncPrim, IMG_TRUE);
 		if (eError != PVRSRV_OK)
 		{
 			PVR_DPF((PVR_DBG_ERROR,"%s: Waiting for value aborted with error (%u)", __FUNCTION__, eError));
@@ -185,51 +149,8 @@ PVRSRVRGXDebugMiscSetFWLogKM(
 }
 
 IMG_EXPORT PVRSRV_ERROR
-PVRSRVRGXDebugMiscSetHCSDeadlineKM(
-	CONNECTION_DATA *psConnection,
-	PVRSRV_DEVICE_NODE *psDeviceNode,
-	IMG_UINT32  ui32HCSDeadlineMS)
-{
-	PVRSRV_RGXDEV_INFO* psDevInfo = psDeviceNode->pvDevice;
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-	
-	return RGXFWSetHCSDeadline(psDevInfo, ui32HCSDeadlineMS);
-}
-
-IMG_EXPORT PVRSRV_ERROR
-PVRSRVRGXDebugMiscSetOSidPriorityKM(
-	CONNECTION_DATA *psConnection,
-	PVRSRV_DEVICE_NODE *psDeviceNode,
-	IMG_UINT32  ui32OSid,
-	IMG_UINT32  ui32OSidPriority)
-{
-	PVRSRV_RGXDEV_INFO* psDevInfo = psDeviceNode->pvDevice;
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-	return RGXFWChangeOSidPriority(psDevInfo, ui32OSid, ui32OSidPriority);
-}
-
-IMG_EXPORT PVRSRV_ERROR
-PVRSRVRGXDebugMiscSetOSNewOnlineStateKM(
-	CONNECTION_DATA *psConnection,
-	PVRSRV_DEVICE_NODE *psDeviceNode,
-	IMG_UINT32  ui32OSid,
-	IMG_UINT32  ui32OSNewState)
-{
-	PVRSRV_RGXDEV_INFO* psDevInfo = psDeviceNode->pvDevice;
-	PVR_UNREFERENCED_PARAMETER(psConnection);
-
-	if (ui32OSNewState)
-	{
-		return RGXFWSetVMOnlineState(psDevInfo, ui32OSid, RGXFWIF_OS_ONLINE);
-	}
-
-	return RGXFWSetVMOnlineState(psDevInfo, ui32OSid, RGXFWIF_OS_OFFLINE);
-}
-
-IMG_EXPORT PVRSRV_ERROR
 PVRSRVRGXDebugMiscDumpFreelistPageListKM(
-	CONNECTION_DATA * psConnection,
+	CONNECTION_DATA * psConnection,	
 	PVRSRV_DEVICE_NODE *psDeviceNode)
 {
 	PVRSRV_RGXDEV_INFO* psDevInfo = psDeviceNode->pvDevice;

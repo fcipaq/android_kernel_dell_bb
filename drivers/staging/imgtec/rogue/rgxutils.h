@@ -44,126 +44,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "device.h"
 #include "rgxdevice.h"
 #include "rgxdebug.h"
-#include "pvr_notifier.h"
 #include "pvrsrv.h"
-
-/*!
-******************************************************************************
-
- @Function      RGXQueryAPMState
-
- @Description   Query the state of the APM configuration
-
- @Input         psDeviceNode : The device node
-
- @Input         pvPrivateData: Unused (required for AppHint callback)
-
- @Output        pui32State   : The APM configuration state
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXQueryAPMState(const PVRSRV_DEVICE_NODE *psDeviceNode,
-	const void *pvPrivateData,
-	IMG_UINT32 *pui32State);
-
-/*!
-******************************************************************************
-
- @Function      RGXSetAPMState
-
- @Description   Set the APM configuration state. Currently only 'OFF' is
-                supported
-
- @Input         psDeviceNode : The device node
-
- @Input         pvPrivateData: Unused (required for AppHint callback)
-
- @Input         ui32State    : The requested APM configuration state
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXSetAPMState(const PVRSRV_DEVICE_NODE *psDeviceNode,
-	const void *pvPrivateData,
-	IMG_UINT32 ui32State);
-
-/*!
-******************************************************************************
-
- @Function      RGXQueryPdumpPanicEnable
-
- @Description   Get the PDump Panic Enable configuration state.
-
- @Input         psDeviceNode : The device node
-
- @Input         pvPrivateData: Unused (required for AppHint callback)
-
- @Input         pbEnabled    : IMG_TRUE if PDump Panic is enabled
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXQueryPdumpPanicEnable(const PVRSRV_DEVICE_NODE *psDeviceNode,
-	const void *pvPrivateData,
-	IMG_BOOL *pbEnabled);
-
-/*!
-******************************************************************************
-
- @Function      RGXSetPdumpPanicEnable
-
- @Description   Set the PDump Panic Enable flag
-
- @Input         psDeviceNode : The device node
-
- @Input         pvPrivateData: Unused (required for AppHint callback)
-
- @Input         bEnable      : The requested configuration state
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXSetPdumpPanicEnable(const PVRSRV_DEVICE_NODE *psDeviceNode,
-	const void *pvPrivateData,
-	IMG_BOOL bEnable);
-
-/*!
-******************************************************************************
-
- @Function      RGXGetDeviceFlags
-
- @Description   Get the device flags for a given device
-
- @Input         psDevInfo        : The device descriptor query
-
- @Output        pui32DeviceFlags : The current state of the device flags
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXGetDeviceFlags(PVRSRV_RGXDEV_INFO *psDevInfo,
-				IMG_UINT32 *pui32DeviceFlags);
-
-/*!
-******************************************************************************
-
- @Function      RGXSetDeviceFlags
-
- @Description   Set the device flags for a given device
-
- @Input         psDevInfo : The device descriptor to modify
-
- @Input         ui32Config : The device flags to modify
-
- @Input         bSetNotClear : Set or clear the specified flags
-
- @Return        PVRSRV_ERROR
-
-******************************************************************************/
-PVRSRV_ERROR RGXSetDeviceFlags(PVRSRV_RGXDEV_INFO *psDevInfo,
-				IMG_UINT32 ui32Config,
-				IMG_BOOL bSetNotClear);
 
 /*!
 ******************************************************************************
@@ -184,21 +65,6 @@ PVRSRV_ERROR RGXRunScript(PVRSRV_RGXDEV_INFO *psDevInfo,
 				DUMPDEBUG_PRINTF_FUNC *pfnDumpDebugPrintf,
 				void *pvDumpDebugFile);
 
-/*!
-******************************************************************************
-
- @Function    RGXStringifyKickTypeDM
-
- @Description Gives the kick type DM name stringified
-
- @Input       Kick type DM
-
- @Return      Array containing the kick type DM name
-
-******************************************************************************/
-const char* RGXStringifyKickTypeDM(RGX_KICK_TYPE_DM eKickTypeDM);
-                                                                             
-#define RGX_STRINGIFY_KICK_TYPE_DM_IF_SET(bitmask, eKickTypeDM) bitmask & eKickTypeDM ? RGXStringifyKickTypeDM(eKickTypeDM) : ""
 /******************************************************************************
  End of file (rgxutils.h)
 ******************************************************************************/

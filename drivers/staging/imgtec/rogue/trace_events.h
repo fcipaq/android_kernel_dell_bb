@@ -50,10 +50,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * defines for us.
  */
 #ifdef CONFIG_EVENT_TRACING
-bool trace_rogue_are_fence_checks_traced(void);
-
-bool trace_rogue_are_fence_updates_traced(void);
-
 void trace_rogue_fence_updates(const char *cmd, const char *dm,
 							   IMG_UINT32 ui32FWContext,
 							   IMG_UINT32 ui32Offset,
@@ -89,18 +85,6 @@ void trace_rogue_ufo_checks_fail(IMG_UINT64 ui64OSTimestamp,
 								 const RGX_HWPERF_UFO_DATA_ELEMENT *puData);
 
 #else  /* CONFIG_TRACE_EVENTS */
-static inline
-bool trace_rogue_are_fence_checks_traced(void)
-{
-	return false;
-}
-
-static inline
-bool trace_rogue_are_fence_updates_traced(void)
-{
-	return false;
-}
-
 static inline
 void trace_rogue_fence_updates(const char *cmd, const char *dm,
 							   IMG_UINT32 ui32FWContext,

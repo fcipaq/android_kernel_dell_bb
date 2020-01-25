@@ -45,7 +45,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "rgxdf.h"
 #include "device.h"
 #include "rgxdevice.h"
-#include "pvrsrv_ext.h"
+#include "pvrsrv.h"
 #include "rgx_fwif_km.h"
 #include "pdump_km.h"
 #include "osfunc.h"
@@ -55,17 +55,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "sync_internal.h"
 #include "rgxfwutils.h"
 #include "img_types.h"
-
-/* Between DDK 1.6 and 1.7 the Services API changed, to replace device
- * indices with PVRSRV_DEVICE_NODE pointers. Define a helper macro to allow
- * this code to work with both versions.
- */
-#include "pvrversion.h"
-#if PVRVERSION_MAJ == 1 && PVRVERSION_MIN < 7
-# define DEVICE_NODE_OR_INDEX(psDeviceNode) ((psDeviceNode)->sDevId.ui32DeviceIndex)
-#else
-# define DEVICE_NODE_OR_INDEX(psDeviceNode) psDeviceNode
-#endif
 
 extern struct drm_device *gpsPVRDRMDev;
 
@@ -156,7 +145,7 @@ int rgx_is_device_powered(void)
 	int isPowered = IMG_FALSE;
 
 	if(psDeviceNode)
-		isPowered = PVRSRVIsDevicePowered(DEVICE_NODE_OR_INDEX(psDeviceNode));
+		isPowered = PVRSRVIsDevicePowered(psDeviceNode->sDevId.ui32DeviceIndex);
 
 	return isPowered;
 }
@@ -191,7 +180,7 @@ unsigned int RGXPreClockSpeed(void){
 		goto out;
 	}
 
-	eError = PVRSRVDevicePreClockSpeedChange(DEVICE_NODE_OR_INDEX(psDeviceNode), IMG_FALSE, NULL);
+	eError = PVRSRVDevicePreClockSpeedChange(psDeviceNode->sDevId.ui32DeviceIndex, IMG_FALSE, NULL);
 out:
 	return eError;
 }
@@ -208,7 +197,7 @@ unsigned int RGXPostClockSpeed(void){
 	}
 
 
-	PVRSRVDevicePostClockSpeedChange(DEVICE_NODE_OR_INDEX(psDeviceNode), IMG_FALSE, NULL);
+	PVRSRVDevicePostClockSpeedChange(psDeviceNode->sDevId.ui32DeviceIndex, IMG_FALSE, NULL);
 
 out:
 	return eError;

@@ -43,7 +43,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "rgxtimerquery.h"
 #include "rgxdevice.h"
-#include "rgxtimecorr.h"
 
 #include "rgxfwutils.h"
 #include "pdump_km.h"
@@ -141,7 +140,7 @@ PVRSRVRGXCurrentTime(CONNECTION_DATA    * psConnection,
 	PVR_UNREFERENCED_PARAMETER(psConnection);
 	PVR_UNREFERENCED_PARAMETER(psDeviceNode);
 
-	*pui64Time = RGXGPUFreqCalibrateClockns64();
+	*pui64Time = OSClockns64();
 
 	return PVRSRV_OK;
 }

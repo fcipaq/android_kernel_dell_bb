@@ -64,52 +64,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "pmr.h"
 #include "pmr_impl.h"
 
-/*************************************************************************/ /*!
-@Function       PhysmemNewOSRamBackedPMR
-@Description    Rogue Services will call this function to allocate GPU device 
-                memory from the PMR factory supported by the OS DDK port. This 
-                factory typically obtains physical memory from the kernel/OS 
-                API that allocates memory from the default heap of shared system 
-                memory available on the platform. The allocated memory must be 
-                page-aligned and be a whole number of pages. 
-                After allocating the required memory, the implementation must 
-                then call PMRCreatePMR() to obtain the PMR structure that 
-                describes this allocation to the upper layers of the Services.
-                memory management sub-system. 
-                NB. Implementation of this function is mandatory. If shared 
-                system memory is not to be used in the OS port then the 
-                implementation must return PVRSRV_ERROR_NOT_SUPPORTED.
-
-@Input          psDevNode        the device node
-@Input          uiSize           the size of the allocation
-                                 (must be a multiple of page size)
-@Input          uiChunkSize      when sparse allocations are requested,
-                                 this is the allocated chunk size.
-                                 For regular allocations, this will be
-                                 the same as uiSize.
-                                 (must be a multiple of page size)
-@Input          ui32NumPhysChunks  when sparse allocations are requested,
-                                   this is the number of physical chunks
-                                   to be allocated.
-                                   For regular allocations, this will be 1.
-@Input          ui32NumVirtChunks  when sparse allocations are requested,
-                                   this is the number of virtual chunks
-                                   covering the sparse allocation.
-                                   For regular allocations, this will be 1.
-@Input          pui32MappingTable  when sparse allocations are requested,
-                                   this is the list of the indices of
-                                   each physically-backed virtual chunk
-                                   For regular allocations, this will
-                                   be NULL.
-@Input          uiLog2PageSize   the physical pagesize in log2(bytes).
-@Input          uiFlags          the allocation flags.
-@Input          pszAnnotation    string describing the PMR (for debug).
-                                 This should be passed into the function
-                                 PMRCreatePMR().
-@Output         ppsPMROut        pointer to the PMR created for the
-                                 new allocation
-@Return         PVRSRV_OK on success, a failure code otherwise.
-*/ /**************************************************************************/
+/*
+ * PhysmemNewOSRamBackedPMR
+ *
+ * To be overridden on a per-OS basis.
+ *
+ * This function will create a PMR using the default "OS supplied" physical pages
+ * method, assuming such is available on a particular operating system.  (If not,
+ * PVRSRV_ERROR_NOT_SUPPORTED should be returned)
+ */
 extern PVRSRV_ERROR
 PhysmemNewOSRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
                          IMG_DEVMEM_SIZE_T uiSize,
@@ -119,7 +82,6 @@ PhysmemNewOSRamBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 						 IMG_UINT32 *pui32MappingTable,
                          IMG_UINT32 uiLog2PageSize,
                          PVRSRV_MEMALLOCFLAGS_T uiFlags,
-                         const IMG_CHAR *pszAnnotation,
                          PMR **ppsPMROut);
 
 #endif /* #ifndef _SRVSRV_PHYSMEM_OSMEM_H_ */

@@ -134,11 +134,5 @@ HeapCfgHeapDetails(CONNECTION_DATA * psConnection,
     *puiLog2DataPageSizeOut = psHeapBlueprint->uiLog2DataPageSize;
     *puiLog2ImportAlignmentOut = psHeapBlueprint->uiLog2ImportAlignment;
 
-    /* REL/1.8 maintain bridge compatibility
-     *   4:0 - uiLog2ImportAlignment (13--20)
-     * 18:16 - uiLog2TilingStrideFactor (3--4)
-     */
-    *puiLog2ImportAlignmentOut |= (psHeapBlueprint->uiLog2TilingStrideFactor << 16);
-
-    return PVRSRV_OK;
+    return PVRSRV_OK;    
 }

@@ -45,23 +45,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if !defined (__RGX_FWIF_SHARED_H__)
 #define __RGX_FWIF_SHARED_H__
 
-#if defined(__KERNEL__) && defined(LINUX) && !defined(__GENKSYMS__)
-#define __pvrsrv_defined_struct_enum__
-#include <services_kernel_client.h>
-#endif
-
 #include "img_types.h"
 #include "rgx_common.h"
 #include "devicemem_typedefs.h"
 
-/*
- * Firmware binary block unit in bytes.
- * Raw data stored in FW binary will be aligned on this size.
- */
-#define FW_BLOCK_SIZE 4096L
-
-/* Offset for BVNC struct from the end of the FW binary */
-#define FW_BVNC_BACKWARDS_OFFSET (FW_BLOCK_SIZE)
 
 /*!
  ******************************************************************************
@@ -73,7 +60,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define RGXKMIF_DEVICE_STATE_DUST_REQUEST_INJECT_EN (0x1 << 3)		/*!< Used for validation to inject dust requests every TA/3D kick */
 #define RGXKMIF_DEVICE_STATE_HWPERF_HOST_EN         (0x1 << 4)		/*!< Used to enable host-side-only HWPerf stream */
 
-/* Required memory alignment for 64-bit variables accessible by Meta
+/* Required memory alignment for 64-bit variables accessible by Meta 
   (the gcc meta aligns 64-bit vars to 64-bit; therefore, mem shared between
    the host and meta that contains 64-bit vars has to maintain this aligment)*/
 #define RGXFWIF_FWALLOC_ALIGN	sizeof(IMG_UINT64)
@@ -86,7 +73,12 @@ typedef struct _RGXFWIF_DEV_VIRTADDR_
 typedef struct _RGXFWIF_DMA_ADDR_
 {
 	IMG_DEV_VIRTADDR        RGXFW_ALIGN psDevVirtAddr;
+
+#if defined(RGX_FIRMWARE)
+	IMG_PBYTE               pbyFWAddr;
+#else
 	RGXFWIF_DEV_VIRTADDR    pbyFWAddr;
+#endif
 } UNCACHED_ALIGN RGXFWIF_DMA_ADDR;
 
 typedef IMG_UINT8	RGXFWIF_CCCB;
@@ -102,11 +94,7 @@ typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_RTA_CTL;
 typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_UFO_ADDR;
 typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_CLEANUP_CTL;
 typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_TIMESTAMP_ADDR;
-typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_WORKLOAD_DATA;
-typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_DEADLINE_LIST_NODE;
-typedef RGXFWIF_DEV_VIRTADDR  PRGXFWIF_WORKLOAD_LIST_NODE;
 
-/* FIXME PRGXFWIF_UFO_ADDR and RGXFWIF_UFO should move back into rgx_fwif_client.h */
 typedef struct _RGXFWIF_UFO_
 {
 	PRGXFWIF_UFO_ADDR	puiAddrUFO;
@@ -164,7 +152,7 @@ typedef struct _RGXFWIF_CCCB_CTL_
 	IMG_UINT32				ui32WrapMask;		/*!< Offset wrapping mask (Total capacity of the CCB - 1) */
 } UNCACHED_ALIGN RGXFWIF_CCCB_CTL;
 
-typedef enum
+typedef enum 
 {
 	RGXFW_LOCAL_FREELIST = 0,
 	RGXFW_GLOBAL_FREELIST = 1,
@@ -176,13 +164,18 @@ typedef enum
 
 typedef struct _RGXFWIF_RTA_CTL_
 {
-	IMG_UINT32           ui32RenderTargetIndex;		//Render number
-	IMG_UINT32           ui32CurrentRenderTarget;	//index in RTA
-	IMG_UINT32           ui32ActiveRenderTargets;	//total active RTs
-	IMG_UINT32           ui32CumulActiveRenderTargets;   //total active RTs from the first TA kick, for OOM
-	RGXFWIF_DEV_VIRTADDR sValidRenderTargets;  //Array of valid RT indices
-	RGXFWIF_DEV_VIRTADDR sNumRenders;  //Array of number of occurred partial renders per render target
-	IMG_UINT16           ui16MaxRTs;   //Number of render targets in the array
+	IMG_UINT32				ui32RenderTargetIndex;		//Render number
+	IMG_UINT32				ui32CurrentRenderTarget;	//index in RTA
+	IMG_UINT32				ui32ActiveRenderTargets;	//total active RTs
+	IMG_UINT32				ui32CumulActiveRenderTargets;   //total active RTs from the first TA kick, for OOM
+#if defined(RGX_FIRMWARE)
+	IMG_UINT32				*paui32ValidRenderTargets;	//Array of valid RT indices
+	IMG_UINT32              		*paui32NumRenders;  //Array of number of occurred partial renders per render target
+#else
+	RGXFWIF_DEV_VIRTADDR			paui32ValidRenderTargets;  //Array of valid RT indices
+	RGXFWIF_DEV_VIRTADDR    		paui32NumRenders;  //Array of number of occurred partial renders per render target
+#endif
+	IMG_UINT16              		ui16MaxRTs;   //Number of render targets in the array
 } UNCACHED_ALIGN RGXFWIF_RTA_CTL;
 
 typedef struct _RGXFWIF_FREELIST_
@@ -200,7 +193,8 @@ typedef struct _RGXFWIF_FREELIST_
 	IMG_BOOL			bGrowPending;
 } UNCACHED_ALIGN RGXFWIF_FREELIST;
 
-typedef enum
+#if defined(RGX_FEATURE_RAY_TRACING)
+typedef enum 
 {
 	RGXFW_RPM_SHF_FREELIST = 0,
 	RGXFW_RPM_SHG_FREELIST = 1,
@@ -211,7 +205,7 @@ typedef enum
 typedef struct _RGXFWIF_RPM_FREELIST_
 {
 	IMG_DEV_VIRTADDR	RGXFW_ALIGN sFreeListDevVAddr;		/*!< device base address */
-	//IMG_DEV_VIRTADDR	RGXFW_ALIGN sRPMPageListDevVAddr;	/*!< device base address for RPM pages in-use */
+	IMG_DEV_VIRTADDR	RGXFW_ALIGN sRPMPageListDevVAddr;	/*!< device base address for RPM pages in-use */
 	IMG_UINT32			sSyncAddr;				/*!< Free list sync object for OOM event */
 	IMG_UINT32			ui32MaxPages;			/*!< maximum size */
 	IMG_UINT32			ui32GrowPages;			/*!< grow size = maximum pages which may be added later */
@@ -220,7 +214,7 @@ typedef struct _RGXFWIF_RPM_FREELIST_
 	IMG_UINT32			ui32WriteOffset;		/*!< tail: where to write de-alloc'd pages */
 	IMG_BOOL			bReadToggle;			/*!< toggle bit for circular buffer */
 	IMG_BOOL			bWriteToggle;
-	IMG_UINT32			ui32AllocatedPageCount; /*!< TODO: not sure yet if this is useful */
+	IMG_UINT32			ui32AllocatedPageCount;
 	IMG_UINT32			ui32HWRCounter;
 	IMG_UINT32			ui32FreeListID;			/*!< unique ID per device, e.g. rolling counter */
 	IMG_BOOL			bGrowPending;			/*!< FW is waiting for host to grow the freelist */
@@ -229,12 +223,11 @@ typedef struct _RGXFWIF_RPM_FREELIST_
 typedef struct _RGXFWIF_RAY_FRAME_DATA_
 {
 	/* state manager for shared state between vertex and ray processing */
-
-	/* TODO: not sure if this will be useful, link it here for now */
+	
 	IMG_UINT32		sRPMFreeLists[RGXFW_MAX_RPM_FREELISTS];
-
+	
 	IMG_BOOL		bAbortOccurred;
-
+	
 	/* cleanup state.
 	 * Both the SHG and RTU must complete or discard any outstanding work
 	 * which references this frame data.
@@ -246,7 +239,7 @@ typedef struct _RGXFWIF_RAY_FRAME_DATA_
 #define HWFRAMEDATA_RTU_CLEAN	(1 << 1)
 
 } UNCACHED_ALIGN RGXFWIF_RAY_FRAME_DATA;
-
+#endif
 
 typedef struct _RGXFWIF_RENDER_TARGET_
 {
@@ -256,17 +249,24 @@ typedef struct _RGXFWIF_RENDER_TARGET_
 } UNCACHED_ALIGN RGXFWIF_RENDER_TARGET;
 
 
-typedef struct _RGXFWIF_HWRTDATA_
+typedef struct _RGXFWIF_HWRTDATA_ 
 {
 	RGXFWIF_RTDATA_STATE	eState;
 
 	IMG_UINT32				ui32NumPartialRenders; /*!< Number of partial renders. Used to setup ZLS bits correctly */
 	IMG_DEV_VIRTADDR		RGXFW_ALIGN psPMMListDevVAddr; /*!< MList Data Store */
 
+#if defined(RGX_FEATURE_SCALABLE_TE_ARCH)
 	IMG_UINT64				RGXFW_ALIGN ui64VCECatBase[4];
 	IMG_UINT64				RGXFW_ALIGN ui64VCELastCatBase[4];
 	IMG_UINT64				RGXFW_ALIGN ui64TECatBase[4];
 	IMG_UINT64				RGXFW_ALIGN ui64TELastCatBase[4];
+#else
+	IMG_UINT64				RGXFW_ALIGN ui64VCECatBase;
+	IMG_UINT64				RGXFW_ALIGN ui64VCELastCatBase;
+	IMG_UINT64				RGXFW_ALIGN ui64TECatBase;
+	IMG_UINT64				RGXFW_ALIGN ui64TELastCatBase;
+#endif
 	IMG_UINT64				RGXFW_ALIGN ui64AlistCatBase;
 	IMG_UINT64				RGXFW_ALIGN ui64AlistLastCatBase;
 
@@ -276,9 +276,9 @@ typedef struct _RGXFWIF_HWRTDATA_
 	IMG_UINT64				RGXFW_ALIGN ui64PMAListStackPointer;
 	IMG_UINT32				ui32PMMListStackPointer;
 
-	PRGXFWIF_FREELIST 		RGXFW_ALIGN apsFreeLists[RGXFW_MAX_FREELISTS];
+	PRGXFWIF_FREELIST 		RGXFW_ALIGN apsFreeLists[RGXFW_MAX_FREELISTS]; 
 	IMG_UINT32				aui32FreeListHWRSnapshot[RGXFW_MAX_FREELISTS];
-
+	
 	PRGXFWIF_RENDER_TARGET	psParentRenderTarget;
 
 	RGXFWIF_CLEANUP_CTL		sTACleanupState;
@@ -296,7 +296,6 @@ typedef struct _RGXFWIF_HWRTDATA_
 	IMG_UINT32				ui32PPPGridOffset;
 	IMG_UINT64				RGXFW_ALIGN ui64PPPMultiSampleCtl;
 	IMG_UINT32				ui32TPCStride;
-	IMG_UINT32				bLastWasPartial; /*!< Whether the last render was a partial render */
 	IMG_DEV_VIRTADDR		RGXFW_ALIGN sTailPtrsDevVAddr;
 	IMG_UINT32				ui32TPCSize;
 	IMG_UINT32				ui32TEScreen;
@@ -310,7 +309,6 @@ typedef struct _RGXFWIF_HWRTDATA_
 	IMG_UINT32				ui32ISPMergeUpperY;
 	IMG_UINT32				ui32ISPMergeScaleX;
 	IMG_UINT32				ui32ISPMergeScaleY;
-	IMG_BOOL				bDisableTileReordering;
 } UNCACHED_ALIGN RGXFWIF_HWRTDATA;
 
 typedef enum
@@ -338,18 +336,19 @@ typedef struct _RGXFWIF_ZSBUFFER_
  *****************************************************************************/
 /* WARNING: RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX can be increased only and
 		always equal to (N * sizeof(IMG_UINT32) - 1) */
-#define RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX 7
+#define RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX 3 /* WARNING: Do not change this macro without changing 
+			accesses from dword to byte in function rgx_bvnc_packed() */
 
 /* WARNING: Whenever the layout of RGXFWIF_COMPCHECKS_BVNC is a subject of change,
-	following define should be increased by 1 to indicate to compatibility logic,
+	following define should be increased by 1 to indicate to compatibility logic, 
 	that layout has changed */
-#define RGXFWIF_COMPCHECKS_LAYOUT_VERSION 2
+#define RGXFWIF_COMPCHECKS_LAYOUT_VERSION 1
 
 typedef struct _RGXFWIF_COMPCHECKS_BVNC_
 {
 	IMG_UINT32	ui32LayoutVersion; /* WARNING: This field must be defined as first one in this structure */
 	IMG_UINT32  ui32VLenMax;
-	IMG_UINT64	RGXFW_ALIGN ui64BNC;
+	IMG_UINT32	ui32BNC;
 	IMG_CHAR	aszV[RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX + 1];
 } UNCACHED_ALIGN RGXFWIF_COMPCHECKS_BVNC;
 
@@ -364,7 +363,7 @@ typedef struct _RGXFWIF_COMPCHECKS_BVNC_
 	do { \
 		(name).ui32LayoutVersion = RGXFWIF_COMPCHECKS_LAYOUT_VERSION; \
 		(name).ui32VLenMax = RGXFWIF_COMPCHECKS_BVNC_V_LEN_MAX; \
-		(name).ui64BNC = 0; \
+		(name).ui32BNC = 0; \
 		(name).aszV[0] = 0; \
 	} while (0)
 
@@ -401,7 +400,7 @@ typedef struct _RGXFWIF_COMPCHECKS_
 #if defined(EMULATOR)
 
 /* On emulator platform, the sizes are kept as 64 KB for all contexts as the cCCBs
- * are expected to be almost always used up to their full sizes */
+ * are expected to be almost always used upto their full sizes */
 
 #define RGX_TQ3D_CCB_SIZE_LOG2	16	/* 64K */
 #define RGX_TQ2D_CCB_SIZE_LOG2	16
@@ -447,92 +446,30 @@ typedef enum _RGXFWIF_CCB_CMD_TYPE_
 	RGXFWIF_CCB_CMD_TYPE_RTU		= 209 | RGX_CCB_TYPE_TASK,
 	RGXFWIF_CCB_CMD_TYPE_RTU_FC		  = 210 | RGX_CCB_TYPE_TASK,
 	RGXFWIF_CCB_CMD_TYPE_PRE_TIMESTAMP = 211 | RGX_CCB_TYPE_TASK,
-	RGXFWIF_CCB_CMD_TYPE_TQ_TDM     = 212 | RGX_CCB_TYPE_TASK,
 
 /* Leave a gap between CCB specific commands and generic commands */
-	RGXFWIF_CCB_CMD_TYPE_FENCE          = 213,
-	RGXFWIF_CCB_CMD_TYPE_UPDATE         = 214,
-	RGXFWIF_CCB_CMD_TYPE_RMW_UPDATE     = 215,
-	RGXFWIF_CCB_CMD_TYPE_FENCE_PR       = 216,
-	RGXFWIF_CCB_CMD_TYPE_PRIORITY       = 217,
+	RGXFWIF_CCB_CMD_TYPE_FENCE          = 212,
+	RGXFWIF_CCB_CMD_TYPE_UPDATE         = 213,
+	RGXFWIF_CCB_CMD_TYPE_RMW_UPDATE     = 214,
+	RGXFWIF_CCB_CMD_TYPE_FENCE_PR       = 215,
+	RGXFWIF_CCB_CMD_TYPE_PRIORITY       = 216,
 /* Pre and Post timestamp commands are supposed to sandwich the DM cmd. The
    padding code with the CCB wrap upsets the FW if we don't have the task type
    bit cleared for POST_TIMESTAMPs. That's why we have 2 different cmd types.
 */
-	RGXFWIF_CCB_CMD_TYPE_POST_TIMESTAMP = 218,
-	RGXFWIF_CCB_CMD_TYPE_UNFENCED_UPDATE = 219,
-	RGXFWIF_CCB_CMD_TYPE_UNFENCED_RMW_UPDATE = 220,
-
-	RGXFWIF_CCB_CMD_TYPE_PADDING	= 221,
+	RGXFWIF_CCB_CMD_TYPE_POST_TIMESTAMP = 217,
+	RGXFWIF_CCB_CMD_TYPE_UNFENCED_UPDATE = 218,
+	RGXFWIF_CCB_CMD_TYPE_UNFENCED_RMW_UPDATE = 219,
+	
+	RGXFWIF_CCB_CMD_TYPE_PADDING	= 220,
 } RGXFWIF_CCB_CMD_TYPE;
 
-typedef struct _RGXFWIF_WORKLOAD_DATA_
-{
-	/* Workload characteristics data*/
-	IMG_UINT64 RGXFW_ALIGN                    ui64WorkloadCharacteristics;
-	/* Deadline for the workload */
-	IMG_UINT64 RGXFW_ALIGN                    ui64DeadlineInus;
-	/* Bool for whether the workload was completed */
-	IMG_BOOL                                  bComplete;
-	/* Predicted time taken to do the work in cycles */
-	IMG_UINT64 RGXFW_ALIGN                    ui64CyclesPrediction;
-	/* The actual time taken in cycles */
-	IMG_UINT64 RGXFW_ALIGN                    ui64CyclesTaken;
-	/* The memory descriptor for this workload */
-	IMG_UINT64 RGXFW_ALIGN                    ui64SelfMemDesc;
-	/* Memory descriptor to be able to chain workload data */
-	IMG_UINT64 RGXFW_ALIGN                    ui64NextNodeMemdesc;
-	/* Reference to Host side data */
-	IMG_UINT64 RGXFW_ALIGN                    ui64WorkloadHostData;
-	/* Reference to Specific Hash table */
-	IMG_UINT64 RGXFW_ALIGN                    ui64WorkloadMatchingData;
-	/* The following are for the memory management of the PDVFS workload
-	 * tree in the firmware */
-	PRGXFWIF_DEADLINE_LIST_NODE RGXFW_ALIGN  sDeadlineNodeFWAddress;
-	PRGXFWIF_WORKLOAD_LIST_NODE RGXFW_ALIGN  sWorkloadNodeFWAddress;
-	IMG_UINT64 RGXFW_ALIGN                    ui64DeadlineNodeMemDesc;
-	IMG_UINT64 RGXFW_ALIGN                    ui64WorkloadNodeMemDesc;
-} RGXFWIF_WORKLOAD_DATA;
-
-typedef struct _RGXFWIF_WORKEST_KICK_DATA_
-{
-	/* Index for the KM Workload estimation return data array */
-	IMG_UINT64 RGXFW_ALIGN                    ui64ReturnDataIndex;
-	/* Deadline for the workload */
-	IMG_UINT64 RGXFW_ALIGN                    ui64DeadlineInus;
-	/* Predicted time taken to do the work in cycles */
-	IMG_UINT64 RGXFW_ALIGN                    ui64CyclesPrediction;
-} RGXFWIF_WORKEST_KICK_DATA;
-
-typedef struct _RGXFWIF_WORKLOAD_LIST_NODE_ RGXFWIF_WORKLOAD_LIST_NODE;
-typedef struct _RGXFWIF_DEADLINE_LIST_NODE_ RGXFWIF_DEADLINE_LIST_NODE;
-
-struct _RGXFWIF_WORKLOAD_LIST_NODE_
-{
-	IMG_UINT64 RGXFW_ALIGN ui64Cycles;
-	IMG_UINT64 RGXFW_ALIGN ui64SelfMemDesc;
-	IMG_UINT64 RGXFW_ALIGN ui64WorkloadDataMemDesc;
-	IMG_BOOL					bReleased;
-	RGXFWIF_WORKLOAD_LIST_NODE *psNextNode;
-};
-
-struct _RGXFWIF_DEADLINE_LIST_NODE_
-{
-	IMG_UINT64 RGXFW_ALIGN ui64DeadlineInus;
-	RGXFWIF_WORKLOAD_LIST_NODE *psWorkloadList;
-	IMG_UINT64 RGXFW_ALIGN ui64SelfMemDesc;
-	IMG_UINT64 RGXFW_ALIGN ui64WorkloadDataMemDesc;
-	IMG_BOOL					bReleased;
-	RGXFWIF_DEADLINE_LIST_NODE *psNextNode;
-};
 typedef struct _RGXFWIF_CCB_CMD_HEADER_
 {
-	RGXFWIF_CCB_CMD_TYPE				eCmdType;
-	IMG_UINT32							ui32CmdSize;
-	IMG_UINT32							ui32ExtJobRef; /*!< external job reference - provided by client and used in debug for tracking submitted work */
-	IMG_UINT32							ui32IntJobRef; /*!< internal job reference - generated by services and used in debug for tracking submitted work */
-	PRGXFWIF_WORKLOAD_DATA RGXFW_ALIGN	sWorkloadDataFWAddr;
-	RGXFWIF_WORKEST_KICK_DATA			sWorkEstKickData; /*!< Workload Estimation - Workload Estimation Data */
+	RGXFWIF_CCB_CMD_TYPE	eCmdType;
+	IMG_UINT32				ui32CmdSize;
+	IMG_UINT32				ui32ExtJobRef; /*!< external job reference - provided by client and used in debug for tracking submitted work */
+	IMG_UINT32				ui32IntJobRef; /*!< internal job reference - generated by services and used in debug for tracking submitted work */
 } RGXFWIF_CCB_CMD_HEADER;
 
 typedef enum _RGXFWIF_REG_CFG_TYPE_
@@ -543,7 +480,6 @@ typedef enum _RGXFWIF_REG_CFG_TYPE_
 	RGXFWIF_REG_CFG_TYPE_3D,	         /* 3D kick */
 	RGXFWIF_REG_CFG_TYPE_CDM,	         /* Compute kick */
 	RGXFWIF_REG_CFG_TYPE_TLA,	         /* TLA kick */
-	RGXFWIF_REG_CFG_TYPE_TDM,	         /* TDM kick */
 	RGXFWIF_REG_CFG_TYPE_ALL             /* Applies to all types. Keep as last element */
 } RGXFWIF_REG_CFG_TYPE;
 
@@ -558,7 +494,6 @@ typedef struct _RGXFWIF_REG_CFG_REC_
 typedef struct _RGXFWIF_TIME_CORR_
 {
 	IMG_UINT64 RGXFW_ALIGN ui64OSTimeStamp;
-	IMG_UINT64 RGXFW_ALIGN ui64OSMonoTimeStamp;
 	IMG_UINT64 RGXFW_ALIGN ui64CRTimeStamp;
 	IMG_UINT32             ui32CoreClockSpeed;
 
@@ -600,8 +535,8 @@ typedef struct _RGXFWIF_TIME_CORR_
 
 #define RGXFWIF_GET_CRDELTA_TO_OSDELTA_K_NS(clockfreq, remainder) \
 	OSDivide64((256000000ULL << RGXFWIF_CRDELTA_TO_OSDELTA_ACCURACY_SHIFT), \
-			   ((clockfreq) + 500) / 1000, \
-			   &(remainder))
+	           ((clockfreq) + 500) / 1000, \
+	           &(remainder))
 
 #define RGXFWIF_GET_DELTA_OSTIME_NS(deltaCR, K) \
 	( ((deltaCR) * (K)) >> RGXFWIF_CRDELTA_TO_OSDELTA_ACCURACY_SHIFT)
@@ -614,16 +549,7 @@ typedef struct _RGXFWIF_TIME_CORR_
  * calibration)
  */
 #define RGXFWIF_GET_GPU_CLOCK_FREQUENCY_HZ(deltacr_us, deltaos_us, remainder) \
-    OSDivide64((deltacr_us) * 256000000, (deltaos_us), &(remainder))
-
-/* 
-	The maximum configurable size via RGX_FW_HEAP_SHIFT is
-	32MiB (1<<25) and the minimum is 4MiB (1<<22); the
-	default firmware heap size is set to maximum 32MiB.
-*/
-#if (RGX_FW_HEAP_SHIFT < 22 || RGX_FW_HEAP_SHIFT > 25)
-#error "RGX_FW_HEAP_SHIFT is outside valid range [22, 25]"
-#endif
+	OSDivide64((deltacr_us) * 256000000, (deltaos_us), &(remainder))
 
 #endif /*  __RGX_FWIF_SHARED_H__ */
 

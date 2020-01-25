@@ -52,12 +52,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined (NO_INLINE_FUNCS)
 	#define	INLINE
 	#define	FORCE_INLINE
-#elif defined(INTEGRITY_OS)
-	#ifndef INLINE
-	#define	INLINE
-	#endif
-	#define	FORCE_INLINE			static
-	#define INLINE_IS_PRAGMA
 #else
 #if defined (__cplusplus)
 	#define INLINE					inline
@@ -82,13 +76,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		__GNUC__ > (major) ||									\
 		(__GNUC__ == (major) && __GNUC_MINOR__ >= (minor))))
 
-/* Ensure Clang's __has_extension macro is defined for all compilers so we
- * can use it safely in preprocessor conditionals.
- */
-#if !defined(__has_extension)
-#define __has_extension(e) 0
-#endif
-
 /* Use this in any file, or use attributes under GCC - see below */
 #ifndef PVR_UNREFERENCED_PARAMETER
 #define	PVR_UNREFERENCED_PARAMETER(param) ((void)(param))
@@ -111,20 +98,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if !defined(static_assert) && !defined(_MSC_VER) && \
 		(!defined(__cplusplus) || __cplusplus < 201103L)
 	/* static_assert isn't already available */
-	#if !defined(__cplusplus) && (GCC_VERSION_AT_LEAST(4, 6) || \
-								  (defined(__clang__) && __has_extension(c_static_assert)))
+	#if GCC_VERSION_AT_LEAST(4, 6) && !defined(__cplusplus)
 		#define static_assert _Static_assert
 	#else
 		#define static_assert(expr, message) \
 			extern int _static_assert_failed[2*!!(expr) - 1] __attribute__((unused))
 	#endif
-#else
-#if defined(CONFIG_L4)
-	/* Defined but not compatible with DDK usage
-	   so undefine & ignore */
-	#undef static_assert
-	#define static_assert(expr, message)
-#endif
 #endif
 
 /*! Macro to calculate the n-byte aligned value from that supplied rounding up.
@@ -134,6 +113,26 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * cut off digits, e.g. imagine a 64 bit address in _x and a 32 bit value in _n.
  */
 #define PVR_ALIGN(_x, _n)   (((_x)+((_n)-1)) & ~((_n)-1))
+
+
+/* The best way to supress unused parameter warnings using GCC is to use a
+ * variable attribute.  Place the unref__ between the type and name of an
+ * unused parameter in a function parameter list, eg `int unref__ var'. This
+ * should only be used in GCC build environments, for example, in files that
+ * compile only on Linux. Other files should use UNREFERENCED_PARAMETER */
+#ifdef __GNUC__
+#define unref__ __attribute__ ((unused))
+#else
+#define unref__
+#endif
+
+#if __GNUC__ >= 3
+# define IMG_LIKELY(x) __builtin_expect (!!(x), 1)
+# define IMG_UNLIKELY(x) __builtin_expect (!!(x), 0)
+#else
+# define IMG_LIKELY(x) (x)
+# define IMG_UNLIKELY(x) (x)
+#endif
 
 #if defined(_WIN32)
 
@@ -190,6 +189,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 			_CRTIMP void __cdecl abort(void);
 		#endif
 	#endif
+	#if defined(EXIT_ON_ABORT)
+		#define IMG_ABORT()	exit(1);
+	#else
+		#define IMG_ABORT()	abort();
+	#endif
+//	#define IMG_ABORT()	img_abort()
 #endif /* UNDER_WDDM */
 #else
 	#if defined(LINUX) || defined(__METAG) || defined(__QNXNTO__)
@@ -205,21 +210,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 		#define IMG_IMPORT
 		#define IMG_RESTRICT	__restrict__
 
-	#elif defined(INTEGRITY_OS)
-		#define IMG_CALLCONV
-		#define IMG_INTERNAL
-		#define IMG_EXPORT
-		#define IMG_RESTRICT
-		#define C_CALLCONV
-		#define __cdecl
-		/* IMG_IMPORT is defined as IMG_EXPORT so that headers and implementations match.
-		 * Some compilers require the header to be declared IMPORT, while the implementation is declared EXPORT 
-		 */
-		#define	IMG_IMPORT	IMG_EXPORT 
-		#ifndef USE_CODE
-		#define IMG_ABORT()	printf("IMG_ABORT was called.\n")
-
-		#endif
 	#else
 		#error("define an OS")
 	#endif
@@ -234,97 +224,30 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	#endif
 #endif
 
-/* The best way to suppress unused parameter warnings using GCC is to use a
- * variable attribute.  Place the __maybe_unused between the type and name of an
- * unused parameter in a function parameter list, eg `int __maybe_unused var'. This
- * should only be used in GCC build environments, for example, in files that
- * compile only on Linux. Other files should use PVR_UNREFERENCED_PARAMETER */
+#if defined(__GNUC__)
+#define IMG_FORMAT_PRINTF(x,y)		__attribute__((format(printf,x,y)))
+#else
+#define IMG_FORMAT_PRINTF(x,y)
+#endif
 
-/* Kernel macros for compiler attributes */
-/* Note: param positions start at 1 */
-#if defined(LINUX) && defined(__KERNEL__)
-	#include <linux/compiler.h>
-#elif defined(__GNUC__) || defined(HAS_GNUC_ATTRIBUTES)
-	#define __must_check       __attribute__((warn_unused_result))
-	#define __maybe_unused     __attribute__((unused))
-	#define __malloc           __attribute__((malloc))
+#if defined(__GNUC__)
+#define IMG_WARN_UNUSED_RESULT		__attribute__((warn_unused_result))
+#else
+#define IMG_WARN_UNUSED_RESULT
+#endif
 
-	/* Bionic's <sys/cdefs.h> might have defined these already */
-	#if !defined(__packed)
-		#define __packed           __attribute__((packed))
-	#endif
-	#if !defined(__aligned)
-		#define __aligned(n)       __attribute__((aligned(n)))
-	#endif
-
-	/* That one compiler that supports attributes but doesn't support
-	 * the printf attribute... */
+#if defined(_MSC_VER) || defined(CC_ARM)
+	#define IMG_NORETURN __declspec(noreturn)
+#else
 	#if defined(__GNUC__)
-		#define __printf(fmt, va)  __attribute__((format(printf, fmt, va)))
+		#define IMG_NORETURN __attribute__((noreturn))
 	#else
-		#define __printf(fmt, va)
-	#endif /* defined(__GNUC__) */
-
-#else
-	/* Silently ignore those attributes */
-	#define __printf(fmt, va)
-	#define __packed
-	#define __aligned(n)
-	#define __must_check
-	#define __maybe_unused
-	#define __malloc
+		#define IMG_NORETURN
+	#endif
 #endif
 
-
-/* Other attributes, following the same style */
-#if defined(__GNUC__) || defined(HAS_GNUC_ATTRIBUTES)
-	#define __param_nonnull(...)  __attribute__((nonnull(__VA_ARGS__)))
-	#define __returns_nonnull     __attribute__((returns_nonnull))
-#else
-	#define __param_nonnull(...)
-	#define __returns_nonnull
-#endif
-
-
-/* GCC builtins */
-#if defined(LINUX) && defined(__KERNEL__)
-	#include <linux/compiler.h>
-#elif defined(__GNUC__)
-	#define likely(x)   __builtin_expect(!!(x), 1)
-	#define unlikely(x) __builtin_expect(!!(x), 0)
-
-	/* Compiler memory barrier to prevent reordering */
-	#define barrier() __asm__ __volatile__("": : :"memory")
-#else
-	#define barrier() do { static_assert(0, "barrier() isn't supported by your compiler"); } while(0)
-#endif
-
-/* That one OS that defines one but not the other... */
-#ifndef likely
-	#define likely(x)   (x)
-#endif
-#ifndef unlikely
-	#define unlikely(x) (x)
-#endif
-
-
-#if defined(__noreturn)
-	/* Already defined by the Kernel */
-#elif defined(_MSC_VER) || defined(CC_ARM)
-	#define __noreturn __declspec(noreturn)
-#elif defined(__GNUC__) || defined(HAS_GNUC_ATTRIBUTES)
-	#define __noreturn __attribute__((noreturn))
-#else
-	#define __noreturn
-#endif
-
-#ifndef MAX
 #define MAX(a,b) 					(((a) > (b)) ? (a) : (b))
-#endif
-
-#ifndef MIN
 #define MIN(a,b) 					(((a) < (b)) ? (a) : (b))
-#endif
 
 /* Get a structures address from the address of a member */
 #define IMG_CONTAINER_OF(ptr, type, member) \
@@ -349,61 +272,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	void operator=(const C&)
 #endif
 
-#if defined(SUPPORT_PVR_VALGRIND) && !defined(__METAG)
-	#include "/usr/include/valgrind/memcheck.h"
+#if defined(SUPPORT_PVR_VALGRIND)
+	#if !defined(__METAG)
+		#include "/usr/include/valgrind/memcheck.h"
 
-	#define VG_MARK_INITIALIZED(pvData,ui32Size)  VALGRIND_MAKE_MEM_DEFINED(pvData,ui32Size)
-	#define VG_MARK_NOACCESS(pvData,ui32Size) VALGRIND_MAKE_MEM_NOACCESS(pvData,ui32Size)
-	#define VG_MARK_ACCESS(pvData,ui32Size) VALGRIND_MAKE_MEM_UNDEFINED(pvData,ui32Size)
-#else
-	#if defined(_MSC_VER)
-	#	define PVR_MSC_SUPPRESS_4127 __pragma(warning(suppress:4127))
+		#define VALGRIND_HEADER_PRESENT
+
+		#define VG_MARK_INITIALIZED(pvData,ui32Size)  VALGRIND_MAKE_MEM_DEFINED(pvData,ui32Size)
 	#else
-	#	define PVR_MSC_SUPPRESS_4127
+		#define VG_MARK_INITIALIZED(pvData,ui32Size) do { } while(0)
 	#endif
-
-	#define VG_MARK_INITIALIZED(pvData,ui32Size) PVR_MSC_SUPPRESS_4127 do { } while(0)
-	#define VG_MARK_NOACCESS(pvData,ui32Size) PVR_MSC_SUPPRESS_4127 do { } while(0)
-	#define VG_MARK_ACCESS(pvData,ui32Size) PVR_MSC_SUPPRESS_4127 do { } while(0)
-#endif
-
-#define _STRINGIFY(x) # x
-#define IMG_STRINGIFY(x) _STRINGIFY(x)
-
-#if defined(INTEGRITY_OS)
-	/* Definitions not present in INTEGRITY. */
-	#define PATH_MAX	200
-#endif
-
-#if defined (__clang__) || defined (__GNUC__)
-	/* __SIZEOF_POINTER__ is defined already by these compilers */
-#elif defined (INTEGRITY_OS)
-	#if defined (__Ptr_Is_64)
-		#define __SIZEOF_POINTER__ 8
-	#else
-		#define __SIZEOF_POINTER__ 4
-	#endif
-#elif defined(_WIN32)
-	#define __SIZEOF_POINTER__ sizeof(char *)
 #else
-	#warning Unknown OS - using default method to determine whether CPU arch is 64-bit.
-	#define __SIZEOF_POINTER__ sizeof(char *)
+
+	#define VG_MARK_INITIALIZED(pvData,ui32Size) do { } while(0)
 #endif
 
-/* RDI8567: clang/llvm load/store optimisations cause issues with device
- * memory allocations. Some pointers are made 'volatile' to prevent
- * this optimisations being applied to writes through that particular pointer.
- */
-#if defined(__clang__) && defined(__aarch64__)
-#define NOLDSTOPT volatile
-/* after applying 'volatile' to a pointer, we may need to cast it to 'void *'
- * to keep it compatible with its existing uses
- */
-#define NOLDSTOPT_VOID (void *)
-#else
-#define NOLDSTOPT
-#define NOLDSTOPT_VOID
-#endif
 
 #endif /* #if !defined (__IMG_DEFS_H__) */
 /*****************************************************************************

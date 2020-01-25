@@ -107,7 +107,7 @@ PVRSRV_ERROR IMG_CALLCONV SCPCreate(IMG_UINT32 ui32CCBSizeLog2,
 @Output         ppvCompleteData         Pointer to memory allocated for command
                                         complete callback data
 
-@Return         PVRSRV_OK if the allocate was successful
+@Return         PVRSRV_OK if the allocate was successfull
 */
 /*****************************************************************************/
 IMG_IMPORT
@@ -164,14 +164,11 @@ PVRSRV_ERROR SCPRun(SCP_CONTEXT *psContext);
 
 @Input          psSCPContext            Context to process
 
-@Input          bIgnoreFences           Do not respect any fence checks.
-
 @Return         PVRSRV_OK if the software command processor was run
 */
 /*****************************************************************************/
 IMG_IMPORT
-void SCPCommandComplete(SCP_CONTEXT *psContext,
-                        IMG_BOOL bIgnoreFences);
+void SCPCommandComplete(SCP_CONTEXT *psContext);
 
 /*************************************************************************/ /*!
 @Function       SCPFlush
