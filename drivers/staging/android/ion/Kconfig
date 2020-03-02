@@ -30,15 +30,3 @@ config ION_POOL_CACHE_POLICY
 	help
 	  Choose this option if need to explicity set cache policy of the
 	  pages in the page pool.
-
-config ION_DMA32_LIMIT_CHECK
-	bool "Ion dma32 access limit check"
-	depends on ION && X86
-	default n
-	help
-	  Choose this option to enable device dma32 access limit check.
-	  Among all the hardwares using ion, some of them can only access
-	  physical address below 4G, i.e. DMA32 access limit. If the system
-	  has physical ram above 4G and has such limited hardwares, this
-	  config should be enabled. Then ION will take care and prevent
-	  allocating memory above 4G to these hardwares.

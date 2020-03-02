@@ -76,24 +76,21 @@ static void flush_to_bottom_log(struct logger_log *log,
 {
 	struct logger_entry header;
 	char extendedtag[8] = "\4KERNEL\0";
+	u64 ts;
+	unsigned long rem_nsec;
 	unsigned long flags;
 	struct logger_plugin *plugin;
-	struct timespec boottime, logtime;
-	static struct timespec monotime;
+	struct timespec boottime;
 
-	/*This means that we might lose some precision
-	for the messages coming while timekeeping is
-	suspended, but this is acceptable*/
-	if (!timekeeping_suspended)
-		get_monotonic_boottime(&monotime);
+	ts = local_clock();
+	rem_nsec = do_div(ts, 1000000000);
 
 	getboottime(&boottime);
-	logtime = timespec_add(boottime, monotime);
 
 	header.pid = current->tgid;
 	header.tid = task_pid_nr(current);
-	header.sec = logtime.tv_sec;
-	header.nsec = logtime.tv_nsec;
+	header.sec = boottime.tv_sec + ts;
+	header.nsec = boottime.tv_nsec + rem_nsec;
 	header.euid = current_euid();
 
 	/* length is computed like this:
@@ -124,20 +121,13 @@ static void flush_to_bottom_log(struct logger_log *log,
 	do_write_log(log, buf, header.len - sizeof(extendedtag) - 1);
 
 	/* send this segment's payload to the plugins */
-	list_for_each_entry(plugin, &log->plugins, list) {
-		plugin->write_seg((void *)&extendedtag,
-				  sizeof(extendedtag),
-				  false, /* not from user */
-				  true,  /* start of msg */
-				  false,  /* end of msg */
-				  plugin->data);
+	list_for_each_entry(plugin, &log->plugins, list)
 		plugin->write_seg((void *)buf,
 				  header.len - sizeof(extendedtag) - 1,
 				  false, /* not from user */
-				  false,  /* start of msg */
+				  true,  /* start of msg */
 				  true,  /* end of msg */
 				  plugin->data);
-	}
 
 	/* the write offset is updated to add the final extra byte */
 	log->w_off = logger_offset(log, log->w_off + 1);
@@ -172,23 +162,23 @@ static void update_log_from_bottom(struct logger_log *log_orig,
 static void write_console(struct work_struct *work)
 {
 	struct logger_log *log_bot = get_log_from_name(LOGGER_LOG_KERNEL_BOT);
-	struct logger_log *log_out = get_log_from_name(LOGGER_LOG_MAIN);
+	struct logger_log *log_kernel = get_log_from_name(LOGGER_LOG_KERNEL);
 
-	update_log_from_bottom(log_bot, log_out);
+	update_log_from_bottom(log_bot, log_kernel);
 }
 
 static void
 logger_console_write(struct console *console, const char *s, unsigned int count)
 {
 	struct logger_log *log_bot = get_log_from_name(LOGGER_LOG_KERNEL_BOT);
-	struct logger_log *log_out = get_log_from_name(LOGGER_LOG_MAIN);
+	struct logger_log *log_kernel = get_log_from_name(LOGGER_LOG_KERNEL);
 
 	if (!log_bot)
 		return;
 
 	flush_to_bottom_log(log_bot, s, count);
 
-	if (unlikely(!log_out))
+	if (unlikely(!log_kernel))
 		return;
 	if (unlikely(!keventd_up()))
 		return;
@@ -305,3 +295,14 @@ out:
 }
 
 console_initcall(logger_console_init);
+
+static int __init logger_kernel_init(void)
+{
+	int ret;
+	if (!(logger_console.flags & CON_ENABLED))
+		return 0;
+
+	ret = create_log(LOGGER_LOG_KERNEL, 256*1024);
+	return ret;
+}
+device_initcall(logger_kernel_init);
