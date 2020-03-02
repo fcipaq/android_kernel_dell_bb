@@ -31,6 +31,9 @@
 #define ACTIVE_PEN_MAX_PRESSURE_16BIT 65535
 #define ACTIVE_PEN_MAX_PRESSURE_8BIT 255
 
+int x_1;
+int y_1;
+
 struct synaptics_rmi4_f12_query_8 {
 	union {
 		struct {
@@ -117,9 +120,8 @@ DECLARE_COMPLETION(apen_remove_complete);
 
 static void apen_lift(void)
 {
-	input_report_key(apen->apen_dev, BTN_TOUCH, 0);
-	input_report_key(apen->apen_dev, BTN_TOOL_PEN, 0);
-	input_report_key(apen->apen_dev, BTN_TOOL_RUBBER, 0);
+	input_report_key(apen->apen_dev, BTN_LEFT, 0);
+	input_report_key(apen->apen_dev, BTN_RIGHT, 0);
 	input_sync(apen->apen_dev);
 	apen->apen_present = false;
 
@@ -207,13 +209,32 @@ static void apen_report(void)
 				apen_data_8b->pen_id_0_7;
 	}
 
-	input_report_key(apen->apen_dev, BTN_TOUCH, pressure > 0 ? 1 : 0);
+	input_report_key(apen->apen_dev, BTN_LEFT, pressure > 0 ? 1 : 0);
 	input_report_key(apen->apen_dev,
-			apen->apen_data->status_invert > 0 ?
-			BTN_TOOL_RUBBER : BTN_TOOL_PEN, 1);
-	input_report_key(apen->apen_dev,
-			BTN_STYLUS, apen->apen_data->status_barrel > 0 ?
+			BTN_RIGHT, apen->apen_data->status_invert > 0 ?
 			1 : 0);
+	// if BTN_LEFT is pressed because of "pressure" don't unpress it!
+	if (!(pressure > 0)) {
+		input_report_key(apen->apen_dev,
+				BTN_LEFT, apen->apen_data->status_barrel > 0 ?
+				1 : 0);
+	}
+
+#ifdef CONFIG_AMOLED_SUPPORT
+// TODO fcipaq: compensate for pixel shift 
+//	if (amoled_shift.curr_x + 1 > amoled_shift.max_x) {
+//	}
+#endif
+
+	// Make things a little less shaky
+	if (((x - x_1) * (x - x_1) + (y - y_1) * (y - y_1)) > 50) {
+		x_1 = x;
+		y_1 = y;
+	} else {
+		x = x_1;
+		y = y_1;
+	}
+
 	input_report_abs(apen->apen_dev, ABS_X, x);
 	input_report_abs(apen->apen_dev, ABS_Y, y);
 	input_report_abs(apen->apen_dev, ABS_PRESSURE, pressure);
@@ -486,10 +507,8 @@ static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
 
 	set_bit(EV_KEY, apen->apen_dev->evbit);
 	set_bit(EV_ABS, apen->apen_dev->evbit);
-	set_bit(BTN_TOUCH, apen->apen_dev->keybit);
-	set_bit(BTN_TOOL_PEN, apen->apen_dev->keybit);
-	set_bit(BTN_TOOL_RUBBER, apen->apen_dev->keybit);
-	set_bit(BTN_STYLUS, apen->apen_dev->keybit);
+	set_bit(BTN_LEFT, apen->apen_dev->keybit);
+	set_bit(BTN_RIGHT, apen->apen_dev->keybit);
 #ifdef INPUT_PROP_DIRECT
 	set_bit(INPUT_PROP_DIRECT, apen->apen_dev->propbit);
 #endif
