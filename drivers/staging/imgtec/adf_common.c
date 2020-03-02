@@ -60,45 +60,62 @@ static long validate(struct adf_device *dev,
 	struct adf_validate_config_ext __user *arg)
 {
 	struct adf_interface **intfs = NULL;
+	struct adf_validate_config_ext data;
 	struct adf_buffer *bufs = NULL;
 	struct adf_post post_cfg;
+	void *post_ext = NULL;
 	u32 post_ext_size;
 	void *driver_state;
 	int err = 0;
 	size_t i, j;
 
-	if (arg->n_interfaces > ADF_MAX_INTERFACES) {
+	if (copy_from_user(&data, arg, sizeof(data))) {
+		err = -EFAULT;
+		goto err_out;
+	}
+
+	if (data.n_interfaces > ADF_MAX_INTERFACES) {
 		err = -EINVAL;
 		goto err_out;
 	}
 
-	if (arg->n_bufs > ADF_MAX_BUFFERS) {
+	if (data.n_bufs > ADF_MAX_BUFFERS) {
 		err = -EINVAL;
 		goto err_out;
 	}
 
 	post_ext_size = sizeof(struct adf_post_ext) +
-		arg->n_bufs * sizeof(struct adf_buffer_config_ext);
-
-	if (!access_ok(VERIFY_READ, arg->bufs,
-		       sizeof(struct adf_buffer_config) * arg->n_bufs)) {
+		data.n_bufs * sizeof(struct adf_buffer_config_ext);
+	
+	if (!access_ok(VERIFY_READ, data.bufs,
+	               sizeof(*data.bufs) * data.n_bufs)) {
 		err = -EFAULT;
 		goto err_out;
 	}
 
-	if (!access_ok(VERIFY_READ, arg->post_ext,
-		       post_ext_size)) {
+	post_ext = kmalloc(post_ext_size, GFP_KERNEL);
+	if (!post_ext) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	if (!access_ok(VERIFY_READ, data.post_ext, post_ext_size)) {
 		err = -EFAULT;
 		goto err_out;
 	}
 
-	if (arg->n_interfaces) {
-		if (!access_ok(VERIFY_READ, arg->interfaces,
-		     sizeof(*arg->interfaces) * arg->n_interfaces)) {
+	if (copy_from_user(post_ext, data.post_ext, post_ext_size)) {
+		err = -EFAULT;
+		goto err_out;
+	}
+
+	if (data.n_interfaces) {
+		if (!access_ok(VERIFY_READ, data.interfaces,
+		     sizeof(*data.interfaces) *data.n_interfaces)) {
 			err = -EFAULT;
 			goto err_out;
 		}
-		intfs = kmalloc_array(arg->n_interfaces, sizeof(intfs[0]),
+		intfs = kmalloc_array(data.n_interfaces, sizeof(intfs[0]),
 				      GFP_KERNEL);
 		if (!intfs) {
 			err = -ENOMEM;
@@ -106,62 +123,72 @@ static long validate(struct adf_device *dev,
 		}
 	}
 
-	for (i = 0; i < arg->n_interfaces; i++) {
-		intfs[i] = idr_find(&dev->interfaces, arg->interfaces[i]);
+	for (i = 0; i < data.n_interfaces; i++) {
+		u32 intf_id;
+		if (get_user(intf_id, &data.interfaces[i])) {
+			err = -EFAULT;
+			goto err_out;
+		}
+		intfs[i] = idr_find(&dev->interfaces, intf_id);
 		if (!intfs[i]) {
 			err = -EINVAL;
 			goto err_out;
 		}
 	}
 
-	if (arg->n_bufs) {
-		bufs = kcalloc(arg->n_bufs, sizeof(bufs[0]), GFP_KERNEL);
+	if (data.n_bufs) {
+		bufs = kcalloc(data.n_bufs, sizeof(bufs[0]), GFP_KERNEL);
 		if (!bufs) {
 			err = -ENOMEM;
 			goto err_out;
 		}
 	}
 
-	for (i = 0; i < arg->n_bufs; i++) {
-		struct adf_buffer_config *config = &arg->bufs[i];
+	for (i = 0; i < data.n_bufs; i++) {
+		struct adf_buffer_config config;
+		
+		if (copy_from_user(&config, &data.bufs[i], sizeof(config))) {
+			err = -EFAULT;
+			goto err_out;
+		}
 
 		memset(&bufs[i], 0, sizeof(bufs[i]));
 
-		if (config->n_planes > ADF_MAX_PLANES) {
+		if (config.n_planes > ADF_MAX_PLANES) {
 			err = -EINVAL;
 			goto err_import;
 		}
 
 		bufs[i].overlay_engine = idr_find(&dev->overlay_engines,
-						  config->overlay_engine);
+						  config.overlay_engine);
 		if (!bufs[i].overlay_engine) {
 			err = -ENOENT;
 			goto err_import;
 		}
 
-		bufs[i].w = config->w;
-		bufs[i].h = config->h;
-		bufs[i].format = config->format;
+		bufs[i].w = config.w;
+		bufs[i].h = config.h;
+		bufs[i].format = config.format;
 
-		for (j = 0; j < config->n_planes; j++) {
-			bufs[i].dma_bufs[j] = dma_buf_get(config->fd[j]);
+		for (j = 0; j < config.n_planes; j++) {
+			bufs[i].dma_bufs[j] = dma_buf_get(config.fd[j]);
 			if (IS_ERR_OR_NULL(bufs[i].dma_bufs[j])) {
 				err = PTR_ERR(bufs[i].dma_bufs[j]);
 				bufs[i].dma_bufs[j] = NULL;
 				goto err_import;
 			}
-			bufs[i].offset[j] = config->offset[j];
-			bufs[i].pitch[j] = config->pitch[j];
+			bufs[i].offset[j] = config.offset[j];
+			bufs[i].pitch[j] = config.pitch[j];
 		}
-		bufs[i].n_planes = config->n_planes;
+		bufs[i].n_planes = config.n_planes;
 
 		bufs[i].acquire_fence = NULL;
 	}
 
 	/* Fake up a post configuration to validate */
 	post_cfg.custom_data_size = post_ext_size;
-	post_cfg.custom_data = arg->post_ext;
-	post_cfg.n_bufs = arg->n_bufs;
+	post_cfg.custom_data = post_ext;
+	post_cfg.n_bufs = data.n_bufs;
 	post_cfg.bufs = bufs;
 
 	/* Mapping dma bufs is too expensive for validate, and we don't
@@ -180,11 +207,12 @@ static long validate(struct adf_device *dev,
 		dev->ops->state_free(dev, driver_state);
 
 err_import:
-	for (i = 0; i < arg->n_bufs; i++)
+	for (i = 0; i < data.n_bufs; i++)
 		for (j = 0; j < ARRAY_SIZE(bufs[i].dma_bufs); j++)
 			if (bufs[i].dma_bufs[j])
 				dma_buf_put(bufs[i].dma_bufs[j]);
 err_out:
+	kfree(post_ext);
 	kfree(intfs);
 	kfree(bufs);
 	return err;

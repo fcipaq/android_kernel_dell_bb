@@ -52,6 +52,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "connection_server.h"
 #include "rgxdevice.h"
 #include "rgx_hwperf_km.h"
+#include "pvrsrv.h"
 
 
 /******************************************************************************
@@ -166,14 +167,13 @@ IMG_BOOL RGXHWPerfHostIsEventEnabled(RGX_HWPERF_HOST_EVENT_TYPE eEvent);
 #if defined(SUPPORT_GPUTRACE_EVENTS)
 
 PVRSRV_ERROR RGXHWPerfFTraceGPUInit(PVRSRV_RGXDEV_INFO *psDevInfo);
-void RGXHWPerfFTraceGPUDeInit(PVRSRV_RGXDEV_INFO *psDevInfo);
+void RGXHWPerfFTraceGPUDeInit(void);
 
 void RGXHWPerfFTraceGPUEnqueueEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 		IMG_UINT32 ui32ExternalJobRef, IMG_UINT32 ui32InternalJobRef,
 		RGX_HWPERF_KICK_TYPE eKickType);
 
 PVRSRV_ERROR RGXHWPerfFTraceGPUEventsEnabledSet(IMG_BOOL bNewValue);
-IMG_BOOL RGXHWPerfFTraceGPUEventsEnabled(void);
 
 void RGXHWPerfFTraceGPUThread(void *pvData);
 

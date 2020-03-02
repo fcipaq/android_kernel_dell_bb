@@ -500,14 +500,6 @@ int PVRSRVDeviceInit(void)
 		PVR_DPF((PVR_DBG_WARNING, "PVRCore_Init: failed to create default debugfs entries (%d)", error));
 	}
 
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-	error = PVRGpuTraceInit();
-	if (error != 0)
-	{
-		PVR_DPF((PVR_DBG_WARNING, "PVRCore_Init: failed to initialise PVR GPU Tracing (%d)", error));
-	}
-#endif
-
 	error = PVRSRVHWperfCreateDebugFs();
 	if (error != 0)
 	{

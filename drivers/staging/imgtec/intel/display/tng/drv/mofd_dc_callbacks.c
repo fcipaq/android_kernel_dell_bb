@@ -40,8 +40,6 @@
 
 #define KEEP_UNUSED_CODE 0
 
-static bool sprite_x_rev = false;
-static bool sprite_y_rev = false;
 static u32 primary_offset_x;
 static u32 primary_offset_y;
 static u32 primary_width;
@@ -362,7 +360,7 @@ void DCCBFlipSprite(struct drm_device *dev,
                 u32 sprite_offset_y;
                 u32 sprite_width;
                 u32 sprite_height;
-		u32 x, y, w, h;
+		u32 w, h;
 
 		int tmp_hdisplay;
 		int tmp_vdisplay;
@@ -382,95 +380,22 @@ void DCCBFlipSprite(struct drm_device *dev,
 		}
 
                 reg_val_pos = ctx->pos;
-                x = sprite_offset_x = reg_val_pos & 0x00000fff;
-                y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                sprite_offset_x = reg_val_pos & 0x00000fff;
+                sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
                 reg_val_size = ctx->size;
                 w = sprite_width = reg_val_size & 0x00000fff;
                 h = sprite_height = (reg_val_size >> 16) & 0x00000fff;
 
-		if (!sprite_x_rev) {
-                        sprite_offset_x += dev_priv->amoled_shift.curr_x;
-			if (((w == primary_width) && (h == primary_height)) ||
-			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
-			{
-			         if (fixed_mode) {
-                                    if ((ctx->index == 0x0) && (((x + w + 1) != tmp_hdisplay)
-                                                            && ((y + h + 1) == tmp_vdisplay)))
-                                            ;
-                                    else
-				            sprite_width -= dev_priv->amoled_shift.curr_x;
-				 }
-				 else
-				     sprite_width -= dev_priv->amoled_shift.curr_x;
-			}	
-                }
-                else {
-                        sprite_offset_x += (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
-			if (((w == primary_width) && (h == primary_height)) ||
-			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
-			{
-			         if (fixed_mode) {
-                                    if ((ctx->index == 0x0) && (((x + w + 1) != tmp_hdisplay)
-                                                            && ((y + h + 1) == tmp_vdisplay)))
-                                            ;
-                                    else
-					    sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
-				 }
-				 else
-				     sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
-			}
-                }
+	        sprite_offset_x += dev_priv->amoled_shift.curr_x;
+	        sprite_offset_y += dev_priv->amoled_shift.curr_y;
 
-                if (!sprite_y_rev) {
-                        sprite_offset_y += dev_priv->amoled_shift.curr_y;
-			if (((w == primary_width) && (h == primary_height)) ||
-			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
-			{
-			         if (fixed_mode) {
-                                    if ((ctx->index == 0x0) && (((x + w + 1) == tmp_hdisplay)
-                                                            && ((y + h + 1) != tmp_vdisplay)))
-                                            ;
-                                    else
-					    sprite_height -= dev_priv->amoled_shift.curr_y;
-				 }
-				 else
-				     sprite_height -= dev_priv->amoled_shift.curr_y;
-			}
-                }
-                else {
-			sprite_offset_y += (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
-			if (((w == primary_width) && (h == primary_height)) ||
-			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
-			{
-			         if (fixed_mode) {
-                                    if ((ctx->index == 0x0) && (((x + w + 1) == tmp_hdisplay)
-                                                            && ((y + h + 1) != tmp_vdisplay)))
-                                            ;
-                                    else
-					    sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
-				 }
-				 else
-				     sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
-			}
-         	}
-
-                if (dev_priv->amoled_shift.curr_x == dev_priv->amoled_shift.max_x)
-                {
-                        dev_priv->amoled_shift.curr_x = 0;
-                        sprite_x_rev = !sprite_x_rev;
-                }
-
-		if (dev_priv->amoled_shift.curr_y == dev_priv->amoled_shift.max_y)
-                {
-                        dev_priv->amoled_shift.curr_y = 0;
-                        sprite_y_rev = !sprite_y_rev;
-                }
+		dev_priv->amoled_shift.flip_done = 1;
 
 		if ((ctx->update_mask & SPRITE_UPDATE_POSITION)) {
 			if (ovadd == 0x0)
                         	reg_val_pos = (reg_val_pos & 0xf000f000) | sprite_offset_x | (sprite_offset_y << 16);
 			else 
-                        	reg_val_pos = (reg_val_pos & 0xf000f000) | x | (y << 16);
+                        	reg_val_pos = (reg_val_pos & 0xf000f000) | w | (h << 16);
 			PSB_WVDC32(reg_val_pos, DSPAPOS + reg_offset);
                 }
 
@@ -595,7 +520,8 @@ void DCCBFlipPrimary(struct drm_device *dev,
 				tmp_vdisplay = 2560;
 				break;
 			default:
-				DRM_ERROR("Unknown panel, AMOLED wearleveling may fail.\n");
+				tmp_hdisplay = fixed_mode->hdisplay;
+				tmp_vdisplay = fixed_mode->vdisplay;
 				break;
 		}
 
@@ -655,12 +581,15 @@ void DCCBFlipPrimary(struct drm_device *dev,
         }
 
 	/* enable/disable double scan */
+/*
 #ifdef CONFIG_PSB_ZOOM
 	ctx->cntr |= (0x1 << 20);
 	PSB_WVDC32(ctx->cntr, DSPACNTR + reg_offset);
 #else
 	ctx->cntr &= ~(1UL << 20);
 #endif
+*/
+
 	if ((ctx->update_mask & SPRITE_UPDATE_SURFACE)) {
 		PSB_WVDC32(ctx->linoff, DSPALINOFF + reg_offset);
 		PSB_WVDC32(ctx->tileoff, DSPATILEOFF + reg_offset);

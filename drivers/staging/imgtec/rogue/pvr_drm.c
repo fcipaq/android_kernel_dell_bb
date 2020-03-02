@@ -57,9 +57,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <asm/ioctl.h>
 #include <drm/drmP.h>
 #include <drm/drm.h>
-#if defined(CHROMIUMOS_WORKAROUNDS_KERNEL314)
-#include <drm/drm_atomic.h>
-#endif
 
 #include "allocmem.h"
 #include "img_defs.h"
@@ -349,13 +346,5 @@ struct drm_driver sPVRDRMDriver =
 	.minor			= PVRVERSION_MIN,
 	.patchlevel		= PVRVERSION_BUILD,
 
-#if defined(CHROMIUMOS_WORKAROUNDS_KERNEL314)
-	.atomic_begin		= drm_atomic_begin,
-	.atomic_set_event	= drm_atomic_set_event,
-	.atomic_check		= drm_atomic_check,
-	.atomic_commit		= drm_atomic_commit,
-	.atomic_end		= drm_atomic_end,
-	.atomic_funcs		= &drm_atomic_funcs,
-#endif
 };
 #endif	/* defined(SUPPORT_DRM) */

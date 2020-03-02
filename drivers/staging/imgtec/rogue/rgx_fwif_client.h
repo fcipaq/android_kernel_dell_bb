@@ -81,6 +81,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define RGXMKIF_RENDERFLAGS_SECURE				0x00002000UL	/*!< This render needs DRM Security */
 #define RGXMKIF_RENDERFLAGS_ABORT_NOFREE		0x00004000UL	/*!< This flags goes in hand with ABORT and excplicity ensure no mem free is issued in case of first TA kick */
 #define RGXMKIF_RENDERFLAGS_DISABLE_PIXELMERGE	0x00008000UL	/*!< Force disabling of pixel merging */
+#if defined(FIX_HW_BRN_51537)
+#define RGXMKIF_RENDERFLAGS_CSRM_MAX_COEFFS		0x00020000UL	/*!< Force 4 lines of coeffs on render */
+#endif
 
 /*
 	The host must indicate if this is the first and/or last command to
@@ -155,6 +158,14 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #define RGXMKIF_TAFLAGS_APPLY_VCE_PAUSE			0x00100000UL
 #endif
+#if defined(FIX_HW_BRN_51537)
+/*
+ * 	Indicates that the CSRM should be reconfigured to support maximum coeff
+ *  space before this command is scheduled.
+ */
+#define RGXMKIF_TAFLAGS_CSRM_MAX_COEFFS			0x00200000UL
+#endif
+
 
 /* flags for transfer queue commands */
 #define RGXMKIF_CMDTRANSFER_FLAG_SECURE			0x00000001UL

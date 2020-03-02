@@ -145,6 +145,12 @@ void OSInvalidateCPUCacheRangeKM(void *pvVirtStart,
 	x86_flush_cache_range(pvVirtStart, pvVirtEnd);
 }
 
+PVRSRV_CACHE_OP_ADDR_TYPE OSCPUCacheOpAddressType(PVRSRV_CACHE_OP uiCacheOp)
+{
+	PVR_UNREFERENCED_PARAMETER(uiCacheOp);
+	return PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL;
+}
+
 void OSUserModeAccessToPerfCountersEn(void)
 {
 	/* Not applicable to x86 architecture. */

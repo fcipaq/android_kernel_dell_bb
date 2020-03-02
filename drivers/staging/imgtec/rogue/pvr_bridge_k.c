@@ -195,6 +195,8 @@ LinuxBridgeInit(void)
 					NULL,
 					&gsBridgeStatsReadOps,
 					NULL,
+					NULL,
+					NULL,
 					&g_BridgeDispatchTable[0],
 					&gpsPVRDebugFSBridgeStatsEntry);
 	if (iResult != 0)

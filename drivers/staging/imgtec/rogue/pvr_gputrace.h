@@ -56,8 +56,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   platform module to set and retrieve the feature's on/off state.
 */
 extern PVRSRV_ERROR PVRGpuTraceEnabledSet(IMG_BOOL bNewValue);
-extern IMG_BOOL PVRGpuTraceEnabled(void);
-
 
 /******************************************************************************
  Module In-bound API
@@ -70,7 +68,6 @@ typedef enum {
 	PVR_GPUTRACE_SWITCH_TYPE_END = 2
 
 } PVR_GPUTRACE_SWITCH_TYPE;
-
 
 void PVRGpuTraceClientWork(
 		const IMG_UINT32 ui32ExtJobRef,
@@ -99,10 +96,16 @@ void PVRGpuTraceEventsLost(
 		const IMG_UINT32 ui32LastOrdinal,
 		const IMG_UINT32 ui32CurrOrdinal);
 
-PVRSRV_ERROR PVRGpuTraceInit(void);
-
-
+/* Early initialisation of GPU Ftrace events logic.
+ * This function creates debugfs entry and initialises some necessary
+ * structures. */
+PVRSRV_ERROR PVRGpuTraceInit(PVRSRV_DEVICE_NODE *psDeviceNode);
 void PVRGpuTraceDeInit(void);
+
+IMG_BOOL PVRGpuTraceEnabled(void);
+void PVRGpuTraceSetEnabled(IMG_BOOL bEnabled);
+IMG_BOOL PVRGpuTracePreEnabled(void);
+void PVRGpuTraceSetPreEnabled(IMG_BOOL bEnabled);
 
 /* FTrace events callbacks */
 

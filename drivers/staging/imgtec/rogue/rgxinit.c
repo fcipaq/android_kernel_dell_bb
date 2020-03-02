@@ -70,6 +70,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "rgxdebug.h"
 #include "rgxhwperf.h"
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+#include "pvr_gputrace.h"
+#endif
 
 #include "rgx_options_km.h"
 #include "pvrversion.h"
@@ -811,10 +814,26 @@ PVRSRV_ERROR PVRSRVRGXInitDevPart2KM (CONNECTION_DATA       *psConnection,
 	}
 
 #if defined(SUPPORT_GPUTRACE_EVENTS)
-	/* If built, always setup FTrace consumer thread. */
-	RGXHWPerfFTraceGPUInit(psDeviceNode->pvDevice);
+	{
+		/* The tracing might have already been enabled by pvr/gpu_tracing_on
+		 * but if SUPPORT_KERNEL_SRVINIT == 1 the HWPerf has just been
+		 * allocated so the initialisation wasn't full.
+		 * RGXHWPerfFTraceGPUEventsEnabledSet() will perform full
+		 * initialisation in such case. */
+		IMG_BOOL bInit = IMG_FALSE;
 
-	RGXHWPerfFTraceGPUEventsEnabledSet((ui32DeviceFlags & RGXKMIF_DEVICE_STATE_FTRACE_EN) ? IMG_TRUE: IMG_FALSE);
+		/* This can happen if SUPPORT_KERNEL_SRVINIT == 1. */
+		if (PVRGpuTracePreEnabled())
+		{
+			bInit = IMG_TRUE;
+		}
+		else
+		{
+			bInit = ui32DeviceFlags & RGXKMIF_DEVICE_STATE_FTRACE_EN ?
+				IMG_TRUE : IMG_FALSE;
+		}
+		RGXHWPerfFTraceGPUEventsEnabledSet(bInit);
+	}
 #endif
 
 	/* Initialise lists of ZSBuffers */
@@ -1682,11 +1701,6 @@ PVRSRV_ERROR DevDeInitRGX (PVRSRV_DEVICE_NODE *psDeviceNode)
 		OSLockDestroy(psDevInfo->hLockFreeList);
 		OSLockDestroy(psDevInfo->hLockZSBuffer);
 
-		/* De-init HWPerf Ftrace thread resources for the RGX device */
-#if defined(SUPPORT_GPUTRACE_EVENTS)
-		RGXHWPerfFTraceGPUDeInit(psDevInfo);
-#endif
-
 		RGXHWPerfHostDeInit();
 
 		/* Unregister MMU related stuff */
@@ -2209,6 +2223,22 @@ PVRSRV_ERROR RGXRegisterDevice (PVRSRV_DEVICE_NODE *psDeviceNode)
 	}
 
 	psDeviceNode->pvDevice = psDevInfo;
+
+	eError = RGXHWPerfInit(psDeviceNode);
+	if (eError != PVRSRV_OK)
+	{
+		PVR_DPF((PVR_DBG_ERROR, "RGXHWPerfInit failed"));
+	}
+
+#if defined(SUPPORT_GPUTRACE_EVENTS)
+	eError = PVRGpuTraceInit(psDeviceNode);
+	if (eError != 0)
+	{
+		PVR_DPF((PVR_DBG_WARNING, "PVRCore_Init: failed to initialise PVR GPU"
+		        " Tracing (%d)", eError));
+	}
+#endif
+
 	return PVRSRV_OK;
 
 e7:

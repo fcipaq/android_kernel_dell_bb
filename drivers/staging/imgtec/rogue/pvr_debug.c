@@ -1200,6 +1200,8 @@ int PVRDebugCreateDebugFSEntries(void)
 									NULL,
 									&gsDebugVersionReadOps,
 									NULL,
+									NULL,
+									NULL,
 									psPVRSRVData,
 									&gpsVersionDebugFSEntry);
 	if (iResult != 0)
@@ -1211,6 +1213,8 @@ int PVRDebugCreateDebugFSEntries(void)
 									NULL,
 									&gsDebugStatusReadOps,
 									(PVRSRV_ENTRY_WRITE_FUNC *)DebugStatusSet,
+									NULL,
+									NULL,
 									psPVRSRVData,
 									&gpsStatusDebugFSEntry);
 	if (iResult != 0)
@@ -1222,6 +1226,8 @@ int PVRDebugCreateDebugFSEntries(void)
 									NULL,
 									&gsDumpDebugReadOps,
 									NULL,
+									NULL,
+									NULL,
 									psPVRSRVData,
 									&gpsDumpDebugDebugFSEntry);
 	if (iResult != 0)
@@ -1232,6 +1238,8 @@ int PVRDebugCreateDebugFSEntries(void)
 	iResult = PVRDebugFSCreateEntry("firmware_trace",
 									NULL,
 									&gsFWTraceReadOps,
+									NULL,
+									NULL,
 									NULL,
 									psPVRSRVData,
 									&gpsFWTraceDebugFSEntry);
@@ -1245,6 +1253,8 @@ int PVRDebugCreateDebugFSEntries(void)
 									NULL,
 									&gsDebugLevelReadOps,
 									(PVRSRV_ENTRY_WRITE_FUNC *)DebugLevelSet,
+									NULL,
+									NULL,
 									&gPVRDebugLevel,
 									&gpsDebugLevelDebugFSEntry);
 	if (iResult != 0)

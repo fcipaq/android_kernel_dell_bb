@@ -58,6 +58,9 @@ typedef ssize_t (PVRSRV_ENTRY_WRITE_FUNC)(const char __user *pszBuffer,
 typedef IMG_UINT32 (PVRSRV_INC_STAT_MEM_REFCOUNT_FUNC)(void *pvStatPtr);
 typedef IMG_UINT32 (PVRSRV_DEC_STAT_MEM_REFCOUNT_FUNC)(void *pvStatPtr);
 
+typedef IMG_UINT32 (PVRSRV_INC_FSENTRY_PVDATA_REFCNT_FN)(void *pvData);
+typedef IMG_UINT32 (PVRSRV_DEC_FSENTRY_PVDATA_REFCNT_FN)(void *pvData);
+
 typedef struct _PVR_DEBUGFS_DIR_DATA_ PVR_DEBUGFS_DIR_DATA;
 typedef struct _PVR_DEBUGFS_ENTRY_DATA_ PVR_DEBUGFS_ENTRY_DATA;
 typedef struct _PVR_DEBUGFS_DRIVER_STAT_ PVR_DEBUGFS_DRIVER_STAT;
@@ -75,6 +78,8 @@ int PVRDebugFSCreateEntry(const char *pszName,
 			  	  	  	  PVR_DEBUGFS_DIR_DATA *psParentDir,
 						  struct seq_operations *psReadOps,
 						  PVRSRV_ENTRY_WRITE_FUNC *pfnWrite,
+						  PVRSRV_INC_FSENTRY_PVDATA_REFCNT_FN *pfnIncPvDataRefCnt,
+						  PVRSRV_DEC_FSENTRY_PVDATA_REFCNT_FN *pfnDecPvDataRefCnt,
 						  void *pvData,
 						  PVR_DEBUGFS_ENTRY_DATA **ppsNewEntry);
 

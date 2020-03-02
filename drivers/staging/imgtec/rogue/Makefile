@@ -5,7 +5,7 @@ ccflags-y += -include $(srctree)/drivers/staging/imgtec/config_kernel.h \
  -I$(srctree)/$(src)/hwdefs/km
 ccflags-$(CONFIG_X86) += -mno-soft-float
 
-ccflags-$(CONFIG_DRM_INTEL_MID) += -I$(srctree)/drivers/staging/imgtec/intel
+ccflags-$(CONFIG_DRM_INTEL_MID:m=y) += -I$(srctree)/drivers/staging/imgtec/intel
 
 tmp := $(addprefix -I,$(wildcard $(srctree)/$(src)/generated/*))
 ccflags-y += $(tmp)

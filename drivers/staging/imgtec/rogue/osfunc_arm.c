@@ -42,6 +42,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 #include <linux/version.h>
 #include <linux/dma-mapping.h>
+#include <linux/spinlock.h>
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,15,0))
  #include <asm/system.h>
 #endif
@@ -51,6 +52,46 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "img_types.h"
 #include "osfunc.h"
 #include "pvr_debug.h"
+
+
+
+#if defined(CONFIG_OUTER_CACHE)
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,16,0))
+
+	/* Since 3.16 the outer_xxx() functions require irqs to be disabled and no
+	 * other cache masters must operate on the outer cache. */
+	static DEFINE_SPINLOCK(gsCacheFlushLock);
+
+	#define OUTER_CLEAN_RANGE() { \
+		unsigned long uiLockFlags; \
+		\
+		spin_lock_irqsave(&gsCacheFlushLock, uiLockFlags); \
+		outer_clean_range(0, ULONG_MAX); \
+		spin_unlock_irqrestore(&gsCacheFlushLock, uiLockFlags); \
+	}
+
+	#define OUTER_FLUSH_ALL() { \
+		unsigned long uiLockFlags; \
+		\
+		spin_lock_irqsave(&gsCacheFlushLock, uiLockFlags); \
+		outer_flush_all(); \
+		spin_unlock_irqrestore(&gsCacheFlushLock, uiLockFlags); \
+	}
+
+#else /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3,16,0)) */
+
+	/* No need to disable IRQs for older kernels */
+	#define OUTER_CLEAN_RANGE() outer_clean_range(0, ULONG_MAX)
+	#define OUTER_FLUSH_ALL()   outer_flush_all()
+#endif /*(LINUX_VERSION_CODE >= KERNEL_VERSION(3,16,0)) */
+
+#else /* CONFIG_OUTER_CACHE */
+
+	/* Don't do anything if we have no outer cache */
+	#define OUTER_CLEAN_RANGE()
+	#define OUTER_FLUSH_ALL()
+#endif /* CONFIG_OUTER_CACHE */
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27))
 #define ON_EACH_CPU(func, info, wait) on_each_cpu(func, info, wait)
@@ -74,16 +115,13 @@ PVRSRV_ERROR OSCPUOperation(PVRSRV_CACHE_OP uiCacheOp)
 		case PVRSRV_CACHE_OP_CLEAN:
 			/* No full (inner) cache clean op */
 			ON_EACH_CPU(per_cpu_cache_flush, NULL, 1);
-#if defined(CONFIG_OUTER_CACHE)
-			outer_clean_range(0, ULONG_MAX);
-#endif
+			OUTER_CLEAN_RANGE();
 			break;
 
 		case PVRSRV_CACHE_OP_INVALIDATE:
 		case PVRSRV_CACHE_OP_FLUSH:
 			ON_EACH_CPU(per_cpu_cache_flush, NULL, 1);
-#if defined(CONFIG_OUTER_CACHE) && \
-(LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37))
 			/* To use the "deferred flush" (not clean) DDK feature you need a kernel
 			 * implementation of outer_flush_all() for ARM CPUs with an outer cache
 			 * controller (e.g. PL310, common with Cortex A9 and later).
@@ -91,7 +129,7 @@ PVRSRV_ERROR OSCPUOperation(PVRSRV_CACHE_OP uiCacheOp)
 			 * Reference DDKs don't require this functionality, as they will only
 			 * clean the cache, never flush (clean+invalidate) it.
 			 */
-			outer_flush_all();
+			OUTER_FLUSH_ALL();
 #endif
 			break;
 
@@ -176,6 +214,16 @@ void OSInvalidateCPUCacheRangeKM(void *pvVirtStart,
 	outer_inv_range(sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr);
 #endif
 #endif	/* (LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0)) */
+}
+
+PVRSRV_CACHE_OP_ADDR_TYPE OSCPUCacheOpAddressType(PVRSRV_CACHE_OP uiCacheOp)
+{
+	PVR_UNREFERENCED_PARAMETER(uiCacheOp);
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3,7,0))
+	return PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL;
+#else
+	return PVRSRV_CACHE_OP_ADDR_TYPE_BOTH;
+#endif
 }
 
 /* User Enable Register */

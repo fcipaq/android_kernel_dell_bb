@@ -33,29 +33,22 @@
 #include <linux/random.h>
 #endif
 
-#define WIDTH 2560
-#define HEIGHT 1600
-
 /* Set the panel update delay to 8 ms */
 #define DEFAULT_PANEL_DELAY 8000
 
+#define WIDTH 2560
+#define HEIGHT 1600
+
 /* AMOLED wear leveling section */
 #if defined(CONFIG_AMOLED_SUPPORT)
-#ifdef CONFIG_PSB_ZOOM
-#define PIXEL_SHIFT_MAX_X       18
-#define PIXEL_SHIFT_MAX_Y       8
-#else
 #define PIXEL_SHIFT_MAX_X       32
 #define PIXEL_SHIFT_MAX_Y       16
-#endif
 static bool init_power_on = true;
 #endif
-
 
 static int vdd_1_8v_gpio;
 static int tcon_rdy_gpio;
 static int bias_en_gpio;
-
 
 static u8 sdc_column_addr[] = {
 			0x2a, 0x00, 0x00, 0x04, 0xff};
@@ -73,7 +66,6 @@ static	u8 sdc_gamma_update[] = { 0xbb, 0x1};
 
 
 static	u8 sdc_global_para_70[] = { 0xb0, 0x45};
-
 
 #define num_brightness 31
 static u8 sdc_brightness_list[num_brightness][5] = {
@@ -435,6 +427,21 @@ power_off_err:
 	return err;
 }
 
+#if defined(CONFIG_AMOLED_SUPPORT)
+static
+int sdc25x16_cmd_enable_pixel_shift(int *max_x,
+                         int *max_y)
+{
+        int val_x = PIXEL_SHIFT_MAX_X;
+        int val_y = PIXEL_SHIFT_MAX_Y;
+
+        *max_x = val_x;
+        *max_y = val_y;
+
+        return true;
+}
+#endif
+
 static
 int sdc25x16_cmd_set_brightness(
 		struct mdfld_dsi_config *dsi_config,
@@ -662,6 +669,9 @@ void sdc25x16_cmd_init(struct drm_device *dev,
 			sdc25x16_cmd_set_brightness;
 	p_funcs->exit_deep_standby =
 				sdc25x16_cmd_exit_deep_standby;
+#if defined(CONFIG_AMOLED_SUPPORT)
+	p_funcs->enable_pixel_shift = sdc25x16_cmd_enable_pixel_shift;
+#endif
 //	p_funcs->set_legacy_coefficient = mdfld_dsi_jdi25x16_set_legacy_coefficient;
 
 	drm_psb_te_timer_delay = DEFAULT_PANEL_DELAY;

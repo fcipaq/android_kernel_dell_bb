@@ -98,6 +98,8 @@ typedef struct _PVR_DEBUGFS_PRIV_DATA_
 	struct seq_operations	*psReadOps;
 	PVRSRV_ENTRY_WRITE_FUNC	*pfnWrite;
 	void			*pvData;
+	PVRSRV_INC_FSENTRY_PVDATA_REFCNT_FN *pfIncPvDataRefCnt;
+	PVRSRV_DEC_FSENTRY_PVDATA_REFCNT_FN *pfDecPvDataRefCnt;
 	IMG_BOOL		bValid;
 	PVR_DEBUGFS_ENTRY_DATA *psDebugFSEntry;
 } PVR_DEBUGFS_PRIV_DATA;
@@ -127,18 +129,13 @@ static void *_DebugFSStatisticSeqStart(struct seq_file *psSeqFile, loff_t *puiPo
 
 	if (psStatData)
 	{
-		if (psStatData->pvData)
+		/* take reference on psStatData (for duration of stat iteration) */
+		if (!_RefStatEntry(psStatData))
 		{
-			/* take reference on psStatData (for duration of stat iteration) */
-			if (!_RefStatEntry((void*)psStatData))
-			{
-				PVR_DPF((PVR_DEBUGFS_PVR_DPF_LEVEL, "%s: Called for '%s' but failed to take ref on stat entry, returning -EIO(%d)", __FUNCTION__, psStatData->pvDebugFSEntry->psEntry->d_iname, -EIO));
-				return NULL;
-			}
-		}
-		else
-		{
-			/* NB This is valid if the stat has no structure associated with it (eg. driver_stats, which prints totals stored in a number of global vars) */
+			PVR_DPF((PVR_DEBUGFS_PVR_DPF_LEVEL, "%s: Called for '%s' but failed"
+			        " to take ref on stat entry, returning -EIO(%d)", __func__,
+			        psStatData->pvDebugFSEntry->psEntry->d_iname, -EIO));
+			return NULL;
 		}
 
 		if (*puiPosition == 0)
@@ -162,23 +159,10 @@ static void _DebugFSStatisticSeqStop(struct seq_file *psSeqFile, void *pvData)
 	if (psStatData)
 	{
 		/* drop ref taken on stat memory, and if it is now zero, be sure we don't try to read it again */
-		if ((psStatData->ui32RefCount > 0) && (psStatData->pvData))
+		if (psStatData->ui32RefCount > 0)
 		{
 			/* drop reference on psStatData (held for duration of stat iteration) */
 			_UnrefAndMaybeDestroyStatEntry((void*)psStatData);
-		}
-		else
-		{
-			if (psStatData->ui32RefCount > 0)
-			{
-				/* psStatData->pvData is NULL */
-				/* NB This is valid if the stat has no structure associated with it (eg. driver_stats, which prints totals stored in a number of global vars) */
-			}
-			if (psStatData->pvData)
-			{
-				/* psStatData->ui32RefCount is zero */
-				PVR_DPF((PVR_DEBUGFS_PVR_DPF_LEVEL, "%s: Called when psStatData->ui32RefCount is %d", __FUNCTION__, psStatData->ui32RefCount));
-			}
 		}
 	}
 	else
@@ -271,12 +255,16 @@ static int _DebugFSFileOpen(struct inode *psINode, struct file *psFile)
 			psDebugFSEntry = psPrivData->psDebugFSEntry;
 
 			/* Take ref on stat entry before opening seq file - this ref will be dropped if we
-				 * fail to open the seq file or when we close it
-				 */
+			 * fail to open the seq file or when we close it
+			 */
 			if (psDebugFSEntry)
 			{
 				bRefRet = _RefDebugFSEntryNoLock(psDebugFSEntry);
 				mutex_unlock(&gDebugFSLock);
+				if (psPrivData->pfIncPvDataRefCnt)
+				{
+					psPrivData->pfIncPvDataRefCnt(psPrivData->pvData);
+				}
 				if (bRefRet)
 				{
 					iResult = seq_open(psFile, psPrivData->psReadOps);
@@ -288,6 +276,10 @@ static int _DebugFSFileOpen(struct inode *psINode, struct file *psFile)
 					}
 					else
 					{
+						if (psPrivData->pfDecPvDataRefCnt)
+						{
+							psPrivData->pfDecPvDataRefCnt(psPrivData->pvData);
+						}
 						/* Drop ref if we failed to open seq file */
 						_UnrefAndMaybeDestroyDebugFSEntry(&psPrivData->psDebugFSEntry);
 						PVR_DPF((PVR_DBG_ERROR, "%s: Failed to seq_open psFile, returning %d", __FUNCTION__, iResult));
@@ -326,6 +318,10 @@ static int _DebugFSFileClose(struct inode *psINode, struct file *psFile)
 	if (psDebugFSEntry)
 	{
 		_UnrefAndMaybeDestroyDebugFSEntry(&psPrivData->psDebugFSEntry);
+	}
+	if (psPrivData->pfDecPvDataRefCnt)
+	{
+		psPrivData->pfDecPvDataRefCnt(psPrivData->pvData);
 	}
 	return iResult;
 }
@@ -510,6 +506,8 @@ int PVRDebugFSCreateEntry(const char *pszName,
 			  PVR_DEBUGFS_DIR_DATA *psParentDir,
 			  struct seq_operations *psReadOps,
 			  PVRSRV_ENTRY_WRITE_FUNC *pfnWrite,
+			  PVRSRV_INC_FSENTRY_PVDATA_REFCNT_FN *pfnIncPvDataRefCnt,
+			  PVRSRV_DEC_FSENTRY_PVDATA_REFCNT_FN *pfnDecPvDataRefCnt,
 			  void *pvData,
 			  PVR_DEBUGFS_ENTRY_DATA **ppsNewEntry)
 {
@@ -519,6 +517,8 @@ int PVRDebugFSCreateEntry(const char *pszName,
 	umode_t uiMode;
 
 	PVR_ASSERT(gpsPVRDebugFSEntryDir != NULL);
+	PVR_ASSERT(!((pfnIncPvDataRefCnt != NULL && pfnDecPvDataRefCnt == NULL) ||
+	           (pfnIncPvDataRefCnt == NULL && pfnDecPvDataRefCnt != NULL)));
 
 	psPrivData = OSAllocMemNoStats(sizeof(*psPrivData));
 	if (psPrivData == NULL)
@@ -535,6 +535,8 @@ int PVRDebugFSCreateEntry(const char *pszName,
 	psPrivData->psReadOps = psReadOps;
 	psPrivData->pfnWrite = pfnWrite;
 	psPrivData->pvData = (void*)pvData;
+	psPrivData->pfIncPvDataRefCnt = pfnIncPvDataRefCnt;
+	psPrivData->pfDecPvDataRefCnt = pfnDecPvDataRefCnt;
 	psPrivData->bValid = IMG_TRUE;
 	/* Store ptr to debugFSEntry in psPrivData, so a ref can be taken on it
 	 * when the client opens a file */
@@ -660,6 +662,8 @@ PVR_DEBUGFS_DRIVER_STAT *PVRDebugFSCreateStatisticEntry(const char *pszName,
 					psDir,
 					&gsDebugFSStatisticReadOps,
 					NULL,
+					(PVRSRV_INC_FSENTRY_PVDATA_REFCNT_FN *) _RefStatEntry,
+					(PVRSRV_DEC_FSENTRY_PVDATA_REFCNT_FN *) _UnrefAndMaybeDestroyStatEntry,
 					psStatData,
 					&psDebugFSEntry);
 	if (iResult != 0)
@@ -690,6 +694,7 @@ PVR_DEBUGFS_DRIVER_STAT *PVRDebugFSCreateStatisticEntry(const char *pszName,
 */ /**************************************************************************/
 void PVRDebugFSRemoveStatisticEntry(PVR_DEBUGFS_DRIVER_STAT *psStatEntry)
 {
+	PVR_ASSERT(psStatEntry != NULL);
 	/* drop reference on pvStatEntry*/
 	_UnrefAndMaybeDestroyStatEntry(psStatEntry);
 }

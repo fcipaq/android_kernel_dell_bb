@@ -370,9 +370,7 @@ int tng_securefw(struct drm_device *dev, char *fw_basename, char *island_name, i
 				  ISLAND_MAGIC_NUMBER(island_name));
 	if (ret) {
 		DRM_ERROR("Failed to verify firmware %x\n", ret);
-//fcipaq
-//		return ret;
-        return 0;
+		return ret;
 	}
 	DRM_INFO("After verification, IMR region information\n");
 	tng_print_imrinfo(imrl_reg, 0, 0);

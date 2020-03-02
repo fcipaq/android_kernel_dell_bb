@@ -91,6 +91,8 @@ void OSFlushCPUCacheRangeKM(void *pvVirtStart,
 							IMG_CPU_PHYADDR sCPUPhysEnd)
 {
 	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
+	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
+	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
 
 	dma_ops->sync_single_for_device(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_TO_DEVICE);
 	dma_ops->sync_single_for_cpu(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_FROM_DEVICE);
@@ -102,6 +104,8 @@ void OSCleanCPUCacheRangeKM(void *pvVirtStart,
 							IMG_CPU_PHYADDR sCPUPhysEnd)
 {
 	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
+	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
+	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
 
 	dma_ops->sync_single_for_device(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_TO_DEVICE);
 }
@@ -112,8 +116,16 @@ void OSInvalidateCPUCacheRangeKM(void *pvVirtStart,
 								 IMG_CPU_PHYADDR sCPUPhysEnd)
 {
 	struct dma_map_ops *dma_ops = get_dma_ops(&gpsPVRLDMDev->dev);
+	PVR_UNREFERENCED_PARAMETER(pvVirtStart);
+	PVR_UNREFERENCED_PARAMETER(pvVirtEnd);
 
 	dma_ops->sync_single_for_cpu(NULL, sCPUPhysStart.uiAddr, sCPUPhysEnd.uiAddr - sCPUPhysStart.uiAddr, DMA_FROM_DEVICE);
+}
+
+PVRSRV_CACHE_OP_ADDR_TYPE OSCPUCacheOpAddressType(PVRSRV_CACHE_OP uiCacheOp)
+{
+	PVR_UNREFERENCED_PARAMETER(uiCacheOp);
+	return PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL;
 }
 
 void OSUserModeAccessToPerfCountersEn(void)

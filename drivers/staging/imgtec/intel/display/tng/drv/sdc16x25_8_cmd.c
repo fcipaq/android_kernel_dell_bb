@@ -39,9 +39,9 @@
 #define DEFAULT_TE_DELAY            704
 
 /* AMOLED wear leveling section */
-#ifdef CONFIG_AMOLED_SUPPORT
-#define PIXEL_SHIFT_MAX_X       10
-#define PIXEL_SHIFT_MAX_Y       8
+#if defined(CONFIG_AMOLED_SUPPORT)
+#define PIXEL_SHIFT_MAX_X       16
+#define PIXEL_SHIFT_MAX_Y       32
 static bool init_power_on = true;
 #endif
 
@@ -77,7 +77,9 @@ int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 	int ret;
 	u8 cmd;
 
-	PSB_DEBUG_ENTRY("\n");
+	u8 set_teline[] = {0x44,
+			(drm_psb_te_timer_delay >> 8) & 0xff,
+			0xff & drm_psb_te_timer_delay };
 
 	if (sdc16x25_8_cmd_power_mode(dsi_config)) {
 		mdfld_dsi_send_mcs_short_lp(sender,
@@ -106,9 +108,6 @@ int sdc16x25_8_cmd_drv_ic_init(struct mdfld_dsi_config *dsi_config)
 	if (ret)
 		goto err_out;
 
-	u8 set_teline[] = {0x44,
-			(drm_psb_te_timer_delay >> 8) & 0xff,
-			0xff & drm_psb_te_timer_delay };
 	ret = mdfld_dsi_send_mcs_long_lp(sender, set_teline,
 					sizeof(set_teline),
 					MDFLD_DSI_SEND_PACKAGE);
@@ -249,7 +248,7 @@ int sdc16x25_8_cmd_power_on(
 		goto err_out;
 	msleep(10);
 
-#ifdef CONFIG_AMOLED_SUPPORT
+#if defined(CONFIG_AMOLED_SUPPORT)
 	if (init_power_on) {
 		dev_priv->amoled_shift.dir_x = 0;
 		dev_priv->amoled_shift.dir_y = 0;
@@ -317,6 +316,21 @@ power_off_err:
 	return err;
 }
 
+#if defined(CONFIG_AMOLED_SUPPORT)
+static
+int sdc25x16_cmd_enable_pixel_shift(int *max_x,
+                         int *max_y)
+{
+        int val_x = PIXEL_SHIFT_MAX_X;
+        int val_y = PIXEL_SHIFT_MAX_Y;
+
+        *max_x = val_x;
+        *max_y = val_y;
+
+        return true;
+}
+#endif
+
 static
 int sdc16x25_8_cmd_set_brightness(
 				  struct mdfld_dsi_config *dsi_config,
@@ -333,13 +347,9 @@ int sdc16x25_8_cmd_set_brightness(
 		return -EINVAL;
 	}
 
-	duty_val = (0xFF * level) / 255;
-	/* fcipaq: zero brigntess not allowed */
-	if (duty_val == 0)
-	{
-		DRM_DEBUG("Prevented setting zero brightness (i.e. completely dark screen).\n");
-		duty_val = 1;
-	}
+//	duty_val = (0xFF * level) / 255;
+	duty_val = (0xFF * level) / 100;
+	DRM_ERROR("fcipaq: duty_bal: %d, level: %d\n", duty_val, level);
 
  	mdfld_dsi_send_mcs_short_lp(sender,
 				    write_display_brightness, duty_val, 1,
@@ -421,6 +431,11 @@ struct drm_display_mode *sdc16x25_8_cmd_get_config_mode(void)
 	mode->clock =  mode->vrefresh * mode->vtotal * mode->htotal / 1000;
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
 
+#if defined(CONFIG_AMOLED_SUPPORT)
+	mode->hdisplay = WIDTH - PIXEL_SHIFT_MAX_X;
+	mode->vdisplay = HEIGHT - PIXEL_SHIFT_MAX_Y;
+#endif
+
 	drm_mode_set_name(mode);
 	drm_mode_set_crtcinfo(mode, 0);
 
@@ -458,6 +473,9 @@ void sdc16x25_8_cmd_init(struct drm_device *dev, struct panel_funcs *p_funcs)
 		sdc16x25_8_cmd_panel_connection_detect;
 	p_funcs->set_brightness =
 		sdc16x25_8_cmd_set_brightness;
+#if defined(CONFIG_AMOLED_SUPPORT)
+	p_funcs->enable_pixel_shift = sdc25x16_cmd_enable_pixel_shift;
+#endif
 //	drm_psb_te_timer_delay = DEFAULT_TE_DELAY;
 	/* Enable usage of separate te_thread */
 //	drm_psb_te_thread = 1;

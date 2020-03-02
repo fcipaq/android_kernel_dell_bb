@@ -1,9 +1,6 @@
 /*************************************************************************/ /*!
 @File
-@Title          Services cache management header
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Defines for cache management which are visible internally
-                and externally
 @License        Dual MIT/GPLv2
 
 The contents of this file are subject to the MIT license as set out below.
@@ -42,40 +39,9 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
-#ifndef _CACHE_EXTERNAL_H_
-#define _CACHE_EXTERNAL_H_
-#include "img_types.h"
+#if !defined(_PVRSRV_EXT_H_)
+#define _PVRSRV_EXT_H_
 
-typedef IMG_UINT32 PVRSRV_CACHE_OP;
+#include "pvrsrv.h"
 
-#define PVRSRV_CACHE_OP_NONE		0x0			/*!< No operation */
-#define PVRSRV_CACHE_OP_CLEAN		0x1			/*!< Flush w/o invalidate */
-#define PVRSRV_CACHE_OP_INVALIDATE	0x2			/*!< Invalidate w/o flush */
-#define PVRSRV_CACHE_OP_FLUSH		0x3			/*!< Flush w/ invalidate */
-
-typedef IMG_UINT32 PVRSRV_CACHE_OP_ADDR_TYPE;
-
-#define PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL	0x1	/*!< Operation requires virtual address only */
-#define PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL	0x2	/*!< Operation requires physical address only */
-#define PVRSRV_CACHE_OP_ADDR_TYPE_BOTH		0x3	/*!< Operation requires both virtual & physical addresses */
-
-/*
-	If we get multiple cache operations before the operation which will
-	trigger the operation to happen then we need to make sure we do
-	the right thing.
-
-	Note: PVRSRV_CACHE_OP_INVALIDATE should never be passed into here
-*/
-#ifdef INLINE_IS_PRAGMA
-#pragma inline(SetCacheOp)
-#endif
-static INLINE PVRSRV_CACHE_OP SetCacheOp(PVRSRV_CACHE_OP uiCurrent,
-										 PVRSRV_CACHE_OP uiNew)
-{
-	PVRSRV_CACHE_OP uiRet;
-
-	uiRet = uiCurrent | uiNew;
-	return uiRet;
-}
-
-#endif	/* _CACHE_EXTERNAL_H_ */
+#endif /* !defined(_PVRSRV_EXT_H_) */

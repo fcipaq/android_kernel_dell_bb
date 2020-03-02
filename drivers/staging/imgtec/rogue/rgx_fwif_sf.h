@@ -2,10 +2,10 @@
 @File			rgx_fwif_sf.h
 @Title          RGX firmware interface string format specifiers
 @Copyright      Copyright (c) Imagination Technologies Ltd. All Rights Reserved
-@Description    Header for the rgx firmware logging messages. The following 
+@Description    Header for the rgx firmware logging messages. The following
 				list are the messages the firmware prints. Changing anything
 				but the first column or spelling mistakes in the strings will
-				break compatibility with log files created with older/newer 
+				break compatibility with log files created with older/newer
 				firmware versions.
 @License        Dual MIT/GPLv2
 
@@ -48,8 +48,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define RGX_FWIF_SF_H
 
 /*****************************************************************************
- * *DO*NOT* rearrange or delete lines in SFIDLIST or SFGROUPLIST or you 
- *  		 WILL BREAK fw tracing message compatibility with previous 
+ * *DO*NOT* rearrange or delete lines in SFIDLIST or SFGROUPLIST or you
+ *  		 WILL BREAK fw tracing message compatibility with previous
  *  		 fw versions. Only add new ones, if so required.
  ****************************************************************************/
 /* Available log groups */
@@ -77,7 +77,7 @@ enum RGXFW_LOG_SFGROUPS {
 #undef X
 };
 
-/* Table of String Format specifiers, the group they belong and the number of 
+/* Table of String Format specifiers, the group they belong and the number of
  * arguments each expects. Xmacro styled macros are used to generate what is
  * needed without requiring hand editing.
  *
@@ -183,6 +183,9 @@ X(90, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_WAITING_FOR_FWCCB, "FWCCB for OSid %u is f
 X(91, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_SYNC_PART, "Host Sync Partition marker: %d\n", 1) \
 X(92, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_SYNC_PART_RPT, "Host Sync Partition repeat: %d\n", 1) \
 X(93, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_CLOCK_SPEED_CHANGE, "Core clock set to %d Hz\n", 1) \
+X(94, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_CSRM_RECONFIG, "Reconfigure CSRM: special coeff support enable %d.\n", 1) \
+X(95, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_TA_REQ_MAX_COEFFS, "TA requires max coeff mode, deferring: %d.\n", 1) \
+X(96, RGXFW_GROUP_MAIN, RGXFW_SF_MAIN_PIX_REQ_MAX_COEFFS, "3D requires max coeff mode, deferring: %d.\n", 1) \
 \
 X( 1, RGXFW_GROUP_MTS, RGXFW_SF_MTS_BG_KICK, "Bg Task DM = %u, counted = %d\n", 2) \
 X( 2, RGXFW_GROUP_MTS, RGXFW_SF_MTS_BG_COMPLETE, "Bg Task complete DM = %u\n", 1) \
@@ -432,6 +435,7 @@ X(47, RGXFW_GROUP_HWR, RGXFW_SF_HWR_FULL_CHECK, "Full Signature Check result for
 X(48, RGXFW_GROUP_HWR, RGXFW_SF_HWR_FINAL_RESULT, "Final result for DM%u is HWRNeeded=%u with HWRChecksToGo=%u\n", 3) \
 X(49, RGXFW_GROUP_HWR, RGXFW_SF_HWR_USC_SLOTS_CHECK, "USC Slots result for DM%u is HWRNeeded=%u USCSlotsUsedByDM=%d\n", 3) \
 X(50, RGXFW_GROUP_HWR, RGXFW_SF_HWR_DEADLINE_CHECK, "Deadline counter for DM%u is HWRDeadline=%u\n", 2) \
+X(51, RGXFW_GROUP_HWR, RGXFW_SF_HWR_COMPUTE_EXTRA_ACTIVITY, "Special compute/BIF checks (BIF0Idle=%u, OnlyCDMWasRunning=%u, OnlyCDMIsRunning=%u)\n", 3) \
 \
 X( 1, RGXFW_GROUP_HWP, RGXFW_SF_HWP_I_CFGBLK, "Block 0x%x mapped to Config Idx %u\n", 2) \
 X( 2, RGXFW_GROUP_HWP, RGXFW_SF_HWP_I_OMTBLK, "Block 0x%x omitted from event - not enabled in HW\n", 1) \

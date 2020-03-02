@@ -49,9 +49,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "osfunc.h"
 #include "allocmem.h"
 
-#include "pvrsrv.h"
 #include "tlclient.h"
 #include "tlstream.h"
+#include "lists.h"
 
 #include "rgx_hwperf_km.h"
 #include "rgxhwperf.h"
@@ -678,6 +678,17 @@ static PVRSRV_ERROR RGXHWPerfCtrlFwBuffer(PVRSRV_DEVICE_NODE *psDeviceNode,
 
 	OSLockAcquire(psDevice->hLockHWPerfModule);
 
+	if (!psDevice->bFirmwareInitialised)
+	{
+		gpsRgxDevInfo->ui64HWPerfFilter = ui64Mask; // at least set filter
+		eError = PVRSRV_ERROR_NOT_INITIALISED;
+
+		PVR_DPF((PVR_DBG_ERROR, "HWPerf has NOT been initialised yet."
+		        " Mask has been SET to (%llx)", (long long) ui64Mask));
+
+		goto unlock_and_return;
+	}
+
 	/* If this method is being used whether to enable or disable
 	 * then the hwperf buffers (host and FW) are likely to be needed
 	 * eventually so create them, also helps unit testing. Buffers
@@ -688,7 +699,7 @@ static PVRSRV_ERROR RGXHWPerfCtrlFwBuffer(PVRSRV_DEVICE_NODE *psDeviceNode,
 		eError = RGXHWPerfInitOnDemandResources();
 		if (eError != PVRSRV_OK)
 		{
-			PVR_DPF((PVR_DBG_ERROR, "%s: Initialisation of on-demand HWPerfGpu "
+			PVR_DPF((PVR_DBG_ERROR, "%s: Initialisation of on-demand HWPerfFW "
 			        "resources failed", __func__));
 			goto unlock_and_return;
 		}
@@ -1447,8 +1458,7 @@ cleanup:
  *****************************************************************************/
 #if defined(SUPPORT_GPUTRACE_EVENTS)
 
-
-static POS_LOCK g_hFTraceLock;
+static POS_LOCK g_hFTraceLock = NULL;
 
 /* This lock ensures that the reference counting operation on the FTrace UFO
  * events and enable/disable operation on firmware event are performed as
@@ -1456,7 +1466,7 @@ static POS_LOCK g_hFTraceLock;
  * between reference counting and firmware event state change.
  * See below comment for g_uiUfoEventRef.
  */
-static POS_LOCK g_hLockFTraceEventLock;
+static POS_LOCK g_hLockFTraceEventLock = NULL;
 
 /* Multiple FTrace UFO events are reflected in the firmware as only one event. When
  * we enable FTrace UFO event we want to also at the same time enable it in
@@ -1468,42 +1478,66 @@ static IMG_INT g_uiUfoEventRef = 0;
 
 static void RGXHWPerfFTraceCmdCompleteNotify(PVRSRV_CMDCOMP_HANDLE);
 
+typedef struct RGX_HWPERF_FTRACE_DATA {
+	IMG_HANDLE  hGPUTraceCmdCompleteHandle;
+	IMG_HANDLE  hGPUTraceTLStream;
+	IMG_UINT64  ui64LastSampledTimeCorrOSTimeStamp;
+	IMG_UINT32  ui32FTraceLastOrdinal;
+} RGX_HWPERF_FTRACE_DATA;
+
 static PVRSRV_ERROR RGXHWPerfFTraceGPUEnable(void)
 {
 	PVRSRV_ERROR eError = PVRSRV_OK;
-	IMG_UINT64 ui64UFOFilter = RGX_HWPERF_EVENT_MASK_VALUE(RGX_HWPERF_UFO) &
-	                           gpsRgxDevInfo->ui64HWPerfFilter;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData;
 
 	PVR_DPF_ENTERED;
 
 	PVR_ASSERT(gpsRgxDevNode && gpsRgxDevInfo);
+
+	psFtraceData = gpsRgxDevInfo->pvGpuFtraceData;
 
 	/* In the case where the AppHint has not been set we need to
 	 * initialise the host driver HWPerf resources here. Allocated on
 	 * demand to reduce RAM foot print on systems not needing HWPerf.
 	 * Signal FW to enable event generation.
 	 */
-	if (gpsRgxDevNode->psSyncPrim)
+	if (gpsRgxDevInfo->bFirmwareInitialised)
 	{
+		IMG_UINT64 ui64UFOFilter = RGX_HWPERF_EVENT_MASK_VALUE(RGX_HWPERF_UFO) &
+		        gpsRgxDevInfo->ui64HWPerfFilter;
+
 		eError = PVRSRVRGXCtrlHWPerfKM(NULL, gpsRgxDevNode, IMG_FALSE,
 		                               RGX_HWPERF_STREAM_ID0_FW,
 		                               RGX_HWPERF_EVENT_MASK_HW_KICKFINISH |
 		                               ui64UFOFilter);
 		PVR_LOGG_IF_ERROR(eError, "PVRSRVRGXCtrlHWPerfKM", err_out);
 	}
+	else
+	{
+		/* only set filter and exit */
+		gpsRgxDevInfo->ui64HWPerfFilter = RGX_HWPERF_EVENT_MASK_HW_KICKFINISH |
+		        (RGX_HWPERF_EVENT_MASK_VALUE(RGX_HWPERF_UFO) &
+		        gpsRgxDevInfo->ui64HWPerfFilter);
+		PVRGpuTraceSetPreEnabled(IMG_TRUE);
+
+		PVR_DPF((PVR_DBG_WARNING, "HWPerfFW mask has been SET to (%llx)",
+		        (long long) gpsRgxDevInfo->ui64HWPerfFilter));
+
+		return PVRSRV_OK;
+	}
 
 	/* Open the TL Stream for HWPerf data consumption */
 	eError = TLClientOpenStream(DIRECT_BRIDGE_HANDLE,
 								HWPERF_TL_STREAM_NAME,
 								PVRSRV_STREAM_FLAG_ACQUIRE_NONBLOCKING,
-								&gpsRgxDevInfo->hGPUTraceTLStream);
+								&psFtraceData->hGPUTraceTLStream);
 	PVR_LOGG_IF_ERROR(eError, "TLClientOpenStream", err_out);
 
 	/* Register a notifier to collect HWPerf data whenever the HW completes
 	 * an operation.
 	 */
 	eError = PVRSRVRegisterCmdCompleteNotify(
-		&gpsRgxDevInfo->hGPUTraceCmdCompleteHandle,
+		&psFtraceData->hGPUTraceCmdCompleteHandle,
 		&RGXHWPerfFTraceCmdCompleteNotify,
 		gpsRgxDevInfo);
 	PVR_LOGG_IF_ERROR(eError, "PVRSRVRegisterCmdCompleteNotify", err_close_stream);
@@ -1511,26 +1545,33 @@ static PVRSRV_ERROR RGXHWPerfFTraceGPUEnable(void)
 	/* Reset the OS timestamp coming from the timer correlation data
 	 * associated with the latest HWPerf event we processed.
 	 */
-	gpsRgxDevInfo->ui64LastSampledTimeCorrOSTimeStamp = 0;
+	psFtraceData->ui64LastSampledTimeCorrOSTimeStamp = 0;
 
-	gpsRgxDevInfo->bFTraceGPUEventsEnabled = IMG_TRUE;
+	PVRGpuTraceSetEnabled(IMG_TRUE);
 
 err_out:
 	PVR_DPF_RETURN_RC(eError);
 
 err_close_stream:
+	PVRGpuTraceSetEnabled(IMG_FALSE);
+
 	TLClientCloseStream(DIRECT_BRIDGE_HANDLE,
-						gpsRgxDevInfo->hGPUTraceTLStream);
+						psFtraceData->hGPUTraceTLStream);
+	psFtraceData->hGPUTraceTLStream = NULL;
 	goto err_out;
 }
 
 static PVRSRV_ERROR RGXHWPerfFTraceGPUDisable(IMG_BOOL bDeInit)
 {
 	PVRSRV_ERROR eError = PVRSRV_OK;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData = gpsRgxDevInfo->pvGpuFtraceData;
 
 	PVR_DPF_ENTERED;
 
 	PVR_ASSERT(gpsRgxDevNode && gpsRgxDevInfo);
+
+	PVRGpuTraceSetEnabled(IMG_FALSE);
+	PVRGpuTraceSetPreEnabled(IMG_FALSE);
 
 	OSLockAcquire(g_hFTraceLock);
 
@@ -1540,17 +1581,16 @@ static PVRSRV_ERROR RGXHWPerfFTraceGPUDisable(IMG_BOOL bDeInit)
 		PVR_LOG_IF_ERROR(eError, "PVRSRVRGXCtrlHWPerfKM");
 	}
 
-
-	if (gpsRgxDevInfo->hGPUTraceCmdCompleteHandle)
+	if (psFtraceData->hGPUTraceCmdCompleteHandle)
 	{
 		/* Tracing is being turned off. Unregister the notifier. */
 		eError = PVRSRVUnregisterCmdCompleteNotify(
-				gpsRgxDevInfo->hGPUTraceCmdCompleteHandle);
+				psFtraceData->hGPUTraceCmdCompleteHandle);
 		PVR_LOG_IF_ERROR(eError, "PVRSRVUnregisterCmdCompleteNotify");
-		gpsRgxDevInfo->hGPUTraceCmdCompleteHandle = NULL;
+		psFtraceData->hGPUTraceCmdCompleteHandle = NULL;
 	}
 
-	if (gpsRgxDevInfo->hGPUTraceTLStream)
+	if (psFtraceData->hGPUTraceTLStream)
 	{
 		IMG_PBYTE pbTmp = NULL;
 		IMG_UINT32 ui32Tmp = 0;
@@ -1565,19 +1605,19 @@ static PVRSRV_ERROR RGXHWPerfFTraceGPUDisable(IMG_BOOL bDeInit)
 		 * the read offset in the buffer to catch up with the latest events.
 		 */
 		eError = TLClientAcquireData(DIRECT_BRIDGE_HANDLE,
-		                             gpsRgxDevInfo->hGPUTraceTLStream,
+		                             psFtraceData->hGPUTraceTLStream,
 		                             &pbTmp, &ui32Tmp);
 		PVR_LOG_IF_ERROR(eError, "TLClientCloseStream");
 
 		/* Let close stream perform the release data on the outstanding acquired data */
 		eError = TLClientCloseStream(DIRECT_BRIDGE_HANDLE,
-		                             gpsRgxDevInfo->hGPUTraceTLStream);
+		                             psFtraceData->hGPUTraceTLStream);
 		PVR_LOG_IF_ERROR(eError, "TLClientCloseStream");
 
-		gpsRgxDevInfo->hGPUTraceTLStream = NULL;
+		psFtraceData->hGPUTraceTLStream = NULL;
 	}
 
-	gpsRgxDevInfo->bFTraceGPUEventsEnabled = IMG_FALSE;
+	PVRGpuTraceSetEnabled(IMG_FALSE);
 
 	OSLockRelease(g_hFTraceLock);
 
@@ -1591,16 +1631,9 @@ PVRSRV_ERROR RGXHWPerfFTraceGPUEventsEnabledSet(IMG_BOOL bNewValue)
 
 	PVR_DPF_ENTERED;
 
-	if (!gpsRgxDevInfo)
-	{
-		/* RGXHWPerfFTraceGPUInit hasn't been called yet -- it's too early
-		 * to enable tracing.
-		 */
-		eError = PVRSRV_ERROR_NO_DEVICEDATA_FOUND;
-		PVR_DPF_RETURN_RC(eError);
-	}
+	PVR_ASSERT(gpsRgxDevNode && gpsRgxDevInfo);
 
-	bOldValue = gpsRgxDevInfo->bFTraceGPUEventsEnabled;
+	bOldValue = PVRGpuTraceEnabled();
 
 	if (bOldValue != bNewValue)
 	{
@@ -1625,20 +1658,10 @@ PVRSRV_ERROR PVRGpuTraceEnabledSet(IMG_BOOL bNewValue)
 	 * RGXHWPerfFTraceGPUDisable()/RGXHWPerfFTraceGPUEnable()
 	 */
 	OSAcquireBridgeLock();
-    eError = RGXHWPerfFTraceGPUEventsEnabledSet(bNewValue);
+	eError = RGXHWPerfFTraceGPUEventsEnabledSet(bNewValue);
 	OSReleaseBridgeLock();
 
 	PVR_DPF_RETURN_RC(eError);
-}
-
-IMG_BOOL RGXHWPerfFTraceGPUEventsEnabled(void)
-{
-	return(gpsRgxDevInfo->bFTraceGPUEventsEnabled);
-}
-
-IMG_BOOL PVRGpuTraceEnabled(void)
-{
-	return (RGXHWPerfFTraceGPUEventsEnabled());
 }
 
 void RGXHWPerfFTraceGPUEnqueueEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
@@ -1664,6 +1687,7 @@ static void RGXHWPerfFTraceGPUSwitchEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 	IMG_UINT64 ui64Timestamp;
 	RGX_HWPERF_HW_DATA_FIELDS* psHWPerfPktData;
 	RGXFWIF_GPU_UTIL_FWCB *psGpuUtilFWCB = psDevInfo->psRGXFWIfGpuUtilFWCb;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData = psDevInfo->pvGpuFtraceData;
 	RGXFWIF_TIME_CORR *psTimeCorr;
 	IMG_UINT32 ui32CRDeltaToOSDeltaKNs;
 	IMG_UINT64 ui64CRTimeStamp;
@@ -1685,7 +1709,7 @@ static void RGXHWPerfFTraceGPUSwitchEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 	ui64OSTimeStamp         = psTimeCorr->ui64OSTimeStamp;
 	ui32CRDeltaToOSDeltaKNs = psTimeCorr->ui32CRDeltaToOSDeltaKNs;
 
-	if(psDevInfo->ui64LastSampledTimeCorrOSTimeStamp > ui64OSTimeStamp)
+	if(psFtraceData->ui64LastSampledTimeCorrOSTimeStamp > ui64OSTimeStamp)
 	{
 		/* The previous packet had a time reference (time correlation data) more recent
 		 * than the one in the current packet, it means the timer correlation array wrapped
@@ -1695,7 +1719,7 @@ static void RGXHWPerfFTraceGPUSwitchEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 		PVR_DPF((PVR_DBG_ERROR, "RGXHWPerfFTraceGPUSwitchEvent: The timestamps computed so far could be wrong! "
 		                        "The time correlation array size should be increased to avoid this."));
 	}
-	psDevInfo->ui64LastSampledTimeCorrOSTimeStamp = ui64OSTimeStamp;
+	psFtraceData->ui64LastSampledTimeCorrOSTimeStamp = ui64OSTimeStamp;
 
 	{
 		IMG_UINT64 deltaRgxTimer = psHWPerfPkt->ui64Timestamp - ui64CRTimeStamp;  /* RGX CR timer ticks delta */
@@ -1722,6 +1746,7 @@ static void RGXHWPerfFTraceGPUUfoEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 	IMG_UINT64 ui64Timestamp;
 	RGX_HWPERF_UFO_DATA *psHWPerfPktData;
 	RGXFWIF_GPU_UTIL_FWCB *psGpuUtilFWCB = psDevInfo->psRGXFWIfGpuUtilFWCb;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData = psDevInfo->pvGpuFtraceData;
 	RGXFWIF_TIME_CORR *psTimeCorr;
 	IMG_UINT32 ui32CRDeltaToOSDeltaKNs;
 	IMG_UINT64 ui64CRTimeStamp;
@@ -1742,7 +1767,7 @@ static void RGXHWPerfFTraceGPUUfoEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 	ui64OSTimeStamp = psTimeCorr->ui64OSTimeStamp;
 	ui32CRDeltaToOSDeltaKNs = psTimeCorr->ui32CRDeltaToOSDeltaKNs;
 
-	if(psDevInfo->ui64LastSampledTimeCorrOSTimeStamp > ui64OSTimeStamp)
+	if(psFtraceData->ui64LastSampledTimeCorrOSTimeStamp > ui64OSTimeStamp)
 	{
 		/* The previous packet had a time reference (time correlation data) more
 		 * recent than the one in the current packet, it means the timer
@@ -1754,7 +1779,7 @@ static void RGXHWPerfFTraceGPUUfoEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 		        "computed so far could be wrong! The time correlation array "
 		        "size should be increased to avoid this."));
 	}
-	psDevInfo->ui64LastSampledTimeCorrOSTimeStamp = ui64OSTimeStamp;
+	psFtraceData->ui64LastSampledTimeCorrOSTimeStamp = ui64OSTimeStamp;
 
 	{
 		/* RGX CR timer ticks delta */
@@ -1783,6 +1808,7 @@ static IMG_BOOL ValidAndEmitFTraceEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 		RGX_HWPERF_V2_PACKET_HDR* psHWPerfPkt)
 {
 	RGX_HWPERF_EVENT_TYPE eType;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData = psDevInfo->pvGpuFtraceData;
 	const IMG_CHAR* pszWorkName;
 	PVR_GPUTRACE_SWITCH_TYPE eSwType;
 	static const struct {
@@ -1811,17 +1837,17 @@ static IMG_BOOL ValidAndEmitFTraceEvent(PVRSRV_RGXDEV_INFO *psDevInfo,
 	PVR_ASSERT(psHWPerfPkt);
 	eType = RGX_HWPERF_GET_TYPE(psHWPerfPkt);
 
-	if (psDevInfo->ui32FTraceLastOrdinal != psHWPerfPkt->ui32Ordinal - 1)
+	if (psFtraceData->ui32FTraceLastOrdinal != psHWPerfPkt->ui32Ordinal - 1)
 	{
 		RGX_HWPERF_STREAM_ID eStreamId = RGX_HWPERF_GET_STREAM_ID(psHWPerfPkt);
 		PVRGpuTraceEventsLost(eStreamId,
-		                      psDevInfo->ui32FTraceLastOrdinal,
+		                      psFtraceData->ui32FTraceLastOrdinal,
 		                      psHWPerfPkt->ui32Ordinal);
 		PVR_DPF((PVR_DBG_ERROR, "FTrace events lost (stream_id = %u, ordinal: last = %u, current = %u)",
-		         eStreamId, psDevInfo->ui32FTraceLastOrdinal, psHWPerfPkt->ui32Ordinal));
+		         eStreamId, psFtraceData->ui32FTraceLastOrdinal, psHWPerfPkt->ui32Ordinal));
 	}
 
-	psDevInfo->ui32FTraceLastOrdinal = psHWPerfPkt->ui32Ordinal;
+	psFtraceData->ui32FTraceLastOrdinal = psHWPerfPkt->ui32Ordinal;
 
 	/* Process UFO packets */
 	if (eType == RGX_HWPERF_UFO)
@@ -1934,6 +1960,7 @@ void RGXHWPerfFTraceCmdCompleteNotify(PVRSRV_CMDCOMP_HANDLE hCmdCompHandle)
 {
 	PVRSRV_DATA*		psPVRSRVData = PVRSRVGetPVRSRVData();
 	PVRSRV_RGXDEV_INFO* psDeviceInfo = hCmdCompHandle;
+	RGX_HWPERF_FTRACE_DATA* psFtraceData = gpsRgxDevInfo->pvGpuFtraceData;
 	PVRSRV_ERROR		eError;
 	IMG_HANDLE			hStream;
 	IMG_PBYTE			pBuffer;
@@ -1955,7 +1982,7 @@ void RGXHWPerfFTraceCmdCompleteNotify(PVRSRV_CMDCOMP_HANDLE hCmdCompHandle)
 			   psPVRSRVData != NULL &&
 			   gpsRgxDevInfo != NULL);
 
-	hStream = psDeviceInfo->hGPUTraceTLStream;
+	hStream = psFtraceData->hGPUTraceTLStream;
 
 	if (hStream)
 	{
@@ -2000,48 +2027,69 @@ out:
 	PVR_DPF_RETURN;
 }
 
-
 PVRSRV_ERROR RGXHWPerfFTraceGPUInit(PVRSRV_RGXDEV_INFO *psDevInfo)
 {
-	PVRSRV_ERROR eError = PVRSRV_OK;
+	PVRSRV_ERROR eError;
 
-	PVR_DPF_ENTERED;
-
-    /* Must be setup already by the general HWPerf module initialisation.
-	 * DevInfo object needed by FTrace event generation code */
-	PVR_ASSERT(gpsRgxDevInfo);
-	gpsRgxDevInfo->bFTraceGPUEventsEnabled = IMG_FALSE;
-	/* We initialise it only once because we want to track if any
-	 * packets were dropped. */
-	gpsRgxDevInfo->ui32FTraceLastOrdinal = IMG_UINT32_MAX - 1;
-
-	eError = OSLockCreate(&g_hFTraceLock, LOCK_TYPE_DISPATCH);
-	eError = OSLockCreate(&g_hLockFTraceEventLock, LOCK_TYPE_PASSIVE);
-
-	PVR_DPF_RETURN_RC(eError);
-}
-
-
-void RGXHWPerfFTraceGPUDeInit(PVRSRV_RGXDEV_INFO *psDevInfo)
-{
-	PVR_DPF_ENTERED;
-
-	if (gpsRgxDevInfo->bFTraceGPUEventsEnabled)
+	RGX_HWPERF_FTRACE_DATA *psData = OSAllocMem(sizeof(RGX_HWPERF_FTRACE_DATA));
+	if (psData == NULL)
 	{
-		RGXHWPerfFTraceGPUDisable(IMG_TRUE);
-		gpsRgxDevInfo->bFTraceGPUEventsEnabled = IMG_FALSE;
+		eError = PVRSRV_ERROR_OUT_OF_MEMORY;
+		goto e0;
 	}
 
-	OSLockDestroy(g_hLockFTraceEventLock);
-	g_hLockFTraceEventLock = NULL;
-	OSLockDestroy(g_hFTraceLock);
-	g_hFTraceLock = NULL;
+	/* We initialise it only once because we want to track if any
+	 * packets were dropped. */
+	psData->ui32FTraceLastOrdinal = IMG_UINT32_MAX - 1;
+	psData->hGPUTraceCmdCompleteHandle = NULL;
+	psData->hGPUTraceTLStream = NULL;
+	psData->ui64LastSampledTimeCorrOSTimeStamp = 0;
 
-	PVR_DPF_RETURN;
+	psDevInfo->pvGpuFtraceData = psData;
+
+	eError = OSLockCreate(&g_hFTraceLock, LOCK_TYPE_DISPATCH);
+	PVR_LOGG_IF_ERROR(eError, "OSLockCreate", e1);
+
+	eError = OSLockCreate(&g_hLockFTraceEventLock, LOCK_TYPE_PASSIVE);
+	PVR_LOGG_IF_ERROR(eError, "OSLockCreate", e2);
+
+	g_uiUfoEventRef = 0;
+
+	return PVRSRV_OK;
+
+e2:
+	OSLockDestroy(g_hFTraceLock);
+e1:
+	OSFREEMEM(psDevInfo->pvGpuFtraceData);
+e0:
+	return eError;
+}
+
+void RGXHWPerfFTraceGPUDeInit()
+{
+	/* gbFTraceGPUEventsEnabled and gbFTraceGPUEventsPreEnabled are cleared
+	 * in this function. */
+	PVRGpuTraceEnabledSet(IMG_FALSE);
+
+	OSFREEMEM(gpsRgxDevInfo->pvGpuFtraceData);
+
+	if (g_hLockFTraceEventLock != NULL)
+	{
+		OSLockDestroy(g_hLockFTraceEventLock);
+		g_hLockFTraceEventLock = NULL;
+	}
+
+	if (g_hFTraceLock != NULL)
+	{
+		OSLockDestroy(g_hFTraceLock);
+		g_hFTraceLock = NULL;
+	}
 }
 
 void PVRGpuTraceEnableUfoCallback(void)
 {
+	PVRSRV_ERROR eError;
+
 	OSLockAcquire(g_hLockFTraceEventLock);
 
 	if (g_uiUfoEventRef++ == 0)
@@ -2051,8 +2099,16 @@ void PVRGpuTraceEnableUfoCallback(void)
 		/* Small chance exists that ui64HWPerfFilter can be changed here and
 		 * the newest filter value will be changed to the old one + UFO event.
 		 * This is not a critical problem. */
-		if (PVRSRVRGXCtrlHWPerfKM(NULL, gpsRgxDevNode, RGX_HWPERF_STREAM_ID0_FW,
-		                          IMG_FALSE, ui64Filter) != PVRSRV_OK)
+		eError = PVRSRVRGXCtrlHWPerfKM(NULL, gpsRgxDevNode,
+		                               RGX_HWPERF_STREAM_ID0_FW,
+		                               IMG_FALSE, ui64Filter);
+		if (eError == PVRSRV_ERROR_NOT_INITIALISED)
+		{
+			/* If we land here that means that the FW is not initialised yet.
+			 * We stored the filter and it will be passed to the firmware
+			 * during it's initialisation phase. So ignore. */
+		}
+		else if (eError != PVRSRV_OK)
 		{
 			PVR_DPF((PVR_DBG_ERROR, "Could not enable UFO HWPerf event."));
 		}
@@ -2063,14 +2119,19 @@ void PVRGpuTraceEnableUfoCallback(void)
 
 void PVRGpuTraceDisableUfoCallback(void)
 {
+	PVRSRV_ERROR eError;
+	RGX_HWPERF_FTRACE_DATA *psFtraceData;
+
 	/* We have to check if lock is valid because on driver unload
 	 * RGXHWPerfFTraceGPUDeInit is called before kernel disables the ftrace
 	 * events. This means that the lock will be destroyed before this callback
 	 * is called.
 	 * We can safely return if that situation happens because driver will be
 	 * unloaded so we don't care about HWPerf state anymore. */
-	if (g_hLockFTraceEventLock == NULL)
+	if (gpsRgxDevInfo == NULL || gpsRgxDevInfo->pvGpuFtraceData == NULL)
 		return;
+
+	psFtraceData = gpsRgxDevInfo->pvGpuFtraceData;
 
 	OSLockAcquire(g_hLockFTraceEventLock);
 
@@ -2081,10 +2142,18 @@ void PVRGpuTraceDisableUfoCallback(void)
 		/* Small chance exists that ui64HWPerfFilter can be changed here and
 		 * the newest filter value will be changed to the old one + UFO event.
 		 * This is not a critical problem. */
-		if (PVRSRVRGXCtrlHWPerfKM(NULL, gpsRgxDevNode, RGX_HWPERF_STREAM_ID0_FW,
-		                          IMG_FALSE, ui64Filter) != PVRSRV_OK)
+		eError = PVRSRVRGXCtrlHWPerfKM(NULL, gpsRgxDevNode,
+		                               RGX_HWPERF_STREAM_ID0_FW,
+		                               IMG_FALSE, ui64Filter);
+		if (eError == PVRSRV_ERROR_NOT_INITIALISED)
 		{
-			PVR_DPF((PVR_DBG_ERROR, "Could not enable UFO HWPerf event."));
+			/* If we land here that means that the FW is not initialised yet.
+			 * We stored the filter and it will be passed to the firmware
+			 * during it's initialisation phase. So ignore. */
+		}
+		else if (eError != PVRSRV_OK)
+		{
+			PVR_DPF((PVR_DBG_ERROR, "Could not disable UFO HWPerf event."));
 		}
 	}
 

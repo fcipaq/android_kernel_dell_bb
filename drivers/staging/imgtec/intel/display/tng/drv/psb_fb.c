@@ -44,10 +44,6 @@
 #include "mdfld_dsi_output.h"
 #include "mdfld_output.h"
 
-#ifdef CONFIG_AMOLED_SUPPORT
-extern struct drm_device amoled_wl_dev;
-#endif
-
 static void psb_user_framebuffer_destroy(struct drm_framebuffer *fb);
 static int psb_user_framebuffer_create_handle(struct drm_framebuffer *fb,
 					      struct drm_file *file_priv,

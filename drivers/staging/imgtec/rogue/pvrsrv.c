@@ -1012,7 +1012,7 @@ Error:
 void IMG_CALLCONV PVRSRVDeInit(void *hDevice)
 {
 	PVRSRV_DATA		*psPVRSRVData = PVRSRVGetPVRSRVData();
-	PVRSRV_ERROR	eError;
+	PVRSRV_ERROR	eError = PVRSRV_OK;
 	IMG_UINT32		i;
 
 	if (gpsPVRSRVData == NULL)
@@ -1043,8 +1043,16 @@ void IMG_CALLCONV PVRSRVDeInit(void *hDevice)
 			eError = OSEventObjectSignal(psPVRSRVData->hDevicesWatchdogEvObj);
 			PVR_LOG_IF_ERROR(eError, "OSEventObjectSignal");
 		}
-		eError = OSThreadDestroy(gpsPVRSRVData->hDevicesWatchdogThread);
-		gpsPVRSRVData->hDevicesWatchdogThread = NULL;
+		LOOP_UNTIL_TIMEOUT(OS_THREAD_DESTROY_TIMEOUT_US)
+		{
+			eError = OSThreadDestroy(gpsPVRSRVData->hDevicesWatchdogThread);
+			if (PVRSRV_OK == eError)
+			{
+				gpsPVRSRVData->hDevicesWatchdogThread = NULL;
+				break;
+			}
+			OSWaitus(OS_THREAD_DESTROY_TIMEOUT_US/OS_THREAD_DESTROY_RETRY_COUNT);
+		} END_LOOP_UNTIL_TIMEOUT();
 		PVR_LOG_IF_ERROR(eError, "OSThreadDestroy");
 	}
 
@@ -1065,8 +1073,16 @@ void IMG_CALLCONV PVRSRVDeInit(void *hDevice)
 			eError = OSEventObjectSignal(psPVRSRVData->hCleanupEventObject);
 			PVR_LOG_IF_ERROR(eError, "OSEventObjectSignal");
 		}
-		eError = OSThreadDestroy(gpsPVRSRVData->hCleanupThread);
-		gpsPVRSRVData->hCleanupThread = NULL;
+		LOOP_UNTIL_TIMEOUT(OS_THREAD_DESTROY_TIMEOUT_US)
+		{
+			eError = OSThreadDestroy(gpsPVRSRVData->hCleanupThread);
+			if (PVRSRV_OK == eError)
+			{
+				gpsPVRSRVData->hCleanupThread = NULL;
+				break;
+			}
+			OSWaitus(OS_THREAD_DESTROY_TIMEOUT_US/OS_THREAD_DESTROY_RETRY_COUNT);
+		} END_LOOP_UNTIL_TIMEOUT();
 		PVR_LOG_IF_ERROR(eError, "OSThreadDestroy");
 	}
 

@@ -1739,7 +1739,6 @@ PVRSRV_ERROR RGXSetupFirmware(PVRSRV_DEVICE_NODE       *psDeviceNode,
 	psDevInfo->psRGXFWIfTraceBuf->ui32HWPerfWIdx = 0;
 	psDevInfo->psRGXFWIfTraceBuf->ui32HWPerfWrapCount = 0;
 	psDevInfo->psRGXFWIfTraceBuf->ui32HWPerfSize = psDevInfo->ui32RGXFWIfHWPerfBufSize;
-	psRGXFWInit->ui64HWPerfFilter = ui64HWPerfFilter;
 	psRGXFWInit->bDisableFilterHWPerfCustomCounter = (ui32ConfigFlags & RGXFWIF_INICFG_HWP_DISABLE_FILTER) ? IMG_TRUE : IMG_FALSE;
 	psDevInfo->psRGXFWIfTraceBuf->ui32HWPerfUt = 0;
 	psDevInfo->psRGXFWIfTraceBuf->ui32HWPerfDropCount = 0;
@@ -1747,12 +1746,19 @@ PVRSRV_ERROR RGXSetupFirmware(PVRSRV_DEVICE_NODE       *psDeviceNode,
 	psDevInfo->psRGXFWIfTraceBuf->ui32LastDropOrdinal = 0;
 	psDevInfo->psRGXFWIfTraceBuf->ui32PowMonEnergy = 0;
 
-	/* avoid uninitialised data for RGXHWPerfInit */
-	psDevInfo->hLockHWPerfModule = NULL;
-	psDevInfo->ui64HWPerfFilter = ui64HWPerfFilter;
-
-	eError = RGXHWPerfInit(psDeviceNode);
-	PVR_LOGG_IF_ERROR(eError, "RGXHWPerfInit", fail);
+	/* RGXHWPerfInit called in RGXRegisterDevice(). */
+	if (psDevInfo->ui64HWPerfFilter == 0)
+	{
+		psDevInfo->ui64HWPerfFilter = ui64HWPerfFilter;
+		psRGXFWInit->ui64HWPerfFilter = ui64HWPerfFilter;
+	}
+	else
+	{
+		/* The filter has already been modified. This can happen if the driver
+		 * was compiled with SUPPORT_KERNEL_SRVINIT enabled and e.g.
+		 * pvr/gpu_tracing_on was enabled. */
+		psRGXFWInit->ui64HWPerfFilter = psDevInfo->ui64HWPerfFilter;
+	}
 
 #if defined (PDUMP)
 	/* When PDUMP is enabled, ALWAYS allocate on-demand HWPerf resources
@@ -2903,15 +2909,24 @@ _exit:
 		RGX_DEFERRED_KCCB_CMD *psDeferredCommand;
 
 		psDeferredCommand = OSAllocMem(sizeof(*psDeferredCommand));
-		psDeferredCommand->sKCCBcmd = *psKCCBCmd;
-		psDeferredCommand->eDM = eKCCBType;
-		psDeferredCommand->uiPdumpFlags = uiPdumpFlags;
-		psDeferredCommand->psDevInfo = psDevInfo;
 
-		PVR_DPF((PVR_DBG_WARNING,"Deferring a KCCB command for DM %d" ,eKCCBType));
-		dllist_add_to_tail(&(psDevInfo->sKCCBDeferredCommandsListHead), &(psDeferredCommand->sListNode));
+		if(!psDeferredCommand)
+		{
+			PVR_DPF((PVR_DBG_WARNING,"Deferring a KCCB command failed: allocation failure: requesting retry "));
+			eError = PVRSRV_ERROR_RETRY;
+		}
+		else
+		{
+			psDeferredCommand->sKCCBcmd = *psKCCBCmd;
+			psDeferredCommand->eDM = eKCCBType;
+			psDeferredCommand->uiPdumpFlags = uiPdumpFlags;
+			psDeferredCommand->psDevInfo = psDevInfo;
 
-		eError = PVRSRV_OK;
+			PVR_DPF((PVR_DBG_WARNING,"Deferring a KCCB command for DM %d" ,eKCCBType));
+			dllist_add_to_tail(&(psDevInfo->sKCCBDeferredCommandsListHead), &(psDeferredCommand->sListNode));
+
+			eError = PVRSRV_OK;
+		}
 	}
 
 	return eError;

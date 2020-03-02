@@ -13,9 +13,6 @@ config DRM_MRFLD
 	select VIDEO_MRFLD
 	select VIDEO_MRFLD_EC
 
-config CONFIG_AMOLED_SUPPORT
-    bool
-
 config SLICE_HEADER_PARSING
 	bool
 
@@ -51,6 +48,18 @@ config MDFD_DUAL_MIPI
 config MID_DSI_DSR
 	bool "Support DSR (display self refresh)"
 	depends on SUPPORT_MIPI
+
+config AMOLED_SUPPORT
+	bool "Enable AMOLED burn-in protection"
+	depends on MOOREFIELD
+	help
+	  Shift the image on the screen by a small amount of pixels
+	  to prevent image burn in on AMOLED displays.
+	  Only for SDC 16x25 and SDC 25x16 on Dell Venue 7840/7040
+	  (aka. Intel Blackburn/Eaglespeak)
+
+#config PSB_ZOOM
+#	bool "Support double scan"
 
 source "drivers/staging/imgtec/intel/dfrgx/Kconfig"
 

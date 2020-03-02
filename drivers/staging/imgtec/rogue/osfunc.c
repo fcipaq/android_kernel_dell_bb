@@ -1124,7 +1124,12 @@ PVRSRV_ERROR OSThreadDestroy(IMG_HANDLE hThread)
 
 	/* Let the thread know we are ready for it to end and wait for it. */
 	ret = kthread_stop(psOSThreadData->kthread);
-	PVR_ASSERT(ret == 0);
+	if (0 != ret)
+	{
+		PVR_DPF((PVR_DBG_WARNING, "kthread_stop failed(%d)", ret));
+		return PVRSRV_ERROR_RETRY;
+	}
+
 	OSFreeMem(psOSThreadData);
 
 	return PVRSRV_OK;

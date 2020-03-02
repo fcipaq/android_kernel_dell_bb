@@ -52,6 +52,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if defined(SUPPORT_RANGEBASED_CACHEFLUSH)
 //#define CACHEOP_NO_CACHE_LINE_ALIGNED_ROUNDING
 static IMG_UINT32 guiCacheLineSize = 0;
+static size_t guiOSPageSize = 0;
 
 /* Perform requested CacheOp on the CPU data cache for successive cache
    line worth of bytes up to page or in-page cache-line boundary */
@@ -66,15 +67,16 @@ static INLINE void CacheOpCPURangeBased (PVRSRV_CACHE_OP uiCacheOp,
 	IMG_BYTE *pbCpuVirtAddrStart;
 	IMG_CPU_PHYADDR sCpuPhyAddrEnd;
 	IMG_CPU_PHYADDR sCpuPhyAddrStart;
+	IMG_DEVMEM_SIZE_T uiRelFlushSize;
+	IMG_DEVMEM_OFFSET_T uiRelFlushOffset;
 	IMG_DEVMEM_SIZE_T uiNextPgAlignedOffset;
-	IMG_DEVMEM_OFFSET_T uiRelFlushOffset = 0;
-	size_t OS_PAGE_SIZE = OSGetPageSize();
-	IMG_DEVMEM_SIZE_T uiRelFlushSize = (IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE;
 
 	/* These quantities allows us to perform cache operations
 	   at cache-line granularity thereby ensuring we do not
 	   perform more than is necessary */
 	PVR_ASSERT(uiPgAlignedOffset < uiCLAlignedEndOffset);
+	uiRelFlushSize = (IMG_DEVMEM_SIZE_T)guiOSPageSize;
+	uiRelFlushOffset = 0;
 
 	if (uiCLAlignedStartOffset > uiPgAlignedOffset)
 	{
@@ -83,11 +85,11 @@ static INLINE void CacheOpCPURangeBased (PVRSRV_CACHE_OP uiCacheOp,
 		uiRelFlushSize -= uiRelFlushOffset;
 	}
 
-	/* uiRelFlushSize is OS_PAGE_SIZE unless current outstanding CacheOp
+	/* uiRelFlushSize is guiOSPageSize unless current outstanding CacheOp
 	   size is smaller. The 1st case handles in-page CacheOp range and
 	   the 2nd case handles multiple-page CacheOp range with a last
-	   CacheOp size that is less than OS_PAGE_SIZE */
-	uiNextPgAlignedOffset = uiPgAlignedOffset + (IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE;
+	   CacheOp size that is less than guiOSPageSize */
+	uiNextPgAlignedOffset = uiPgAlignedOffset + (IMG_DEVMEM_SIZE_T)guiOSPageSize;
 	if (uiNextPgAlignedOffset < uiPgAlignedOffset)
 	{
 		/* uiNextPgAlignedOffset is greater than uiCLAlignedEndOffset
@@ -136,239 +138,41 @@ static INLINE void CacheOpCPURangeBased (PVRSRV_CACHE_OP uiCacheOp,
 	}
 }
 
-/* This function assumes buffer backing PMR data for CacheOp range is valid */
-static INLINE PVRSRV_ERROR CacheOpRangeBasedSlow (PMR *psPMR,
-												  IMG_BOOL bPMRIsSparse,
-												  PVRSRV_CACHE_OP uiCacheOp,
-												  IMG_UINT32 ui32NumOfPages,
-												  IMG_CPU_PHYADDR *psCpuPhyAddr,
-												  IMG_BOOL *pbCpuPhyAddrValid,
-												  IMG_DEVMEM_OFFSET_T uiPgAlignedStartOffset,
-												  IMG_DEVMEM_OFFSET_T uiPgAlignedEndOffset,
-												  IMG_DEVMEM_OFFSET_T uiCLAlignedStartOffset,
-												  IMG_DEVMEM_OFFSET_T uiCLAlignedEndOffset)
-{
-	IMG_HANDLE hPrivOut;
-	IMG_UINT32 ui32PageIndex;
-	IMG_DEVMEM_SIZE_T uiOutSize;
-	IMG_UINT32 ui32KMapNumOfPages;
-	IMG_BYTE *pbCpuVirtAddr = NULL;
-	PVRSRV_ERROR eError = PVRSRV_OK;
-	IMG_UINT32 ui32KMapNumOfPagesSize;
-	IMG_DEVMEM_OFFSET_T uiPgAlignedOffsetNext;
-	IMG_UINT32 OS_PAGE_SHIFT = (IMG_UINT32)OSGetPageShift();
-	size_t OS_PAGE_SIZE = OSGetPageSize();
-
-	/* Start with expectation of acquiring PMR kernel mapping data in
-	   PMR_MAX_TRANSLATION_STACK_ALLOC or ui32NumOfPages number of pages
-	   per iteration however this may not always be possible; on failure
-	   down size the expectation by 2 until it degenerates to 1 at which
-	   point we completely fail the CacheOp request and bail out */
-	ui32KMapNumOfPages = ui32NumOfPages > PMR_MAX_TRANSLATION_STACK_ALLOC ?
-				PMR_MAX_TRANSLATION_STACK_ALLOC : ui32NumOfPages;
-	ui32KMapNumOfPagesSize = ui32KMapNumOfPages << OS_PAGE_SHIFT;
-	ui32PageIndex = ui32KMapNumOfPages;
-
-	for (uiPgAlignedOffsetNext = uiPgAlignedStartOffset;
-		 uiPgAlignedOffsetNext < uiPgAlignedEndOffset;
-		 uiPgAlignedOffsetNext += (IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE, pbCpuVirtAddr += OS_PAGE_SIZE)
-	{
-		IMG_BOOL bRetry = IMG_TRUE;
-
-		if (ui32PageIndex < ui32KMapNumOfPages)
-		{
-			if (pbCpuPhyAddrValid[ui32PageIndex])
-			{
-				/* Perform actual CPU CacheOp */
-				CacheOpCPURangeBased(uiCacheOp,
-									 pbCpuVirtAddr,
-									 psCpuPhyAddr[ui32PageIndex],
-									 uiPgAlignedOffsetNext,
-									 uiCLAlignedStartOffset,
-									 uiCLAlignedEndOffset);
-			}
-		}
-		else
-		{
-			/* At each ui32KMapNumOfPages number of pages boundary
-			   we look-up the PMR CPU physical addresses and kmap
-			   the CPU virtual range; the rationale here is to
-			   lower number of calls to the PMR framework */
-			while(bRetry == IMG_TRUE)
-			{
-				eError = PMR_CpuPhysAddr(psPMR,
-										 OS_PAGE_SHIFT,
-										 ui32KMapNumOfPages,
-										 uiPgAlignedOffsetNext,
-										 psCpuPhyAddr,
-										 pbCpuPhyAddrValid);
-				if (eError != PVRSRV_OK)
-				{
-					if (ui32KMapNumOfPages > 1)
-					{
-						ui32KMapNumOfPagesSize >>= 1;
-						ui32KMapNumOfPages >>= 1;
-					}
-					else
-					{
-						PVR_ASSERT(0);
-						goto e0;
-					}
-				}
-				else
-				{
-					if (bPMRIsSparse)
-					{
-						eError =
-							PMRAcquireSparseKernelMappingData(psPMR,
-															  uiPgAlignedOffsetNext,
-															  ui32KMapNumOfPagesSize,
-															  (void **)&pbCpuVirtAddr,
-															  (size_t*)&uiOutSize,
-															  &hPrivOut);
-					}
-					else
-					{
-						eError =
-							PMRAcquireKernelMappingData(psPMR,
-														uiPgAlignedOffsetNext,
-														ui32KMapNumOfPagesSize,
-														(void **)&pbCpuVirtAddr,
-														(size_t*)&uiOutSize,
-														&hPrivOut);
-					}
-
-					if (eError != PVRSRV_OK)
-					{
-						if (ui32KMapNumOfPages > 1)
-						{
-							ui32KMapNumOfPagesSize >>= 1;
-							ui32KMapNumOfPages >>= 1;
-						}
-						else
-						{
-							PVR_ASSERT(0);
-							goto e0;
-						}
-					}
-					else
-					{
-						/* Setup OK, exit loop */
-						bRetry = IMG_FALSE;
-					}
-				}
-			}
-
-			ui32PageIndex = 0;
-			if (pbCpuPhyAddrValid[ui32PageIndex])
-			{
-				/* Perform actual CPU CacheOp */
-				CacheOpCPURangeBased(uiCacheOp,
-									 pbCpuVirtAddr,
-									 psCpuPhyAddr[ui32PageIndex],
-									 uiPgAlignedOffsetNext,
-									 uiCLAlignedStartOffset,
-									 uiCLAlignedEndOffset);
-			}
-		}
-
-		if (++ui32PageIndex >= ui32KMapNumOfPages)
-		{
-			PVR_ASSERT(ui32PageIndex == ui32KMapNumOfPages);
-
-			/* Drop kernel mapping data here for completed batch */
-			eError = PMRReleaseKernelMappingData(psPMR, hPrivOut);
-			PVR_ASSERT(eError == PVRSRV_OK);
-
-			/* Less the just completed batch */
-			ui32NumOfPages -= ui32KMapNumOfPages;
-			if (! ui32NumOfPages)
-			{
-				break;
-			}
-			else
-			{
-				if (ui32NumOfPages < ui32KMapNumOfPages)
-				{
-					ui32KMapNumOfPages = ui32NumOfPages;
-					ui32KMapNumOfPagesSize = ui32KMapNumOfPages << OS_PAGE_SHIFT;
-				}
-			}
-		}
-	}
-
-e0:
-	return eError;
-}
-
-/* This function assumes underlying PMR data for CacheOp range is valid */
-static INLINE PVRSRV_ERROR CacheOpRangeBasedFast (PVRSRV_CACHE_OP uiCacheOp,
-												  IMG_BYTE *pbCpuVirtAddr,
-												  IMG_CPU_PHYADDR *psCpuPhyAddr,
-												  IMG_BOOL *pbCpuPhyAddrValid,
-												  IMG_DEVMEM_OFFSET_T uiPgAlignedStartOffset,
-												  IMG_DEVMEM_OFFSET_T uiPgAlignedEndOffset,
-												  IMG_DEVMEM_OFFSET_T uiCLAlignedStartOffset,
-												  IMG_DEVMEM_OFFSET_T uiCLAlignedEndOffset)
-{
-	IMG_UINT32 ui32PageIndex;
-	IMG_BYTE *pbCpuVirtAddrNext;
-	IMG_DEVMEM_OFFSET_T uiPgAlignedOffsetNext;
-	size_t OS_PAGE_SIZE = OSGetPageSize();
-
-	for (uiPgAlignedOffsetNext = uiPgAlignedStartOffset, pbCpuVirtAddrNext = pbCpuVirtAddr, ui32PageIndex = 0;
-		 uiPgAlignedOffsetNext < uiPgAlignedEndOffset;
-		 uiPgAlignedOffsetNext += (IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE, pbCpuVirtAddrNext += OS_PAGE_SIZE, ui32PageIndex += 1)
-	{
-		if (pbCpuPhyAddrValid[ui32PageIndex])
-		{
-			/* Perform actual CPU CacheOp */
-			CacheOpCPURangeBased(uiCacheOp,
-								 pbCpuVirtAddrNext,
-								 psCpuPhyAddr[ui32PageIndex],
-								 uiPgAlignedOffsetNext,
-								 uiCLAlignedStartOffset,
-								 uiCLAlignedEndOffset);
-		}
-	}
-
-	return PVRSRV_OK;
-}
-
 PVRSRV_ERROR CacheOpQueue(PMR *psPMR,
 						  IMG_DEVMEM_OFFSET_T uiOffset,
 						  IMG_DEVMEM_SIZE_T uiSize,
 						  PVRSRV_CACHE_OP uiCacheOp)
 {
-	IMG_BOOL *pbValid;
 	IMG_HANDLE hPrivOut;
 	IMG_BOOL bPMRIsSparse;
-	IMG_INT32 ui32NumOfPages;
+	IMG_UINT32 ui32PageIndex;
+	IMG_UINT32 ui32NumOfPages;
 	IMG_DEVMEM_SIZE_T uiOutSize;
-	IMG_BYTE *pbCpuVirtAddr = NULL;
 	IMG_DEVMEM_SIZE_T uiPgAlignedSize;
-	IMG_BOOL bPMRKMapDataIsPreacquired;
-	IMG_CPU_PHYADDR *psCpuPhyAddr = NULL;
 	IMG_DEVMEM_OFFSET_T uiCLAlignedEndOffset;
 	IMG_DEVMEM_OFFSET_T uiPgAlignedEndOffset;
 	IMG_DEVMEM_OFFSET_T uiCLAlignedStartOffset;
 	IMG_DEVMEM_OFFSET_T uiPgAlignedStartOffset;
-	IMG_BOOL bPMRDataIsUsingStackAlloc = IMG_TRUE;
+	IMG_DEVMEM_OFFSET_T uiPgAlignedOffsetNext;
+	PVRSRV_CACHE_OP_ADDR_TYPE uiCacheOpAddrType;
 	IMG_BOOL abValid[PMR_MAX_TRANSLATION_STACK_ALLOC];
 	IMG_CPU_PHYADDR asCpuPhyAddr[PMR_MAX_TRANSLATION_STACK_ALLOC];
-	IMG_UINT32 OS_PAGE_SHIFT = (IMG_UINT32)OSGetPageShift();
-	size_t OS_PAGE_SIZE = OSGetPageSize();
+	IMG_UINT32 OS_PAGE_SHIFT = (IMG_UINT32) OSGetPageShift();
+	IMG_CPU_PHYADDR *psCpuPhyAddr = asCpuPhyAddr;
+	IMG_BOOL bIsPMRDataRetrieved = IMG_FALSE;
 	PVRSRV_ERROR eError = PVRSRV_OK;
+	IMG_BYTE *pbCpuVirtAddr = NULL;
+	IMG_BOOL *pbValid = abValid;
 
 	if (uiCacheOp == PVRSRV_CACHE_OP_NONE)
 	{
 		PVR_ASSERT(0);
-		return eError;
+		return PVRSRV_OK;
 	}
 	else
 	{
 		/* Carry out full dcache operation if size (in pages) qualifies */
-		if ((uiSize >> OS_PAGE_SHIFT) >= PVR_DIRTY_PAGECOUNT_FLUSH_THRESHOLD)
+		if ((uiSize >> OS_PAGE_SHIFT) > PVR_DIRTY_PAGECOUNT_FLUSH_THRESHOLD)
 		{
 			eError = OSCPUOperation(PVRSRV_CACHE_OP_FLUSH);
 			if (eError == PVRSRV_OK)
@@ -376,150 +180,189 @@ PVRSRV_ERROR CacheOpQueue(PMR *psPMR,
 				return PVRSRV_OK;
 			}
 		}
-	}
 
-	if (! guiCacheLineSize)
-	{
-		guiCacheLineSize = OSCPUCacheAttributeSize(PVR_DCACHE_LINE_SIZE);
-		PVR_ASSERT(guiCacheLineSize != 0);
-	}
+		if (! guiCacheLineSize)
+		{
+			guiCacheLineSize = OSCPUCacheAttributeSize(PVR_DCACHE_LINE_SIZE);
+			PVR_ASSERT(guiCacheLineSize != 0);
 
-	/* Start with expectation of acquiring
-	   full PMR kernel mapping data; this
-	   may not always be possible */
-	bPMRKMapDataIsPreacquired = IMG_TRUE;
+			guiOSPageSize = OSGetPageSize();
+			PVR_ASSERT(guiOSPageSize != 0);
+		}
+	}
 
 	/* Need this for kernel mapping */
 	bPMRIsSparse = PMR_IsSparse(psPMR);
 
-	/* Round the incoming offset down to the nearest cache-line / page aligned address */
+	/* Round the incoming offset down to the nearest cache-line / page aligned-address */
 	uiCLAlignedEndOffset = uiOffset + uiSize;
 	uiCLAlignedEndOffset = PVR_ALIGN(uiCLAlignedEndOffset, (IMG_DEVMEM_SIZE_T)guiCacheLineSize);
-	uiCLAlignedStartOffset = (uiOffset & ~((IMG_DEVMEM_SIZE_T)guiCacheLineSize-1));
+	uiCLAlignedStartOffset = (uiOffset & ~((IMG_DEVMEM_OFFSET_T)guiCacheLineSize-1));
 
 	uiPgAlignedEndOffset = uiCLAlignedEndOffset;
-	uiPgAlignedEndOffset = PVR_ALIGN(uiPgAlignedEndOffset, (IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE);
-	uiPgAlignedStartOffset = (uiOffset & ~((IMG_DEVMEM_SIZE_T)OS_PAGE_SIZE-1));
+	uiPgAlignedEndOffset = PVR_ALIGN(uiPgAlignedEndOffset, (IMG_DEVMEM_SIZE_T)guiOSPageSize);
+	uiPgAlignedStartOffset = (uiOffset & ~((IMG_DEVMEM_OFFSET_T)guiOSPageSize-1));
 	uiPgAlignedSize = uiPgAlignedEndOffset - uiPgAlignedStartOffset;
 
 #if defined(CACHEOP_NO_CACHE_LINE_ALIGNED_ROUNDING)
 	/* For internal debug if cache-line optimised
-	   flushing causes data corruption */
+	   flushing is suspected of causing data corruption */
 	uiCLAlignedStartOffset = uiPgAlignedStartOffset;
 	uiCLAlignedEndOffset = uiPgAlignedEndOffset;
 #endif
+
+	/* Which type of address(es) do we need for this CacheOp */
+	uiCacheOpAddrType = OSCPUCacheOpAddressType(uiCacheOp);
 
 	/* Type of allocation backing the PMR data */
 	ui32NumOfPages = uiPgAlignedSize >> OS_PAGE_SHIFT;
 	if (ui32NumOfPages > PMR_MAX_TRANSLATION_STACK_ALLOC)
 	{
-		psCpuPhyAddr = OSAllocZMem(ui32NumOfPages * sizeof(IMG_CPU_PHYADDR));
-		if (psCpuPhyAddr != NULL)
+		/* The pbValid array is allocated first as it is needed in
+		   both physical/virtual cache maintenance methods */
+		pbValid = OSAllocZMem(ui32NumOfPages * sizeof(IMG_BOOL));
+		if (pbValid != NULL)
 		{
-			pbValid = OSAllocZMem(ui32NumOfPages * sizeof(IMG_BOOL));
-			if (pbValid != NULL)
+			if (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL)
 			{
-				bPMRDataIsUsingStackAlloc = IMG_FALSE;
+				psCpuPhyAddr = OSAllocZMem(ui32NumOfPages * sizeof(IMG_CPU_PHYADDR));
+				if (psCpuPhyAddr == NULL)
+				{
+					psCpuPhyAddr = asCpuPhyAddr;
+					OSFreeMem(pbValid);
+					pbValid = abValid;
+				}
+			}
+		}
+		else
+		{
+			pbValid = abValid;
+		}
+	}
+
+	/* We always retrieve PMR data in bulk, up-front if number of pages is within
+	   PMR_MAX_TRANSLATION_STACK_ALLOC limits else we check to ensure that a 
+	   dynamic buffer has been allocated to satisfy requests outside limits */
+	if (ui32NumOfPages <= PMR_MAX_TRANSLATION_STACK_ALLOC || pbValid != abValid)
+	{
+		if (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL)
+		{
+			/* Look-up PMR CpuPhyAddr once, if possible */
+			eError = PMR_CpuPhysAddr(psPMR,
+									 OS_PAGE_SHIFT,
+									 ui32NumOfPages,
+									 uiPgAlignedStartOffset,
+									 psCpuPhyAddr,
+									 pbValid);
+			if (eError == PVRSRV_OK)
+			{
+				bIsPMRDataRetrieved = IMG_TRUE;
+			}
+		}
+	}
+
+	/* For each device page, carry out the requested cache maintenance operation */
+	for (uiPgAlignedOffsetNext = uiPgAlignedStartOffset, ui32PageIndex = 0;
+		 uiPgAlignedOffsetNext < uiPgAlignedEndOffset;
+		 uiPgAlignedOffsetNext += (IMG_DEVMEM_OFFSET_T) guiOSPageSize, ui32PageIndex += 1)
+	{
+		if (bIsPMRDataRetrieved == IMG_FALSE)
+		{
+			/* Never cross page boundary without looking up corresponding
+			   PMR page physical address and/or page validity if these
+			   were not looked-up, in bulk, up-front */	
+			ui32PageIndex = 0;
+			if (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL)
+			{
+				eError = PMR_CpuPhysAddr(psPMR,
+										 OS_PAGE_SHIFT,
+										 1,
+										 uiPgAlignedOffsetNext,
+										 psCpuPhyAddr,
+										 pbValid);
+				if (eError != PVRSRV_OK)
+				{
+					PVR_ASSERT(0);
+					goto e0;
+				}
 			}
 			else
 			{
-				OSFreeMem(psCpuPhyAddr);
+				PMR_IsOffsetValid(psPMR,
+								  uiPgAlignedOffsetNext,
+								  pbValid);
 			}
 		}
-	}
 
-	/* If using stack allocation, point to it */
-	if (bPMRDataIsUsingStackAlloc == IMG_TRUE)
-	{
-		psCpuPhyAddr = asCpuPhyAddr;
-		pbValid = abValid;
-
-		if (ui32NumOfPages > PMR_MAX_TRANSLATION_STACK_ALLOC)
+		/* Skip invalid PMR pages (i.e. sparse) */
+		if (pbValid[ui32PageIndex] == IMG_FALSE)
 		{
-			bPMRKMapDataIsPreacquired = IMG_FALSE;
+			continue;
 		}
-	}
 
-	/* Acquire full kmap data for PMR range */
-	if (bPMRKMapDataIsPreacquired == IMG_TRUE)
-	{
-		eError = PMR_CpuPhysAddr(psPMR,
-								 OS_PAGE_SHIFT,
-								 ui32NumOfPages,
-								 uiPgAlignedStartOffset,
-								 psCpuPhyAddr,
-								 pbValid);
-		if (eError == PVRSRV_OK)
+		/* Skip virtual address acquire if CacheOp can be maintained
+		   entirely using PMR physical addresses */
+		if (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL)
 		{
 			if (bPMRIsSparse)
 			{
-				eError = PMRAcquireSparseKernelMappingData(psPMR,
-														   uiPgAlignedStartOffset,
-														   uiPgAlignedSize,
-														   (void **)&pbCpuVirtAddr,
-														   (size_t*)&uiOutSize,
-														   &hPrivOut);
+				eError =
+					PMRAcquireSparseKernelMappingData(psPMR,
+													  uiPgAlignedOffsetNext,
+													  guiOSPageSize,
+													  (void **)&pbCpuVirtAddr,
+													  (size_t*)&uiOutSize,
+													  &hPrivOut);
+				if (eError != PVRSRV_OK)
+				{
+					PVR_ASSERT(0);
+					goto e0;
+				}
 			}
 			else
 			{
-				eError = PMRAcquireKernelMappingData(psPMR,
-													 uiPgAlignedStartOffset,
-													 uiPgAlignedSize,
-													 (void **)&pbCpuVirtAddr,
-													 (size_t*)&uiOutSize,
-													 &hPrivOut);
+				eError =
+					PMRAcquireKernelMappingData(psPMR,
+												uiPgAlignedOffsetNext,
+												guiOSPageSize,
+												(void **)&pbCpuVirtAddr,
+												(size_t*)&uiOutSize,
+												&hPrivOut);
+				if (eError != PVRSRV_OK)
+				{
+					PVR_ASSERT(0);
+					goto e0;
+				}
 			}
 		}
 
-		if (eError != PVRSRV_OK)
+		/* Issue actual cache maintenance for PMR */
+		CacheOpCPURangeBased(uiCacheOp,
+							 pbCpuVirtAddr,
+							 (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_VIRTUAL) ?
+								psCpuPhyAddr[ui32PageIndex] : psCpuPhyAddr[0],
+							 uiPgAlignedOffsetNext,
+							 uiCLAlignedStartOffset,
+							 uiCLAlignedEndOffset);
+
+		/* Skip virtual address release if CacheOp can be maintained
+		   entirely using PMR physical addresses */
+		if (uiCacheOpAddrType != PVRSRV_CACHE_OP_ADDR_TYPE_PHYSICAL)
 		{
-			bPMRKMapDataIsPreacquired = IMG_FALSE;
+			eError = PMRReleaseKernelMappingData(psPMR, hPrivOut);
+			PVR_ASSERT(eError == PVRSRV_OK);
 		}
 	}
 
-	if (bPMRKMapDataIsPreacquired == IMG_TRUE)
+e0:
+	if (psCpuPhyAddr != asCpuPhyAddr)
 	{
-		eError = CacheOpRangeBasedFast (uiCacheOp,
-										pbCpuVirtAddr,
-										psCpuPhyAddr,
-										pbValid,
-										uiPgAlignedStartOffset,
-										uiPgAlignedEndOffset,
-										uiCLAlignedStartOffset,
-										uiCLAlignedEndOffset);
-		PVR_ASSERT(eError == PVRSRV_OK);
-
-		eError = PMRReleaseKernelMappingData(psPMR, hPrivOut);
-		PVR_ASSERT(eError == PVRSRV_OK);
-	}
-	else
-	{
-		eError = CacheOpRangeBasedSlow (psPMR,
-										bPMRIsSparse,
-										uiCacheOp,
-										ui32NumOfPages,
-										psCpuPhyAddr,
-										pbValid,
-										uiPgAlignedStartOffset,
-										uiPgAlignedEndOffset,
-										uiCLAlignedStartOffset,
-										uiCLAlignedEndOffset);
-		PVR_ASSERT(eError == PVRSRV_OK);
+		OSFreeMem(psCpuPhyAddr);
 	}
 
-	if (bPMRDataIsUsingStackAlloc == IMG_FALSE)
+	if (pbValid != abValid)
 	{
-		if (psCpuPhyAddr != NULL)
-		{
-			PVR_ASSERT(psCpuPhyAddr != asCpuPhyAddr);
-			OSFreeMem(psCpuPhyAddr);
-		}
-
-		if (pbValid != NULL)
-		{
-			PVR_ASSERT(pbValid != abValid);
-			OSFreeMem(pbValid);
-		}
+		OSFreeMem(pbValid);
 	}
 
 	return eError;

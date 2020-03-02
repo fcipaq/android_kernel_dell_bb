@@ -211,6 +211,9 @@ void OSInvalidateCPUCacheRangeKM(void *pvVirtStart,
 								 IMG_CPU_PHYADDR sCPUPhysStart,
 								 IMG_CPU_PHYADDR sCPUPhysEnd);
 
+
+PVRSRV_CACHE_OP_ADDR_TYPE OSCPUCacheOpAddressType(PVRSRV_CACHE_OP uiCacheOp);
+
 typedef enum _IMG_DCACHE_ATTRIBUTE_
 {
 	PVR_DCACHE_LINE_SIZE = 0,

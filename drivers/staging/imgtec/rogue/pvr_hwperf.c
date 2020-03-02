@@ -232,7 +232,7 @@ PVRSRV_ERROR PVRSRVHWperfCreateDebugFs(void)
 	}
 
 	iError = PVRDebugFSCreateEntry("gpu_filter", g_sHWPerfDebugFs.psRootDir,
-	                               &g_sSeqOps, HWPerfFilterSet,
+	                               &g_sSeqOps, HWPerfFilterSet, NULL, NULL,
 	                               (void *) RGX_HWPERF_STREAM_ID0_FW,
 	                               &g_sHWPerfDebugFs.psGpuFilterEntry);
 	if (iError)
@@ -242,7 +242,7 @@ PVRSRV_ERROR PVRSRVHWperfCreateDebugFs(void)
 	}
 
 	iError = PVRDebugFSCreateEntry("host_filter", g_sHWPerfDebugFs.psRootDir,
-	                               &g_sSeqOps, HWPerfFilterSet,
+	                               &g_sSeqOps, HWPerfFilterSet, NULL, NULL,
 	                               (void *) RGX_HWPERF_STREAM_ID1_HOST,
 	                               &g_sHWPerfDebugFs.psHostFilterEntry);
 	if (iError)

@@ -271,15 +271,15 @@ PhysmemNewRamBackedPMR(CONNECTION_DATA * psConnection,
 	}
 
 
-    if (uiLog2PageSize > OSGetPageShift())
-    {
-    	/* If we do support it, this check must become a page size validation */
-    	PVR_DPF((PVR_DBG_ERROR, "PVRSRV currently does not support "
-    			"page sizes that are larger than OS page size. Requested 2^%u, OS 2^%u ",
-    			uiLog2PageSize,
-    			(IMG_UINT32) OSGetPageShift()));
-    	return PVRSRV_ERROR_INVALID_PARAMS;
-    }
+	if (uiLog2PageSize > OSGetPageShift())
+	{
+		/* If we do support it, this check must become a page size validation */
+		PVR_DPF((PVR_DBG_ERROR, "PVRSRV currently does not support "
+		        "page sizes that are larger than OS page size. Requested 2^%u, OS 2^%u ",
+		        uiLog2PageSize,
+		        (IMG_UINT32) OSGetPageShift()));
+		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
 
 	/* Apply memory budgeting policy */
 	if (pfnCheckMemAllocSize)

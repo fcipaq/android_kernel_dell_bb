@@ -287,11 +287,7 @@ typedef struct _PVRSRV_RGXDEV_INFO_
 	IMG_HANDLE				hHWPerfHostStream; /*! Host side only HWPerf stream */
 	IMG_UINT32				ui32HWPerfHostNextOrdinal; /*! Ordinal number for HWPerfHost */
 #if defined(SUPPORT_GPUTRACE_EVENTS)
-	IMG_HANDLE				hGPUTraceCmdCompleteHandle;
-	IMG_BOOL				bFTraceGPUEventsEnabled;
-	IMG_HANDLE				hGPUTraceTLStream;
-	IMG_UINT64				ui64LastSampledTimeCorrOSTimeStamp;
-	IMG_UINT32				ui32FTraceLastOrdinal;
+	void					*pvGpuFtraceData;
 #endif
 	
 	/* Poll data for detecting firmware fatal errors */
