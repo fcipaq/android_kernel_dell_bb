@@ -761,13 +761,16 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x09d: map_key_clear(KEY_CHANNELDOWN);	break;
 		case 0x0a0: map_key_clear(KEY_VCR2);		break;
 
-		case 0x0b0: map_key_clear(KEY_PLAY);		break;
+//		case 0x0b0: map_key_clear(KEY_PLAY);		break;
+		case 0x0b0: map_key_clear(KEY_F6);		break; //remap KEY_PLAY --> KEY_F6
 		case 0x0b1: map_key_clear(KEY_PAUSE);		break;
 		case 0x0b2: map_key_clear(KEY_RECORD);		break;
 		case 0x0b3: map_key_clear(KEY_FASTFORWARD);	break;
 		case 0x0b4: map_key_clear(KEY_REWIND);		break;
-		case 0x0b5: map_key_clear(KEY_NEXTSONG);	break;
-		case 0x0b6: map_key_clear(KEY_PREVIOUSSONG);	break;
+//		case 0x0b5: map_key_clear(KEY_NEXTSONG);	break;
+		case 0x0b5: map_key_clear(KEY_F4);		break; //remap KEY_NEXTSONG --> KEY_F4
+//		case 0x0b6: map_key_clear(KEY_PREVIOUSSONG);	break;
+		case 0x0b6: map_key_clear(KEY_F6);		break; //remap KEY_PREVIOUSSONG --> KEY_F5
 		case 0x0b7: map_key_clear(KEY_STOPCD);		break;
 		case 0x0b8: map_key_clear(KEY_EJECTCD);		break;
 		case 0x0bc: map_key_clear(KEY_MEDIA_REPEAT);	break;
@@ -777,10 +780,13 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x0cd: map_key_clear(KEY_PLAYPAUSE);	break;
 		case 0x0cf: map_key_clear(KEY_VOICECOMMAND);	break;
 		case 0x0e0: map_abs_clear(ABS_VOLUME);		break;
-		case 0x0e2: map_key_clear(KEY_MUTE);		break;
+//		case 0x0e2: map_key_clear(KEY_MUTE);		break;
+		case 0x0e2: map_key_clear(KEY_F1);		break; //remap KEY_MUTE --> KEY_F1
 		case 0x0e5: map_key_clear(KEY_BASSBOOST);	break;
-		case 0x0e9: map_key_clear(KEY_VOLUMEUP);	break;
-		case 0x0ea: map_key_clear(KEY_VOLUMEDOWN);	break;
+//		case 0x0e9: map_key_clear(KEY_VOLUMEUP);	break;
+		case 0x0e9: map_key_clear(KEY_F2);		break; //remap KEY_VOLUMEUP --> KEY_F2
+//		case 0x0ea: map_key_clear(KEY_VOLUMEDOWN);	break;
+		case 0x0ea: map_key_clear(KEY_F3);		break; //remap KEY_VOLUMEDOWN --> KEY_F3
 		case 0x0f5: map_key_clear(KEY_SLOW);		break;
 
 		case 0x181: map_key_clear(KEY_BUTTONCONFIG);	break;
@@ -807,10 +813,7 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x199: map_key_clear(KEY_CHAT);		break;
 		case 0x19c: map_key_clear(KEY_LOGOFF);		break;
 //		case 0x19e: map_key_clear(KEY_COFFEE);		break;
-		case 0x19e:
-			map_key_clear(KEY_102ND);		
-			dbg_hid("EP keyboard: Remapping KEY_COFFEE to KEY_102ND \n");
-			break;
+		case 0x19e: map_key_clear(KEY_102ND);		break; //remap KEY_COFFE --> <>|
 		case 0x19f: map_key_clear(KEY_CONTROLPANEL);	break;
 		case 0x1a2: map_key_clear(KEY_APPSELECT);	break;
 		case 0x1a3: map_key_clear(KEY_NEXT);		break;
@@ -838,18 +841,13 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x21c: map_key_clear(KEY_CUT);		break;
 		case 0x21d: map_key_clear(KEY_PASTE);		break;
 		case 0x21f: map_key_clear(KEY_FIND);		break;
-		case 0x221: map_key_clear(KEY_SEARCH);		break;
+//		case 0x221: map_key_clear(KEY_SEARCH);		break;
+		case 0x221: map_key_clear(KEY_F9);		break; //remap KEY_SEARCH --> KEY_F9
 		case 0x222: map_key_clear(KEY_GOTO);		break;
 //		case 0x223: map_key_clear(KEY_HOMEPAGE);	break;
-		case 0x223:
-			map_key_clear(KEY_LEFTMETA);		
-			dbg_hid("EP keyboard: Remapping KEY_HOMEPAGE to KEY_LEFTMETA \n");
-			break;
+		case 0x223: map_key_clear(KEY_LEFTMETA);	break;  //remap KEY_HOMEPAGE --> KEY_LEFTMETA
 //		case 0x224: map_key_clear(KEY_BACK);		break;
-		case 0x224:
-			map_key_clear(KEY_ESC);
-			dbg_hid("EP keyboard: Remapping KEY_BACK to KEY_ESC.\n");
-			break;
+		case 0x224: map_key_clear(KEY_ESC);		break;  //remap KEY_BACK --> KEY_ESC
 		case 0x225: map_key_clear(KEY_FORWARD);		break;
 		case 0x226: map_key_clear(KEY_STOP);		break;
 		case 0x227: map_key_clear(KEY_REFRESH);		break;
