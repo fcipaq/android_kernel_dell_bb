@@ -13317,7 +13317,6 @@ static s32 wl_event_handler(void *data)
 		SMP_RD_BARRIER_DEPENDS();
 		if (tsk->terminated) {
 			DHD_OS_WAKE_UNLOCK(cfg->pub);
-	WL_ERR(("fcipaq break\n"));
 			break;
 		}
 		while ((e = wl_deq_event(cfg))) {

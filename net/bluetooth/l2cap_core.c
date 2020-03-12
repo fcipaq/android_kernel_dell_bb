@@ -26,7 +26,7 @@
    SOFTWARE IS DISCLAIMED.
 */
 
-/* fcipaq: patch CVE-2017-1000251 "blueborne" */
+/* patched CVE-2017-1000251 "blueborne" */
 
 /* Bluetooth L2CAP core. */
 

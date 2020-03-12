@@ -1532,10 +1532,15 @@ static void bq24261_wdt_boost_ic2(struct bq24261_charger *chip, int val)
 	}
 
 	if (val == 1)
-		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, BQ24261_ENABLE_BOOST);
+		ret = bq24261_read_modify_reg(chip->client,
+						BQ24261_STAT_CTRL0_ADDR,
+						BQ24261_BOOST_MASK,
+						BQ24261_ENABLE_BOOST);
 	else
-		ret = bq24261_write_reg(chip->client, BQ24261_STAT_CTRL0_ADDR, ~BQ24261_ENABLE_BOOST);
-
+		ret = bq24261_read_modify_reg(chip->client,
+						BQ24261_STAT_CTRL0_ADDR,
+						BQ24261_BOOST_MASK,
+						~BQ24261_ENABLE_BOOST);
 	if (ret)
 		dev_err(&chip->client->dev, "Error (%d) in setting boostmode to %d\n", ret, val);
 
