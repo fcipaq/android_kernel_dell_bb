@@ -1241,6 +1241,21 @@ struct drm_device {
 #define DRM_SWITCH_POWER_OFF 1
 #define DRM_SWITCH_POWER_CHANGING 2
 
+#ifdef CONFIG_AMOLED_SUPPORT
+struct drm_pixel_shift {
+        int max_x;
+        int max_y;
+        u32 curr_x;     // update on x pixel shift, needs to be unsigned because of get_random_bytes
+        u32 curr_y;     // update on y pixel shift, needs to be unsigned because of get_random_bytes
+	int dir_x;
+	int dir_y;
+
+	int flip_done;
+
+	int panel_type;
+};
+#endif
+
 static __inline__ int drm_core_check_feature(struct drm_device *dev,
 					     int feature)
 {

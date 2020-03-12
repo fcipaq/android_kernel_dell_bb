@@ -69,6 +69,14 @@ config TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN
 	  To compile this driver as a module, choose M here: the
 	  module will be called synaptics_dsx_active_pen.
 
+config TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN_STABILIZE
+	bool "Synaptics DSX active pen movement stabilization"
+	depends on TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN
+	help
+	  Say Y here to enable stabilization of the pen movement.
+
+	  If unsure, say Y.
+
 config TOUCHSCREEN_SYNAPTICS_DSX_PROXIMITY
 	tristate "Synaptics DSX proximity module"
 	depends on TOUCHSCREEN_SYNAPTICS_DSX_CORE

@@ -42,52 +42,50 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-#if defined(CONFIG_AMOLED_SUPPORT)
+#ifdef CONFIG_AMOLED_SUPPORT
 #define AMOLED_SHIFT_TIMEOUT (60 * HZ)
 
+struct drm_pixel_shift wl_amoled_shift;
+EXPORT_SYMBOL(wl_amoled_shift);
 struct delayed_work wl_delayed_work;
-struct drm_device amoled_wl_dev;
+
 
 static void amoled_wearleveling_worker(struct work_struct *work)
 {
 
-	struct drm_device *dev = &amoled_wl_dev;
-	struct drm_psb_private *dev_priv =
-	    (struct drm_psb_private *)dev->dev_private;
-
 	int shift_y = 0;
 	
-	dev_priv->amoled_shift.flip_done = 0;
+	wl_amoled_shift.flip_done = 0;
 
-	if (dev_priv->amoled_shift.dir_x == 0) {	
-		if (dev_priv->amoled_shift.curr_x + 1 > dev_priv->amoled_shift.max_x)
+	if (wl_amoled_shift.dir_x == 0) {	
+		if (wl_amoled_shift.curr_x + 1 > wl_amoled_shift.max_x)
 		{
-			dev_priv->amoled_shift.dir_x = 1;
+			wl_amoled_shift.dir_x = 1;
 			shift_y = 1;
 		}
 		else
-			dev_priv->amoled_shift.curr_x++;
+			wl_amoled_shift.curr_x++;
 	} else {
-		if (dev_priv->amoled_shift.curr_x == 0)
+		if (wl_amoled_shift.curr_x == 0)
 		{
-			dev_priv->amoled_shift.dir_x = 0;
+			wl_amoled_shift.dir_x = 0;
 			shift_y = 1;
 		}
 		else
-			dev_priv->amoled_shift.curr_x--;
+			wl_amoled_shift.curr_x--;
 	}
 
 	if (shift_y) {
-		if (dev_priv->amoled_shift.dir_y == 0) {
-			if (dev_priv->amoled_shift.curr_y + 1 > dev_priv->amoled_shift.max_y)
-				dev_priv->amoled_shift.dir_y = 1;
+		if (wl_amoled_shift.dir_y == 0) {
+			if (wl_amoled_shift.curr_y + 1 > wl_amoled_shift.max_y)
+				wl_amoled_shift.dir_y = 1;
 			else
-				dev_priv->amoled_shift.curr_y++;
+				wl_amoled_shift.curr_y++;
 		} else {
-			if (dev_priv->amoled_shift.curr_y == 0)
-				dev_priv->amoled_shift.dir_y = 0;
+			if (wl_amoled_shift.curr_y == 0)
+				wl_amoled_shift.dir_y = 0;
 			else
-				dev_priv->amoled_shift.curr_y--;
+				wl_amoled_shift.curr_y--;
 		}
 	}
 
@@ -1209,20 +1207,22 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 
 	ctx->vgacntr = 0x80000000;
 
-#if defined(CONFIG_AMOLED_SUPPORT)
-	/* fcipaq: Enable a resolution which is smaller than the physical     */
-	/* native resolution, so the picture can be shifted within a frame.   */
-	/* AMOLED wear leveling.					      */
+#ifdef CONFIG_AMOLED_SUPPORT
+	/* Enable a resolution which is smaller than the physical           */
+	/* native resolution, so the picture can be shifted within a frame. */
+	/* AMOLED wear leveling.					    */
 	if ((get_panel_type(dev, 0) == SDC_25x16_CMD) || (get_panel_type(dev, 0) == SDC_16x25_CMD)) {
 
 		switch (get_panel_type(dev, 0)) {
 		case SDC_25x16_CMD:
 			tmp_hdisplay = 2560;
 			tmp_vdisplay = 1600;
+			wl_amoled_shift.panel_type = SDC_25x16_CMD;
 			break;
 		case SDC_16x25_CMD:
 			tmp_hdisplay = 1600;
 			tmp_vdisplay = 2560;
+			wl_amoled_shift.panel_type = SDC_16x25_CMD;
 			break;
 		default:
 			break;
@@ -1336,14 +1336,14 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 
 	ctx->pipeconf |= ((hdelay - 1) << 27);
 
-#if defined(CONFIG_AMOLED_SUPPORT)
-	/* fcipaq: init AMOLED wear leveling worker */
+#ifdef CONFIG_AMOLED_SUPPORT
+	/* init AMOLED wear leveling worker */
 
-	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
-		memcpy(&amoled_wl_dev, dev, sizeof(struct drm_device));
+	if (wl_amoled_shift.max_x || wl_amoled_shift.max_y) {
 		INIT_DELAYED_WORK(&wl_delayed_work, amoled_wearleveling_worker);
 		schedule_delayed_work(&wl_delayed_work, AMOLED_SHIFT_TIMEOUT);
 	}
+
 #endif
 
 	mutex_unlock(&dsi_config->context_lock);

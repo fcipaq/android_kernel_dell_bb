@@ -45,7 +45,7 @@
 #include "mdfld_output.h"
 
 #ifdef CONFIG_AMOLED_SUPPORT
-extern struct drm_device amoled_wl_dev;
+extern struct drm_pixel_shift wl_amoled_shift;
 #endif
 
 static void psb_user_framebuffer_destroy(struct drm_framebuffer *fb);
@@ -534,7 +534,7 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 
 	for (i = 1; i < mode_cmd.height; i++)
 	{
-		copy_src += ALIGN((mode_cmd.width + dev_priv->amoled_shift.max_x) * (sizes->surface_bpp >> 3), 64);
+		copy_src += ALIGN((mode_cmd.width + wl_amoled_shift.max_x) * (sizes->surface_bpp >> 3), 64);
 		copy_dst += ALIGN(mode_cmd.width * (sizes->surface_bpp >> 3), 64);
 
 		memcpy(copy_dst, copy_src, ALIGN(mode_cmd.width * (sizes->surface_bpp >> 3), 64));

@@ -36,6 +36,11 @@
 #include "mrfld_clock.h"
 #include "psb_drv.h"
 #include "dispmgrnl.h"
+#ifdef CONFIG_AMOLED_SUPPORT
+#include <linux/random.h>
+#include <drm/drmP.h>
+extern struct drm_pixel_shift wl_amoled_shift;
+#endif
 
 /**
  * Enter DSR
@@ -1217,9 +1222,12 @@ struct mdfld_dsi_encoder *mdfld_dsi_dbi_init(struct drm_device *dev,
 		dev_priv ? (dev_priv->dbi_dsr_info) : NULL;
 #endif
 	int pipe;
+	int ret;
+
+#if defined(CONFIG_AMOLED_SUPPORT)
 	int pixel_shift_max_x = 0;
 	int pixel_shift_max_y = 0;
-	int ret;
+#endif
 
 	PSB_DEBUG_ENTRY("\n");
 
@@ -1355,8 +1363,8 @@ struct mdfld_dsi_encoder *mdfld_dsi_dbi_init(struct drm_device *dev,
 #if defined(CONFIG_AMOLED_SUPPORT)
 	if (p_funcs && p_funcs->enable_pixel_shift) {
                 if (p_funcs->enable_pixel_shift(&pixel_shift_max_x, &pixel_shift_max_y)) {
-                        dev_priv->amoled_shift.max_x = pixel_shift_max_x;
-                        dev_priv->amoled_shift.max_y = pixel_shift_max_y;
+                        wl_amoled_shift.max_x = pixel_shift_max_x;
+                        wl_amoled_shift.max_y = pixel_shift_max_y;
                 }
         }
 #endif

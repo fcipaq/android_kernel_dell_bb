@@ -26,10 +26,24 @@
 #include <linux/input/synaptics_dsx.h>
 #include "synaptics_dsx_core.h"
 
+#ifdef CONFIG_AMOLED_SUPPORT
+#include <drm/drmP.h>
+#include <linux/panel_psb_drv.h>
+extern struct drm_pixel_shift wl_amoled_shift;
+#endif
+
 #define APEN_PHYS_NAME "synaptics_dsx/active_pen"
 
 #define ACTIVE_PEN_MAX_PRESSURE_16BIT 65535
 #define ACTIVE_PEN_MAX_PRESSURE_8BIT 255
+
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN_STABILIZE
+#define PEN_STABILIZE_SMOOTHLEVEL 50
+int x_past[PEN_STABILIZE_SMOOTHLEVEL + 1];
+int y_past[PEN_STABILIZE_SMOOTHLEVEL + 1];
+ktime_t stabilize_timestamp;
+#endif
+
 
 struct synaptics_rmi4_f12_query_8 {
 	union {
@@ -117,9 +131,8 @@ DECLARE_COMPLETION(apen_remove_complete);
 
 static void apen_lift(void)
 {
-	input_report_key(apen->apen_dev, BTN_TOUCH, 0);
-	input_report_key(apen->apen_dev, BTN_TOOL_PEN, 0);
-	input_report_key(apen->apen_dev, BTN_TOOL_RUBBER, 0);
+	input_report_key(apen->apen_dev, BTN_LEFT, 0);
+	input_report_key(apen->apen_dev, BTN_RIGHT, 0);
 	input_sync(apen->apen_dev);
 	apen->apen_present = false;
 
@@ -129,10 +142,20 @@ static void apen_lift(void)
 static void apen_report(void)
 {
 	int retval;
-	int x;
-	int y;
+	int x, y;
 	int pressure;
 	static int invert = -1;
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN_STABILIZE
+	int i;
+	int x_res;
+	int y_res;
+	int v_res;
+	int pathlength;
+#endif
+#ifdef CONFIG_AMOLED_SUPPORT
+	int res_curr_x, res_curr_y;
+#endif
+
 	struct apen_data_8b_pressure *apen_data_8b;
 	struct synaptics_rmi4_data *rmi4_data = apen->rmi4_data;
 
@@ -207,13 +230,124 @@ static void apen_report(void)
 				apen_data_8b->pen_id_0_7;
 	}
 
-	input_report_key(apen->apen_dev, BTN_TOUCH, pressure > 0 ? 1 : 0);
+	input_report_key(apen->apen_dev, BTN_LEFT, pressure > 0 ? 1 : 0);
 	input_report_key(apen->apen_dev,
-			apen->apen_data->status_invert > 0 ?
-			BTN_TOOL_RUBBER : BTN_TOOL_PEN, 1);
-	input_report_key(apen->apen_dev,
-			BTN_STYLUS, apen->apen_data->status_barrel > 0 ?
+			BTN_RIGHT, apen->apen_data->status_invert > 0 ?
 			1 : 0);
+	// if BTN_LEFT is pressed because of "pressure" don't unpress it!
+	if (!(pressure > 0)) {
+		input_report_key(apen->apen_dev,
+				BTN_LEFT, apen->apen_data->status_barrel > 0 ?
+				1 : 0);
+	}
+
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN_STABILIZE
+	/* Calculate the length of the path the mouse cursor has traveled unstabilizied and    */
+        /* compare it to the shortest distance that lies between the start and the end point.  */
+        /* If the later is quite shorter then that means a lot of shakyness has been going on. */
+
+	for (i = 0; i < PEN_STABILIZE_SMOOTHLEVEL - 1; i++) {
+		x_past[i] = x_past[i + 1];
+		y_past[i] = y_past[i + 1];
+	}
+
+	// last member of array contains stabilized coordinates
+	x_past[PEN_STABILIZE_SMOOTHLEVEL - 1] = x;
+	y_past[PEN_STABILIZE_SMOOTHLEVEL - 1] = y;
+
+	x_res = 0;
+	y_res = 0;
+
+	for (i = 0; i < PEN_STABILIZE_SMOOTHLEVEL - 1; i++) {
+		x_res += x_past[i] - x_past[i + 1];		
+		y_res += y_past[i] - y_past[i + 1];		
+	}
+
+	v_res = x_res * x_res + y_res * y_res;
+
+	pathlength = 0;
+
+	for (i = 0; i < PEN_STABILIZE_SMOOTHLEVEL - 1; i++) {
+		pathlength += (x_past[i] - x_past[i + 1]) * (x_past[i] - x_past[i + 1]) +		
+			      (y_past[i] - y_past[i + 1]) * (y_past[i] - y_past[i + 1]);
+	}
+
+	if ((pathlength * 10 < v_res * 11) || (ktime_us_delta(ktime_get(), stabilize_timestamp) > 500000)) {
+		// accept new coordinates
+		x_past[PEN_STABILIZE_SMOOTHLEVEL] = x;
+		y_past[PEN_STABILIZE_SMOOTHLEVEL] = y;
+	} else {
+		// reject new coordinates due to identified shaking
+		x = x_past[PEN_STABILIZE_SMOOTHLEVEL];
+		y = y_past[PEN_STABILIZE_SMOOTHLEVEL];
+	}
+
+	/* time stamp: A long time span between input report means that the pen has been lifted. */
+	/* Meanwhile other input methods might have moved the mouse position. In that case the   */
+        /* saved coordinates must be discarded.                                                  */
+
+	stabilize_timestamp = ktime_get();
+
+	dev_dbg(rmi4_data->pdev->dev.parent,
+			"%s: Active pen: "
+			"path length = %d, "
+			"resulting distance = %d, "
+			"rejected = %d, ",
+			__func__,
+			pathlength, v_res, (pathlength * 10 < v_res * 11) ? 0 : 1);
+
+#endif
+
+#ifdef CONFIG_AMOLED_SUPPORT
+	switch (wl_amoled_shift.panel_type) {
+	case SDC_25x16_CMD:
+		res_curr_x = wl_amoled_shift.curr_x;
+		res_curr_y = wl_amoled_shift.curr_y;
+		break;
+	case SDC_16x25_CMD:
+		res_curr_x = wl_amoled_shift.max_y - wl_amoled_shift.curr_y;
+		res_curr_y = wl_amoled_shift.max_x - wl_amoled_shift.curr_x;
+		break;
+	default:
+		/* unsupported panel type */
+		res_curr_x = 0;
+		res_curr_y = 0;
+		break;
+	}
+
+	x = (x - res_curr_x) * (apen->rmi4_data->sensor_max_x + 1) /
+		((apen->rmi4_data->sensor_max_x + 1) - wl_amoled_shift.max_x);
+	if (x <= 0) {
+		x = 0;
+	} else {
+		if (x > apen->rmi4_data->sensor_max_x) x = apen->rmi4_data->sensor_max_x;
+	}
+
+	y = (y - res_curr_y) * (apen->rmi4_data->sensor_max_y + 1) /
+		((apen->rmi4_data->sensor_max_y + 1) - wl_amoled_shift.max_y);
+	if (y <= 0) {
+		y = 0;
+	} else {
+		if (y > apen->rmi4_data->sensor_max_y) y = apen->rmi4_data->sensor_max_y;
+	}
+
+	dev_dbg(rmi4_data->pdev->dev.parent,
+			"%s: Active pen: "
+			"panel_type = %d, "
+			"x = %d, "
+			"amoled_max_x = %d, "
+			"y = %d, "
+			"amoled_max_y = %d\n",
+			__func__,
+			wl_amoled_shift.panel_type,
+			x,
+			wl_amoled_shift.max_x,
+			y,
+			wl_amoled_shift.max_y);
+
+
+#endif
+
 	input_report_abs(apen->apen_dev, ABS_X, x);
 	input_report_abs(apen->apen_dev, ABS_Y, y);
 	input_report_abs(apen->apen_dev, ABS_PRESSURE, pressure);
@@ -486,10 +620,8 @@ static int synaptics_rmi4_apen_init(struct synaptics_rmi4_data *rmi4_data)
 
 	set_bit(EV_KEY, apen->apen_dev->evbit);
 	set_bit(EV_ABS, apen->apen_dev->evbit);
-	set_bit(BTN_TOUCH, apen->apen_dev->keybit);
-	set_bit(BTN_TOOL_PEN, apen->apen_dev->keybit);
-	set_bit(BTN_TOOL_RUBBER, apen->apen_dev->keybit);
-	set_bit(BTN_STYLUS, apen->apen_dev->keybit);
+	set_bit(BTN_LEFT, apen->apen_dev->keybit);
+	set_bit(BTN_RIGHT, apen->apen_dev->keybit);
 #ifdef INPUT_PROP_DIRECT
 	set_bit(INPUT_PROP_DIRECT, apen->apen_dev->propbit);
 #endif

@@ -100,7 +100,9 @@ struct panel_funcs {
 	int (*set_brightness)(struct mdfld_dsi_config *dsi_config, int level);
 	int (*drv_ic_init)(struct mdfld_dsi_config *dsi_config);
 	int (*drv_set_panel_mode)(struct mdfld_dsi_config *dsi_config);
+#if defined(CONFIG_AMOLED_SUPPORT)
 	int (*enable_pixel_shift)(int *max_x, int *max_y);
+#endif
 };
 
 struct intel_mid_panel_list {

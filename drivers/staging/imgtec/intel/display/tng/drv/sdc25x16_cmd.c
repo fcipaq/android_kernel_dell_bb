@@ -29,33 +29,25 @@
 #include "mdfld_dsi_pkg_sender.h"
 #include <asm/intel_scu_pmic.h>
 #include "displays/sdc25x16_cmd.h"
-#if defined(CONFIG_AMOLED_SUPPORT)
-#include <linux/random.h>
-#endif
 
-#define WIDTH 2560
-#define HEIGHT 1600
+#ifdef CONFIG_AMOLED_SUPPORT
+#include <linux/random.h>
+#include <drm/drmP.h>
+#define PIXEL_SHIFT_MAX_X       32
+#define PIXEL_SHIFT_MAX_Y       16
+static bool init_power_on = true;
+extern struct drm_pixel_shift wl_amoled_shift;
+#endif
 
 /* Set the panel update delay to 8 ms */
 #define DEFAULT_PANEL_DELAY 8000
 
-/* AMOLED wear leveling section */
-#if defined(CONFIG_AMOLED_SUPPORT)
-#ifdef CONFIG_PSB_ZOOM
-#define PIXEL_SHIFT_MAX_X       18
-#define PIXEL_SHIFT_MAX_Y       8
-#else
-#define PIXEL_SHIFT_MAX_X       32
-#define PIXEL_SHIFT_MAX_Y       16
-#endif
-static bool init_power_on = true;
-#endif
-
+#define WIDTH 2560
+#define HEIGHT 1600
 
 static int vdd_1_8v_gpio;
 static int tcon_rdy_gpio;
 static int bias_en_gpio;
-
 
 static u8 sdc_column_addr[] = {
 			0x2a, 0x00, 0x00, 0x04, 0xff};
@@ -73,7 +65,6 @@ static	u8 sdc_gamma_update[] = { 0xbb, 0x1};
 
 
 static	u8 sdc_global_para_70[] = { 0xb0, 0x45};
-
 
 #define num_brightness 31
 static u8 sdc_brightness_list[num_brightness][5] = {
@@ -361,20 +352,20 @@ int sdc25x16_cmd_power_on(
 	err = mdfld_dsi_send_mcs_short_hs(sender, set_display_on, 0, 0,
 			MDFLD_DSI_SEND_PACKAGE);
 
-#if defined(CONFIG_AMOLED_SUPPORT)
+#ifdef CONFIG_AMOLED_SUPPORT
 	if (init_power_on) {
-		dev_priv->amoled_shift.dir_x = 0;
-		dev_priv->amoled_shift.dir_y = 0;
+		wl_amoled_shift.dir_x = 0;
+		wl_amoled_shift.dir_y = 0;
 
 		/* Start pixel shift at a random position. */
 
-		get_random_bytes(&dev_priv->amoled_shift.curr_x, sizeof(dev_priv->amoled_shift.curr_x));
-		dev_priv->amoled_shift.curr_x = dev_priv->amoled_shift.curr_x % PIXEL_SHIFT_MAX_X;
+		get_random_bytes(&wl_amoled_shift.curr_x, sizeof(wl_amoled_shift.curr_x));
+		wl_amoled_shift.curr_x = wl_amoled_shift.curr_x % PIXEL_SHIFT_MAX_X;
 
-		get_random_bytes(&dev_priv->amoled_shift.curr_y, sizeof(dev_priv->amoled_shift.curr_y));
-		dev_priv->amoled_shift.curr_y = dev_priv->amoled_shift.curr_y % PIXEL_SHIFT_MAX_Y;
+		get_random_bytes(&wl_amoled_shift.curr_y, sizeof(wl_amoled_shift.curr_y));
+		wl_amoled_shift.curr_y = wl_amoled_shift.curr_y % PIXEL_SHIFT_MAX_Y;
 
-		dev_priv->amoled_shift.flip_done = 0;
+		wl_amoled_shift.flip_done = 0;
 
 		init_power_on = false;
 	}
@@ -434,6 +425,21 @@ power_off_err:
 	err = -EIO;
 	return err;
 }
+
+#ifdef CONFIG_AMOLED_SUPPORT
+static
+int sdc25x16_cmd_enable_pixel_shift(int *max_x,
+                         int *max_y)
+{
+        int val_x = PIXEL_SHIFT_MAX_X;
+        int val_y = PIXEL_SHIFT_MAX_Y;
+
+        *max_x = val_x;
+        *max_y = val_y;
+
+        return true;
+}
+#endif
 
 static
 int sdc25x16_cmd_set_brightness(
@@ -595,7 +601,7 @@ struct drm_display_mode *sdc25x16_cmd_get_config_mode(void)
 	mode->clock =  mode->vrefresh * mode->vtotal * mode->htotal / 1000;
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
 
-#if defined(CONFIG_AMOLED_SUPPORT)
+#ifdef CONFIG_AMOLED_SUPPORT
 	mode->hdisplay = WIDTH - PIXEL_SHIFT_MAX_X;
 	mode->vdisplay = HEIGHT - PIXEL_SHIFT_MAX_Y;
 #endif
@@ -662,6 +668,9 @@ void sdc25x16_cmd_init(struct drm_device *dev,
 			sdc25x16_cmd_set_brightness;
 	p_funcs->exit_deep_standby =
 				sdc25x16_cmd_exit_deep_standby;
+#ifdef CONFIG_AMOLED_SUPPORT
+	p_funcs->enable_pixel_shift = sdc25x16_cmd_enable_pixel_shift;
+#endif
 //	p_funcs->set_legacy_coefficient = mdfld_dsi_jdi25x16_set_legacy_coefficient;
 
 	drm_psb_te_timer_delay = DEFAULT_PANEL_DELAY;
