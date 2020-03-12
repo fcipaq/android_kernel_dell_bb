@@ -68,9 +68,6 @@ static unsigned long lowmem_deathpending_timeout;
 			pr_info(x);			\
 	} while (0)
 
-static int is4gDram = 0;
-extern int Read_TOTAL_DRAM(void);
-
 static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 {
 	struct task_struct *tsk;
@@ -83,13 +80,9 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	int selected_tasksize = 0;
 	short selected_oom_score_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
-	int nr_swap_pages = get_nr_swap_pages();
-	int other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages + nr_swap_pages;
+	int other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages;
 	int other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM);
-
-	int dma32_free = 0, dma32_file = 0;
-	struct zone *zone;
 
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
@@ -106,36 +99,6 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 		lowmem_print(3, "lowmem_shrink %lu, %x, ofree %d %d, ma %hd\n",
 				sc->nr_to_scan, sc->gfp_mask, other_free,
 				other_file, min_score_adj);
-
-	if(is4gDram == 1) {
-		if (min_score_adj == OOM_SCORE_ADJ_MAX + 1) {
-			/*
-			 * Shrink callback is called but global memory is ok. Maybe
-			 * DMA32 zone memory is in short.
-			 */
-			for_each_populated_zone(zone) {
-				if (is_dma32(zone)) {
-					dma32_free = zone_page_state(zone, NR_FREE_PAGES);
-					dma32_file = zone_page_state(zone, NR_FILE_PAGES)
-						- zone_page_state(zone, NR_SHMEM);
-				}
-			}
-
-		for (i = 0; i < array_size/2; i++) {
-				minfree = lowmem_minfree[i];
-				if (dma32_free && dma32_free < minfree
-						&& dma32_file < minfree) {
-					min_score_adj = lowmem_adj[i];
-					lowmem_print(1, "dma32 is in short: free:%d, file:%d, min_score_adj:%hu\n",
-						dma32_free, dma32_file, min_score_adj);
-					break;
-				}
-			}
-
-			lowmem_print(3, "dma32: free:%d, file:%d, min_score_adj:%hu\n",
-					dma32_free, dma32_file, min_score_adj);
-		}
-	}
 	rem = global_page_state(NR_ACTIVE_ANON) +
 		global_page_state(NR_ACTIVE_FILE) +
 		global_page_state(NR_INACTIVE_ANON) +
@@ -226,8 +189,6 @@ static struct shrinker lowmem_shrinker = {
 
 static int __init lowmem_init(void)
 {
-	is4gDram = Read_TOTAL_DRAM()>3000?1:0;
-	pr_info("DRAM total size = %dM, Is 4G device = %d\n", Read_TOTAL_DRAM(), is4gDram);
 	register_shrinker(&lowmem_shrinker);
 	return 0;
 }
