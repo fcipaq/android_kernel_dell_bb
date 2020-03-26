@@ -45,11 +45,6 @@ extern struct drm_pixel_shift wl_amoled_shift;
 
 #define KEEP_UNUSED_CODE 0
 
-static u32 primary_offset_x;
-static u32 primary_offset_y;
-static u32 primary_width;
-static u32 primary_height;
-
 #if KEEP_UNUSED_CODE
 static int FindCurPipe(struct drm_device *dev)
 {
@@ -531,16 +526,13 @@ void DCCBFlipPrimary(struct drm_device *dev,
 		}
 
                 reg_val_pos = ctx->pos;
-                primary_offset_x = sprite_offset_x = reg_val_pos & 0x00000fff;
-                primary_offset_y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                sprite_offset_x = reg_val_pos & 0x00000fff;
+                sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
                 reg_val_size = ctx->size;
                 
 		sprite_width = reg_val_size & 0x00000fff;
                 sprite_height = (reg_val_size >> 16) & 0x00000fff;
  
-                primary_width = tmp_hdisplay;
-                primary_height = tmp_vdisplay;
-
 	        sprite_offset_x = wl_amoled_shift.curr_x;
 	        sprite_offset_y = wl_amoled_shift.curr_y;
 
